@@ -1,0 +1,67 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change and is new to Haskell, so write code a
+beginner can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: Ormolu, HLint, a search for switched-off checks, a build with
+warnings as errors, and the tests. The git hook and CI run it too.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.hlint.yaml`, `.claude/`, the warning and extension
+  settings in `{{package}}.cabal` and `cabal.project`, and existing tests.
+
+```sh
+cabal test --test-options='--match "banner"'               # one test by name
+ormolu --mode inplace $(find app src test -name '*.hs')    # format
+```
+
+Sandboxed agents: `cabal` writes to `~/.cache/cabal` and `~/.local/state/cabal`, and `cabal update`
+and `gh` need the network. Without these, `scripts/check` fails for reasons outside the code.
+
+## Haskell
+
+Read `CODING_STANDARDS.md` before writing or reviewing Haskell.
+
+The checks enforce imports with an explicit list or a qualifier, extensions set only in
+`{{package}}.cabal` (no `LANGUAGE` pragmas), and the `.hlint.yaml` bans on partial functions. HLint
+bans by name, so names like `read`, `last` and `error` are taken: call your own `readConfig` or
+`lastValue`.
+
+## Layout
+
+- Logic goes in the library under `src/`. `app/Main.hs` only calls it.
+- `test/` is an hspec suite. Every `*Spec.hs` module that exports `spec` runs automatically.
+- List every new module in `{{package}}.cabal` (`exposed-modules` or `other-modules`).
+- `cabal.project` pins `index-state`. Bump it on purpose when you need newer Hackage packages.
+- `with-compiler` in `cabal.project` names the GHC version. `scripts/check` and CI read it there.
+  To change GHC, update it together with `tested-with` and the `base` bound in
+  `{{package}}.cabal`.
+
+## Domain docs
+
+- `GLOSSARY.md` at the repo root defines the project's terms. Use them in code, tests, commits and
+  PRs.
+- `docs/adr/` records design decisions, one numbered file each: `0001-short-title.md`.
+- Create either one when the first term or decision is settled.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Squash merges make the PR title and body the commit on `main`.

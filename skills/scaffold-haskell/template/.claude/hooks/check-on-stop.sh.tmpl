@@ -1,0 +1,18 @@
+#!/bin/sh
+# Claude Code Stop hook: Claude cannot end a turn with uncommitted changes while
+# scripts/check is red. Committed code is checked by the pre-push hook and CI.
+# It blocks once per stop. If Claude stops again right after a block, the hook lets it stop
+# and tells the owner, so Claude can report a failure it cannot fix.
+input=$(cat)
+cd "$CLAUDE_PROJECT_DIR" || exit 0
+if [ -z "$(git status --porcelain)" ] || scripts/check >"${TMPDIR:-/tmp}/{{package}}-check.log" 2>&1; then
+  exit 0
+fi
+case $input in
+*'"stop_hook_active":true'* | *'"stop_hook_active": true'*)
+  echo '{"systemMessage": "scripts/check is still red."}'
+  exit 0
+  ;;
+esac
+tail -n 40 "${TMPDIR:-/tmp}/{{package}}-check.log" >&2
+exit 2

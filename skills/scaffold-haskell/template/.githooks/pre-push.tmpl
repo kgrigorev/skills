@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs every quality gate before a push. Enable once per clone: git config core.hooksPath .githooks
+# It checks the working tree, so commit or stash unfinished work first.
+exec scripts/check

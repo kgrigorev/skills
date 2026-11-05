@@ -1,0 +1,39 @@
+# Coding standards
+
+The reviewer applies these to every Haskell change. `scripts/check` already enforces formatting,
+warnings, imports, extensions and the banned functions, so they are not repeated here.
+
+The reader is a beginner Haskell developer. Every rule serves that reader.
+
+## Plain Haskell
+
+Use data types, records, pattern matching, `Maybe`, `Either` and `IO`. Type-level programming,
+lens, monad transformers and new type classes need the owner's approval first.
+
+## Text and errors
+
+- Use `Text` for text. `String` only where a library forces it.
+- Expected failures are values: return `Either` with the project's error type.
+
+## Functions and names
+
+- Every top-level definition in `src/` has a type signature and a `-- |` comment that says what it
+  is for.
+- Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
+  nesting.
+- Write explicit arguments and lambdas. Composing two or three functions with `.` is fine.
+- Names say what a value is: `environment`, `argument`. Single letters only in tiny lambdas.
+- Use `GLOSSARY.md` terms for the project's concepts.
+
+## Design decisions
+
+A change that goes against an ADR in `docs/adr/` changes that ADR in the same PR.
+
+## Dependencies
+
+A new entry in `build-depends` in `{{package}}.cabal` needs the owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Test names describe behaviour in `GLOSSARY.md` terms.

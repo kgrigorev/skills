@@ -1,0 +1,8 @@
+-- | The {{package}} executable. Keep it thin: the work happens in the library.
+module Main (main) where
+
+import Data.Text.IO qualified as Text
+import {{module}} (banner)
+
+main :: IO ()
+main = Text.putStrLn banner

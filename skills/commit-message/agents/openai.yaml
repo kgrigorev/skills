@@ -1,0 +1,3 @@
+interface:
+  display_name: "Commit message"
+  short_description: "Short conventional commits without attribution"

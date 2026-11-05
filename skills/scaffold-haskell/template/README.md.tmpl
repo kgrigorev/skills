@@ -1,0 +1,35 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh), then run in the repository:
+
+```sh
+brew bundle
+ghcup install ghc {{ghc_version}}
+ghcup install cabal latest
+ghcup install hls latest
+cabal update
+git config core.hooksPath .githooks
+```
+
+Homebrew installs ghcup, Ormolu, HLint and the GitHub CLI. ghcup installs GHC, cabal and HLS. The git hook runs the checks before each push.
+
+`with-compiler` in `cabal.project` names the GHC version, so cabal and HLS use it even when other versions are installed. CI reads the same line and pins the other tools in `.github/workflows/ci.yml`.
+
+## Commands
+
+```sh
+scripts/check        # every quality gate: format, lint, build, test
+cabal build all
+cabal test all
+cabal repl lib:{{package}}
+ormolu --mode inplace $(find app src test -name '*.hs')
+cabal install --enable-optimization   # release build: cabal.project builds with -O0
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

@@ -1,0 +1,130 @@
+#!/bin/sh
+# Renders the Haskell project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis>
+#   package:  a cabal package name, lower case, words joined by "-", for example "my-tool".
+#   synopsis: one line for the .cabal file, for example "A tool that renames photos".
+# Run `cabal update` first: the script reads the newest hspec version from the local index.
+#
+# Template rules: every file under template/ ends in ".tmpl", which is dropped, so the files stay
+# inert inside this skill. {{name}} placeholders are replaced in paths and text.
+# The script never overwrites a file. It formats the Haskell files, runs `git init` when needed and
+# points git at the project's hooks. It does not commit.
+set -eu
+
+if [ "$#" -ne 3 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+template=$(cd "$(dirname "$0")/../template" && pwd)
+
+fail() {
+  echo "scaffold: $1" >&2
+  exit 1
+}
+
+# Some installers skip hidden files. Without them the project has no CI, hooks or HLint rules.
+for hidden in .gitignore.tmpl .github/workflows/ci.yml.tmpl; do
+  [ -f "$template/$hidden" ] ||
+    fail "template/$hidden is missing. Reinstall the skill with its hidden files."
+done
+
+# --- Inputs -------------------------------------------------------------------------------------
+
+printf '%s' "$package" | grep -Eqx '[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*' ||
+  fail "package \"$package\": use lower-case words joined by \"-\", each starting with a letter."
+case $synopsis in
+'' | *'"'* | *'\'* | *'{{'*) fail 'synopsis: give one line without double quotes, backslashes or "{{".' ;;
+esac
+[ "$(printf '%s\n' "$synopsis" | wc -l)" -eq 1 ] || fail 'synopsis: give one line.'
+
+# my-tool -> MyTool
+module=$(printf '%s' "$package" | awk -F- '{
+  for (i = 1; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2)
+}')
+
+# --- Toolchain versions -------------------------------------------------------------------------
+
+missing=''
+for tool in ghc cabal ormolu hlint git; do
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+done
+[ -z "$missing" ] || fail "missing tools:$missing"
+
+# The project pins the ghc on PATH. cabal.project calls it by its versioned name.
+ghc_version=$(ghc --numeric-version)
+command -v "ghc-pkg-$ghc_version" >/dev/null 2>&1 ||
+  fail "ghc-pkg-$ghc_version is not on PATH. Run: ghcup install ghc $ghc_version"
+
+major_minor() { printf '%s' "$1" | cut -d. -f1-2; }
+
+cabal_version=$(major_minor "$(cabal --numeric-version)")
+ormolu_version=$(ormolu --version | head -n 1 | awk '{ print $2 }')
+hlint_version=$(hlint --numeric-version)
+base_bound=$(major_minor "$("ghc-pkg-$ghc_version" field base version --simple-output)")
+text_bound=$(major_minor "$("ghc-pkg-$ghc_version" field text version --simple-output)")
+hspec_latest=$(cabal list --simple-output hspec 2>/dev/null | awk '$1 == "hspec" { v = $2 } END { print v }')
+[ -n "$hspec_latest" ] || fail 'cannot find hspec in the cabal index. Run `cabal update` first.'
+hspec_bound=$(major_minor "$hspec_latest")
+index_state=$(date -u +%Y-%m-%dT00:00:00Z)
+
+# --- Render -------------------------------------------------------------------------------------
+
+# Escapes a value for the right-hand side of a sed s/// command.
+sed_value() { printf '%s' "$1" | sed 's/[\/&]/\\&/g'; }
+
+render() {
+  sed -e "s/{{package}}/$(sed_value "$package")/g" \
+    -e "s/{{module}}/$(sed_value "$module")/g" \
+    -e "s/{{synopsis}}/$(sed_value "$synopsis")/g" \
+    -e "s/{{ghc_version}}/$ghc_version/g" \
+    -e "s/{{cabal_version}}/$cabal_version/g" \
+    -e "s/{{ormolu_version}}/$ormolu_version/g" \
+    -e "s/{{hlint_version}}/$hlint_version/g" \
+    -e "s/{{base_bound}}/$base_bound/g" \
+    -e "s/{{text_bound}}/$text_bound/g" \
+    -e "s/{{hspec_bound}}/$hspec_bound/g" \
+    -e "s/{{index_state}}/$index_state/g"
+}
+
+# src/{{module}}.hs.tmpl -> src/MyTool.hs
+destination() {
+  printf '%s\n' "$1" | sed 's/\.tmpl$//' | render
+}
+
+sources=$(cd "$template" && find . -type f -name '*.tmpl' | sed 's#^\./##' | sort)
+
+# Check every destination before writing anything, so a refusal leaves the folder unchanged.
+for source in $sources; do
+  path=$target/$(destination "$source")
+  [ ! -e "$path" ] || fail "$path exists. Nothing was written."
+done
+
+mkdir -p "$target"
+for source in $sources; do
+  path=$target/$(destination "$source")
+  mkdir -p "$(dirname "$path")"
+  render <"$template/$source" >"$path"
+done
+
+cd "$target"
+# Set by path, because some installers drop the executable bits of the template files.
+chmod +x scripts/* .githooks/* .claude/hooks/*
+if grep -rnE '\{\{[a-z_]+\}\}' --exclude-dir=.git .; then
+  fail 'the lines above still hold a placeholder. Fix the template.'
+fi
+
+# Ormolu sorts imports, and the order depends on the module name.
+# shellcheck disable=SC2046 # file names have no spaces
+ormolu --mode inplace $(find app src test -name '*.hs')
+
+[ -e .git ] || git init --quiet --initial-branch=main
+git config core.hooksPath .githooks
+
+printf 'Created %s (module %s) in %s\n' "$package" "$module" "$(pwd)"
+printf 'ghc %s, cabal %s, ormolu %s, hlint %s, base ^>=%s, text ^>=%s, hspec ^>=%s, index-state %s\n' \
+  "$ghc_version" "$cabal_version" "$ormolu_version" "$hlint_version" \
+  "$base_bound" "$text_bound" "$hspec_bound" "$index_state"
+for source in $sources; do destination "$source"; done

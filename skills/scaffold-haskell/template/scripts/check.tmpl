@@ -1,0 +1,49 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+step() { printf '\n==> %s\n' "$1"; }
+
+hs_files=$(find app src test -name '*.hs')
+
+# cabal.project names the compiler. CI pins the other tools in .github/workflows/ci.yml.
+# A version mismatch explains local-vs-CI differences.
+ghc=$(sed -n 's/^with-compiler: *//p' cabal.project)
+if ! command -v "$ghc" >/dev/null 2>&1; then
+  echo "$ghc is not installed. Run: ghcup install ghc ${ghc#ghc-}" >&2
+  exit 1
+fi
+printf 'ghc %s, cabal %s, %s, hlint %s\n' "$("$ghc" --numeric-version)" \
+  "$(cabal --numeric-version)" "$(ormolu --version | head -n 1)" "$(hlint --numeric-version)"
+
+step 'Format (Ormolu). Fix: ormolu --mode inplace $(find app src test -name "*.hs")'
+# shellcheck disable=SC2086 # file names have no spaces
+ormolu --mode check $hs_files
+
+step 'Lint (HLint, rules in .hlint.yaml)'
+hlint app src test
+
+step 'No switched-off checks'
+# Pragmas and comments that switch off HLint, Ormolu or GHC checks, and flags that
+# turn warnings off. test/Main.hs keeps its one hspec-discover line.
+switch_off='\{-#? *(hlint|ormolu|ann|options)|-Wno-|-fno-warn|-Wwarn'
+if grep -niE "$switch_off" $hs_files {{package}}.cabal cabal.project |
+  grep -vxF 'test/Main.hs:1:{-# OPTIONS_GHC -F -pgmF hspec-discover #-}'; then
+  echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
+  exit 1
+fi
+if [ -e cabal.project.local ]; then
+  echo 'Remove cabal.project.local: cabal reads it and it can undo -Werror.' >&2
+  exit 1
+fi
+
+step 'Build (warnings are errors)'
+cabal build all
+
+step 'Test'
+cabal test all --test-show-details=direct \
+  --test-options='--ignore-dot-hspec --fail-on=pending,focused,empty,empty-description'
+
+printf '\nAll checks passed.\n'

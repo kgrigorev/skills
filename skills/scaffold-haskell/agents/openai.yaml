@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold Haskell"
+  short_description: "New Haskell project with agent rules and quality gates"

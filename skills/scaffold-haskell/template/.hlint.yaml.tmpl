@@ -1,0 +1,30 @@
+# HLint rules for {{package}}. Every hint fails scripts/check.
+# Agents: change this file only with the owner's approval.
+
+# Warn about partial functions that the default rules miss.
+- group: {name: partial, enabled: true}
+
+# No LANGUAGE pragmas. Extensions are set once, in {{package}}.cabal.
+- extensions:
+  - default: false
+
+# Partial, unsafe or debugging functions. Return Maybe or Either instead.
+- functions:
+  - {name: [head, tail, init, last, "!!", foldl1, foldr1, maximum, minimum], within: [], message: "Partial: fails on some inputs. Pattern match instead."}
+  - {name: fromJust, within: [], message: "Partial. Pattern match, or use fromMaybe or maybe."}
+  - {name: read, within: [], message: "Partial. Use readMaybe from Text.Read."}
+  - {name: [error, errorWithoutStackTrace, undefined], within: [], message: "Return a Maybe or an Either instead."}
+  - {name: [unsafePerformIO, unsafeDupablePerformIO, unsafeInterleaveIO, unsafeCoerce], within: [], message: "Unsafe. Not allowed."}
+  - {name: [trace, traceShow, traceShowId, traceM, traceShowM, traceId], within: [], message: "Debug output. Remove it."}
+  - {name: [xit, xspecify, xdescribe, xcontext, pending, pendingWith], within: [], message: "Do not skip tests. Fix or delete them with the owner's approval."}
+  - {name: [fit, fspecify, fdescribe, fcontext, focus], within: [], message: "Do not commit focused tests."}
+
+- modules:
+  - {name: [Debug.Trace, System.IO.Unsafe, Unsafe.Coerce], within: [], message: "Not allowed."}
+  - {name: [Data.Map, Data.Map.Lazy], within: [], message: "Use Data.Map.Strict."}
+  - {name: Control.Arrow, within: [], message: "Hard to read. Write a lambda or a helper function."}
+
+# Point-free style is hard for beginners to read. Do not suggest it.
+- ignore: {name: Eta reduce}
+- ignore: {name: Avoid lambda}
+- ignore: {name: Avoid lambda using `infix`}

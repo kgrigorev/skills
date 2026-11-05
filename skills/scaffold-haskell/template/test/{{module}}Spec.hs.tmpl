@@ -1,0 +1,11 @@
+module {{module}}Spec (spec) where
+
+import Data.Text qualified as Text
+import Test.Hspec (Spec, describe, it, shouldSatisfy)
+import {{module}} (banner)
+
+spec :: Spec
+spec =
+  describe "banner"
+    $ it "names the program"
+    $ banner `shouldSatisfy` Text.isPrefixOf "{{package}}"

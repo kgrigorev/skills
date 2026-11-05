@@ -1,0 +1,56 @@
+cabal-version: 3.12
+name:          {{package}}
+version:       0.1.0.0
+synopsis:      {{synopsis}}
+build-type:    Simple
+tested-with:   GHC =={{ghc_version}}
+extra-doc-files: README.md
+
+-- Settings shared by every component. Agents: change them only with the owner's approval.
+common common
+  default-language:   GHC2024
+
+  -- GHC2024 turns on some type-level features. Keep the code plain: switch them off.
+  default-extensions:
+    NoDataKinds
+    NoExistentialQuantification
+    NoGADTs
+    NoPolyKinds
+    NoRankNTypes
+    NoTypeOperators
+    OverloadedStrings
+
+  build-depends:      base ^>={{base_bound}}
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wmissing-deriving-strategies
+    -Wmissing-export-lists -Wpartial-fields -Wredundant-constraints
+    -Wunused-packages -Wmissing-import-lists -Wmissing-home-modules
+    -Wprepositive-qualified-module -haddock -Winvalid-haddock
+
+library
+  import:          common
+  hs-source-dirs:  src
+  exposed-modules: {{module}}
+  build-depends:   text ^>={{text_bound}}
+
+executable {{package}}
+  import:         common
+  hs-source-dirs: app
+  main-is:        Main.hs
+  build-depends:
+    , {{package}}
+    , text  ^>={{text_bound}}
+
+test-suite {{package}}-test
+  import:             common
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     test
+  main-is:            Main.hs
+  other-modules:      {{module}}Spec
+  build-depends:
+    , hspec  ^>={{hspec_bound}}
+    , {{package}}
+    , text   ^>={{text_bound}}
+
+  build-tool-depends: hspec-discover:hspec-discover ^>={{hspec_bound}}

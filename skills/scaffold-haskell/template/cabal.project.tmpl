@@ -1,0 +1,17 @@
+packages: .
+tests: True
+
+-- The GHC version for this project. cabal, HLS, scripts/check and CI all use it.
+-- Install it with: ghcup install ghc {{ghc_version}}
+with-compiler: ghc-{{ghc_version}}
+
+-- Pin the Hackage snapshot so every checkout resolves the same dependency versions.
+index-state: {{index_state}}
+
+-- Build {{package}} without optimisation: faster to compile, same behaviour.
+-- Dependencies keep their default optimisation.
+optimization: False
+
+-- Any warning fails the build, for this package only. Do not remove: it is a quality gate.
+package {{package}}
+  ghc-options: -Werror

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Pull request"
+  short_description: "Small PRs with short bodies from the repo template"

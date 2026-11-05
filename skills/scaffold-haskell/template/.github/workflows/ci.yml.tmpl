@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The GHC version comes from with-compiler in cabal.project.
+  CABAL_VERSION: "{{cabal_version}}"
+  ORMOLU_VERSION: {{ormolu_version}}
+  HLINT_VERSION: "{{hlint_version}}"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: ghc
+        run: echo "version=$(sed -n 's/^with-compiler: *ghc-//p' cabal.project)" >> "$GITHUB_OUTPUT"
+
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ steps.ghc.outputs.version }}
+          cabal-version: ${{ env.CABAL_VERSION }}
+          cabal-update: false
+
+      # The Hackage index is about 20 s to download. cabal.project pins index-state, so a cached
+      # index resolves the same versions. Download it only when cabal.project changes.
+      - id: index-path
+        run: echo "dir=$(cabal path --remote-repo-cache)" >> "$GITHUB_OUTPUT"
+
+      - id: index
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.index-path.outputs.dir }}
+          key: hackage-index-${{ hashFiles('cabal.project') }}
+
+      - if: steps.index.outputs.cache-hit != 'true'
+        run: cabal update
+
+      - name: Install Ormolu and HLint
+        run: |
+          mkdir -p "$HOME/tools"
+          cd "$HOME/tools"
+          curl -fsSL -o ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
+          unzip -q ormolu.zip
+          curl -fsSL "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz" | tar xz
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+          echo "$HOME/tools/hlint-$HLINT_VERSION" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.setup.outputs.cabal-store }}
+            dist-newstyle
+          key: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-${{ hashFiles('{{package}}.cabal', 'cabal.project') }}
+          restore-keys: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-
+
+      - run: scripts/check
+
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: PR title is a conventional commit of at most 72 characters
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([a-z0-9-]+\))?!?: [^ ].*$'
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern" || [ "${#TITLE}" -gt 72 ]; then
+            echo "Bad PR title: $TITLE" >&2
+            echo 'Use "type(scope): what changed", at most 72 characters, for example "feat(parser): read quoted lists".' >&2
+            exit 1
+          fi
