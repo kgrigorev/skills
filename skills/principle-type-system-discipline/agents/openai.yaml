@@ -1,0 +1,3 @@
+interface:
+  display_name: "Type-system discipline"
+  short_description: "Types that make illegal states unrepresentable"

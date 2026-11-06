@@ -1,0 +1,61 @@
+{
+  "skill_name": "mise",
+  "evals": [
+    {
+      "id": 0,
+      "name": "go-backend-setup",
+      "prompt": "I'm setting up a new Go backend service. I want mise to manage Go 1.26, plus golangci-lint for linting and goose for DB migrations, all pinned. I also want `mise run test` and `mise run lint` to work so CI and teammates have one entrypoint. Write the mise.toml you'd create and a short RATIONALE.md explaining your choices (especially which backend each tool comes from and what stays in Go's own tooling vs mise). Save both files; don't modify anything else.",
+      "expected_output": "mise.toml pinning go=1.26; golangci-lint from a prebuilt-binary backend (aqua/registry shorthand or github:), NOT compiled via go:; goose pinned; [tasks] test/lint that delegate to `go test`/`golangci-lint run`. RATIONALE explains mise owns versions+entrypoints, Go owns go.mod/build/test.",
+      "files": [],
+      "expectations": [
+        "mise.toml pins Go to 1.26 (go = \"1.26\" or a 1.26.x version)",
+        "golangci-lint is obtained as a prebuilt binary (aqua/registry shorthand or github:), not compiled via the go: backend",
+        "goose is included and pinned (via the go: backend or aqua/github)",
+        "There are [tasks] for test and lint that delegate to the native tools (run contains `go test` and `golangci-lint run`), rather than reimplementing logic",
+        "RATIONALE.md states the boundary: mise owns tool versions and entrypoints; Go owns go.mod/go.sum/build/test"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "python-uv-ownership",
+      "prompt": "My Python project already uses uv and has a uv.lock committed. I want mise to handle the Python interpreter and the uv version, and I'd like the .venv to auto-activate when I enter the directory. But honestly I'm confused about whether mise or uv should own the Python version — they both seem to want to. Set it up the right way and write a RATIONALE.md that explains the split clearly so my team understands who owns what. Save the mise.toml and RATIONALE.md.",
+      "expected_output": "mise.toml pinning python + uv; venv auto-activation via python.uv_venv_auto = \"source\" (a STRING, not a boolean, not an invented setting); ideally UV_PYTHON pinned to mise's interpreter; tasks delegate to `uv run`. RATIONALE resolves ownership: mise owns interpreter + uv version + venv activation; uv owns deps/lock/running.",
+      "files": [],
+      "expectations": [
+        "mise.toml pins both python and uv under [tools]",
+        "Venv auto-activation uses the real setting python.uv_venv_auto with a STRING value (\"source\" or \"create|source\") — not a boolean and not a hallucinated setting name like venv_auto_create/venv_auto_use",
+        "UV_PYTHON (or equivalent) is set so uv uses mise's interpreter instead of downloading its own — ideally via {{ tools.python.path }}",
+        "RATIONALE.md assigns ownership clearly: mise owns the interpreter + uv version + venv activation; uv owns dependencies/uv.lock/running",
+        "Any defined tasks delegate to `uv run` rather than reimplementing"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "nx-monorepo-boundary",
+      "prompt": "We've got a big nx monorepo, tons of TypeScript and React, pnpm as the package manager. I'm thinking of moving all our build/test/lint into mise tasks so everything is just `mise run <thing>` and we stop using nx commands directly. Set mise up for the repo and write a RATIONALE.md. Push back on me if that's a bad idea.",
+      "expected_output": "Pushes back on wrapping every nx target; keeps nx as owner of the task graph/cache/affected. mise.toml stays thin: pins node + pnpm, sets node_modules/.bin on PATH, at most a few top-level tasks that call nx run-many/affected. RATIONALE explains reimplementing nx targets loses caching/affected.",
+      "files": [],
+      "expectations": [
+        "RATIONALE.md pushes back on replacing nx commands wholesale / one-mise-task-per-nx-target",
+        "RATIONALE.md preserves nx's ownership of the task graph, caching, and affected detection (names the risk of losing cache/affected)",
+        "mise.toml stays thin: it does not enumerate a per-project/per-target task list; any tasks present call nx (run-many/affected) rather than reimplementing build logic",
+        "mise.toml pins node and the package manager (pnpm via npm: backend or corepack)",
+        "mise.toml exposes node_modules/.bin on PATH via [env] _.path (idiomatic for letting nx/tsc run directly)"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "mcp-server-setup",
+      "prompt": "I heard recent mise has an MCP server. Wire it up for Claude Code in this repo, and be straight with me about what it'll actually let Claude do versus what I'll still need to run mise on the command line for. Write the .mcp.json and a short NOTES.md.",
+      "expected_output": "Valid .mcp.json with mcpServers.mise = { command: \"mise\", args: [\"mcp\"] }, no MISE_EXPERIMENTAL on current mise. NOTES.md is honest: read-only introspection (mise://tools/tasks/env/config) + run_task work, but install_tool is a non-functional stub and version queries/config writes still need the CLI.",
+      "files": [],
+      "expectations": [
+        ".mcp.json is valid JSON with mcpServers.mise.command == \"mise\" and args == [\"mcp\"]",
+        "MISE_EXPERIMENTAL is not presented as required for current mise (omitted, or explicitly noted as only needed for versions older than v2026.6.6)",
+        "NOTES.md is honest that install_tool is a non-functional stub / installing tools still requires the CLI",
+        "NOTES.md lists what MCP provides: read resources (mise://tools, tasks, env, config) and the run_task tool",
+        "NOTES.md states that version queries and config writes/pins still require the mise CLI (does not over-promise)"
+      ]
+    }
+  ]
+}

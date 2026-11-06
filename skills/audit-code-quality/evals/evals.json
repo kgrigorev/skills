@@ -1,0 +1,42 @@
+{
+  "skill_name": "audit-code-quality",
+  "evals": [
+    {
+      "id": 0,
+      "name": "large-target-fan-out",
+      "prompt": "Run a full code quality audit of services/billing.",
+      "expected_output": "Measures authored lines with the git ls-files count, splits the target into package batches when it is over ~20k lines, starts one code-quality-auditor per batch in a single message, then merges the reports into one with combined coverage and a single verdict.",
+      "files": [],
+      "expectations": [
+        "Measures the target's authored line count before choosing a split",
+        "Starts all code-quality-auditor calls in one message so they run in parallel",
+        "Gives each auditor the target path and its batch of packages",
+        "Merges the reports into one: duplicates removed, a pattern found in several batches combined into one finding with every location",
+        "Ends with one coverage list and a single verdict, and edits no files"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "small-target-single-auditor",
+      "prompt": "Can you do a quality pass on services/api?",
+      "expected_output": "Measures the target; if it is under ~10k authored lines, starts a single code-quality-auditor on the whole of services/api rather than splitting it, and relays its report.",
+      "files": [],
+      "expectations": [
+        "Measures the target's authored line count before choosing a split",
+        "Uses one auditor for a target under ~10k lines instead of splitting by package",
+        "Edits no files"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "no-target-named",
+      "prompt": "Audit the code quality of this repo.",
+      "expected_output": "Asks which subproject to audit instead of picking one or auditing the whole monorepo.",
+      "files": [],
+      "expectations": [
+        "Asks the user to name a subproject path",
+        "Does not start any auditor before a target is named"
+      ]
+    }
+  ]
+}
