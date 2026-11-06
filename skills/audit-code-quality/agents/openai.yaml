@@ -1,0 +1,3 @@
+interface:
+  display_name: "Audit code quality"
+  short_description: "Batched parallel code-quality audit of a project"

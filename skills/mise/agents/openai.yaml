@@ -1,0 +1,3 @@
+interface:
+  display_name: "mise"
+  short_description: "Pin tools, env and tasks with mise"

@@ -1,0 +1,18 @@
+{
+  "skill_name": "principle-type-system-discipline",
+  "evals": [
+    {
+      "prompt": "Review this TypeScript type: { completed: boolean; completedAt?: Date }. Make illegal states unrepresentable.",
+      "expectations": [
+        "Models the states as a sum type rather than a boolean plus optional date",
+        "Does not keep a representation where completed is true and completedAt is missing"
+      ]
+    },
+    {
+      "prompt": "I have userId and orderId as strings and I pass both into one function. Is that fine?",
+      "expectations": [
+        "Recommends branding or newtyping the identifiers so they are not interchangeable"
+      ]
+    }
+  ]
+}
