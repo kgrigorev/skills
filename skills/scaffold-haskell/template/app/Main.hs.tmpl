@@ -4,6 +4,6 @@ module Main (main) where
 import Data.Text.IO qualified as Text
 import {{module}} (banner)
 
--- | Prints the banner.
+-- | Runs the program. It only calls the library, so tests can reach all the logic.
 main :: IO ()
 main = Text.putStrLn banner
