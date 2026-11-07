@@ -20,6 +20,48 @@
         "Recommends a sum type where each status carries only its own data, parsed from the database row at the boundary",
         "Explains that the runtime check of a stored status does not go away with type-level state"
       ]
+    },
+    {
+      "prompt": "In my TypeScript handler I do `const user = JSON.parse(req.body) as User`. Anything wrong with that?",
+      "expectations": [
+        "Replaces the cast with a parse at the boundary, such as a schema validator applied to an unknown value",
+        "Derives the User type from the schema instead of keeping a hand-written parallel type"
+      ]
+    },
+    {
+      "prompt": "My Rust function matches on my own enum PaymentState, handles Pending and Settled, and has `_ => Err(Error::Unsupported)` for the rest. Is that fine?",
+      "expectations": [
+        "Recommends naming every variant instead of the wildcard arm",
+        "Explains that the wildcard stops the compiler from flagging this match when a variant is added"
+      ]
+    },
+    {
+      "prompt": "Deep in our Python service layer, every function starts with `if order.customer_email is None: raise ValueError`. How do I clean this up?",
+      "expectations": [
+        "Moves the check to the boundary where the order is parsed, producing a type whose email is not optional",
+        "Removes the repeated downstream None checks once the type carries the guarantee"
+      ]
+    },
+    {
+      "prompt": "Our Kotlin `bookTable(request): Booking` throws an exception when the restaurant is full and returns null when the restaurant id is unknown. Callers keep forgetting one or the other. How should the signature look?",
+      "expectations": [
+        "Puts the expected outcomes in the return type, such as a sealed result with named cases for full and unknown restaurant",
+        "Keeps exceptions for bugs or unknown states rather than for the expected full-restaurant case"
+      ]
+    },
+    {
+      "prompt": "In TypeScript our User type has `id?: string` because the id doesn't exist until the database assigns it. Half the code does `user.id!`. Fix the model.",
+      "expectations": [
+        "Separates the before-creation and after-creation shapes into distinct types, or wraps the creation type with a required id",
+        "Removes the non-null assertions because the persisted type always carries an id"
+      ]
+    },
+    {
+      "prompt": "We support 160 currencies and every currency is added and formatted the same way. Should I model Currency as a sum type with one variant per currency so matches are exhaustive?",
+      "expectations": [
+        "Keeps currency as a runtime value (for example a validated code), since the variants share behaviour and the set is open",
+        "Does not recommend a 160-variant sum type"
+      ]
     }
   ]
 }
