@@ -13,6 +13,13 @@
       "expectations": [
         "Recommends branding or newtyping the identifiers so they are not interchangeable"
       ]
+    },
+    {
+      "prompt": "In Haskell, an order's status is stored in the database as Draft, Submitted, Approved or Paid. Should I use DataKinds so the compiler tracks the status?",
+      "expectations": [
+        "Recommends a sum type where each status carries only its own data, parsed from the database row at the boundary",
+        "Explains that the runtime check of a stored status does not go away with type-level state"
+      ]
     }
   ]
 }
