@@ -57,4 +57,15 @@ speakers.
 - Commits and PRs describe the change only, with no tool or AI attribution.
 - PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
   `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
-  lines at most. Squash merges make the PR title and body the commit on `main`.
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

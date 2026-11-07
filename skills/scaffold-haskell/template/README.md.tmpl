@@ -8,16 +8,23 @@ Install [Homebrew](https://brew.sh), then run in the repository:
 
 ```sh
 brew bundle
+export PATH="$HOME/.ghcup/bin:$PATH"   # add this line to ~/.zshrc too
 ghcup install ghc {{ghc_version}}
 ghcup install cabal latest
 ghcup install hls latest
 cabal update
 git config core.hooksPath .githooks
+gh extension install github/gh-stack   # optional: stacked PRs
 ```
 
-Homebrew installs ghcup, Ormolu, HLint and the GitHub CLI. ghcup installs GHC, cabal and HLS. The git hook runs the checks before each push.
+Homebrew installs ghcup, Ormolu, HLint and the GitHub CLI. ghcup installs GHC, cabal and HLS into
+`~/.ghcup/bin`. Homebrew does not put that folder on `PATH`. The `export` line puts it first, so
+ghcup's GHC and cabal win over any copy from Homebrew. The git hook runs the checks before each
+push. `gh stack` is optional: it helps to open and update stacked PRs.
 
-`with-compiler` in `cabal.project` names the GHC version, so cabal and HLS use it even when other versions are installed. CI reads the same line and pins the other tools in `.github/workflows/ci.yml`.
+`with-compiler` in `cabal.project` names the GHC version, so cabal and HLS use it even when other
+versions are installed. CI reads the same line and pins the other tools in
+`.github/workflows/ci.yml`.
 
 ## Commands
 

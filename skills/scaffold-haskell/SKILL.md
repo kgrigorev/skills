@@ -37,8 +37,11 @@ Paths below are relative to this skill's folder unless they start with `<target>
    `ghcup set ghc <version>` first.
    - A tool is missing: propose `brew bundle --file=template/Brewfile.tmpl` (macOS), then
      `ghcup install ghc recommended`, `ghcup set ghc recommended` and
-     `ghcup install cabal latest`. Run them only after the user agrees, then retry. Without
-     Homebrew, name the missing tools and stop.
+     `ghcup install cabal latest`. Run them only after the user agrees, then retry. ghcup puts
+     GHC and cabal in `~/.ghcup/bin`, which must be on `PATH`. Shell state does not carry over
+     between your commands, so run the retry and `scripts/check` with
+     `PATH="$HOME/.ghcup/bin:$PATH"`. Tell the user to add that line to their shell profile, as
+     the template's `README.md` says. Without Homebrew, name the missing tools and stop.
    - A file exists: report it and stop. The user's files stay untouched.
 
    Done when the script prints `Created ...` and the file list.

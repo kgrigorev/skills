@@ -12,7 +12,8 @@ hs_files=$(find app src test -name '*.hs')
 # A version mismatch explains local-vs-CI differences.
 ghc=$(sed -n 's/^with-compiler: *//p' cabal.project)
 if ! command -v "$ghc" >/dev/null 2>&1; then
-  echo "$ghc is not installed. Run: ghcup install ghc ${ghc#ghc-}" >&2
+  echo "$ghc is not on PATH. Install it with: ghcup install ghc ${ghc#ghc-}," >&2
+  echo "and put ~/.ghcup/bin on PATH (see README.md)." >&2
   exit 1
 fi
 printf 'ghc %s, cabal %s, %s, hlint %s\n' "$("$ghc" --numeric-version)" \
