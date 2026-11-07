@@ -1,6 +1,6 @@
 ---
 name: pull-request
-description: Open or update a GitHub pull request. Use when you open a PR, edit its title or description, or split work into stacked PRs.
+description: Open or update a GitHub pull request. Use when you open a PR, edit its title or description, split work into stacked PRs, or review a stack of PRs.
 ---
 
 # Pull request
@@ -28,9 +28,10 @@ record of why the change exists, and reviewers skim it. Keep it short.
 
 3. **Title.** Follow the repo's convention: `AGENTS.md`, a CI title check, or else
    `git log --format=%s -20`. Default: `type(scope): what changed`, at most 72 characters.
-4. **Body.** Every slot holds one line. Leave out what the diff shows: file lists, code, renames.
-   Then reread it and delete every line a reviewer would not miss. Done when each point is one
-   line and the body fits one screen.
+4. **Body.** A slot holds one line, unless the template gives it its own limit, such as a sketch
+   of at most 10 lines. Leave out what the diff shows: file lists, code, renames. Then reread it
+   and delete every line a reviewer would not miss. Done when each slot is within its limit and
+   the body fits one screen.
 5. **Create.** `gh pr create --assignee @me --title "<title>" --body-file -` with the body on
    stdin. No tool or AI attribution. Report the URL.
 
@@ -38,3 +39,7 @@ record of why the change exists, and reviewers skim it. Keep it short.
 
 After new commits, check that the title and body still match the diff. Fix them with
 `gh pr edit <number> --title "<title>" --body-file -`, under the same rules.
+
+## Stacks
+
+To build, update or review a stack of PRs, read [`STACKS.md`](STACKS.md).
