@@ -2,23 +2,116 @@
   "skill_name": "principle-type-system-discipline",
   "evals": [
     {
-      "prompt": "Review this TypeScript type: { completed: boolean; completedAt?: Date }. Make illegal states unrepresentable.",
+      "prompt": "Add a timestamp to this TypeScript todo type so the UI can show when an item was finished: `type Todo = { id: string; title: string; completed: boolean }`.",
       "expectations": [
-        "Models the states as a sum type rather than a boolean plus optional date",
-        "Does not keep a representation where completed is true and completedAt is missing"
+        "The resulting type cannot represent a completed todo without a finish time (a sum type, or completed derived from the timestamp)",
+        "Does not keep both a stored completed boolean and an optional timestamp"
       ]
     },
     {
-      "prompt": "I have userId and orderId as strings and I pass both into one function. Is that fine?",
+      "prompt": "Write the TypeScript signature and a stub body for `transferOrder(fromUserId, toUserId, orderId)` in our order service. All three ids are UUID strings.",
       "expectations": [
-        "Recommends branding or newtyping the identifiers so they are not interchangeable"
+        "Gives user ids and order ids distinct branded or nominal types so they cannot be swapped",
+        "Mints the branded ids in one validating constructor rather than casting at call sites"
       ]
     },
     {
-      "prompt": "In Haskell, an order's status is stored in the database as Draft, Submitted, Approved or Paid. Should I use DataKinds so the compiler tracks the status?",
+      "prompt": "Model an expense claim in Haskell. It moves Draft -> Submitted -> Approved -> Paid, is stored in Postgres, and only paid claims have a payment reference. Show the types and how a row becomes a claim.",
       "expectations": [
-        "Recommends a sum type where each status carries only its own data, parsed from the database row at the boundary",
-        "Explains that the runtime check of a stored status does not go away with type-level state"
+        "Only the Paid case carries the payment reference",
+        "Uses a plain sum type rather than DataKinds, GADTs or a phantom-typed status",
+        "Converts the database row into the claim with a parser that can fail, rather than assuming the row is valid"
+      ]
+    },
+    {
+      "prompt": "Write a TypeScript function that reads `config.json` from disk and returns the app config: port, dbUrl and featureFlags (a list of strings).",
+      "expectations": [
+        "Parses the JSON as unknown with a schema validator or hand-written parser rather than casting with `as`",
+        "Derives the config type from the schema, or the parser returns the only config type, so no parallel hand-written type can drift"
+      ]
+    },
+    {
+      "prompt": "Write a Rust function `fee_for(state: &PaymentState) -> Option<Money>`. PaymentState has Pending, Settled, Refunded, Disputed and Chargeback; only Settled and Disputed carry a fee.",
+      "expectations": [
+        "Names every variant in the match rather than using a `_` wildcard arm"
+      ]
+    },
+    {
+      "prompt": "We import orders from a CSV export where customer_email is sometimes blank. Write the Python loader and a `send_confirmation(order)` function that emails the customer.",
+      "expectations": [
+        "send_confirmation accepts a type whose email is required, so it needs no None check inside",
+        "The loader decides at load time what a blank email means, producing distinct types or an explicit Optional that callers must handle before sending"
+      ]
+    },
+    {
+      "prompt": "Write a Kotlin service function `bookTable(restaurantId, partySize, time)`. The restaurant might not exist, might be full at that time, or the booking succeeds.",
+      "expectations": [
+        "Returns a sealed result type with named cases for unknown restaurant, full and booked",
+        "Uses neither null nor exceptions for the unknown and full cases"
+      ]
+    },
+    {
+      "prompt": "Write TypeScript types plus `createUser` and `getUser` functions for our users table. The database generates the id.",
+      "expectations": [
+        "Uses separate types for the user before and after creation (or a wrapper adding the id) rather than an optional id",
+        "The type getUser returns always has an id, with no non-null assertions needed"
+      ]
+    },
+    {
+      "prompt": "Write TypeScript for checkout: validate the cart, price it, then charge the card. Each step is its own function.",
+      "expectations": [
+        "Each step returns a distinct type recording what it established (for example ValidCart, PricedCart)",
+        "The charge function accepts only the priced type, so calling it on an unpriced cart fails to compile"
+      ]
+    },
+    {
+      "prompt": "We support 160 currencies and every currency is added and formatted the same way. Should I model Currency as a sum type with one variant per currency so matches are exhaustive?",
+      "expectations": [
+        "Keeps currency as a runtime value (for example a validated code), since the variants share behaviour and the set is open",
+        "Does not recommend a 160-variant sum type"
+      ]
+    },
+    {
+      "prompt": "Write a TypeScript Express handler for POST /reservations. The JSON body has date, email and partySize (1 to 12). Save it with our Prisma `reservation.create`.",
+      "expectations": [
+        "Parses the body as unknown with a schema validator (or equivalent parser) before any use, instead of reading fields off req.body directly",
+        "Returns every field-format error from the parse together rather than only the first (business-rule checks that run after parsing may report separately)",
+        "Checks the party size range in one place, the schema or a smart constructor"
+      ]
+    },
+    {
+      "prompt": "Refactor this TypeScript: `async function sendReceipt(services: AppServices, orderId: string)`. AppServices bundles db, mailer, logger, payments and cache; sendReceipt only loads the order and emails it.",
+      "expectations": [
+        "Narrows the parameters to what the function uses, such as a loaded order or a narrow loader plus a mailer, instead of the whole AppServices bundle"
+      ]
+    },
+    {
+      "prompt": "We record `avg_response_ms` per server per minute and now need hourly and fleet-wide averages. Design the Rust struct we should store per server per minute.",
+      "expectations": [
+        "Stores parts that combine, such as a sum and a count (or a histogram), rather than a precomputed average",
+        "Derives the average when reading or aggregating"
+      ]
+    },
+    {
+      "prompt": "We have payment providers Stripe, Adyen and PayPal and add a new one most quarters; each is built by a different team as a plugin module. Should PaymentProvider be a Kotlin sealed class so `when` is exhaustive?",
+      "expectations": [
+        "Recommends an interface (or function type) rather than a sealed class, because new providers arrive from outside the module",
+        "Explains the cost of sealing: every new provider would need an edit to the core type and its matches, or could not live in its own plugin module at all"
+      ]
+    },
+    {
+      "prompt": "Write a Rust function `parse_config(text: &str)` for our TOML config with fields port (1 to 65535) and log_level (debug, info or warn).",
+      "expectations": [
+        "Returns a Result whose error is a named enum of failure cases rather than a String or Box<dyn Error>",
+        "Models log_level as an enum rather than a String",
+        "Avoids unwrap and expect on the parsed input"
+      ]
+    },
+    {
+      "prompt": "Write a Python function that looks up a user by email in our `users: dict[str, User]` and returns their display name.",
+      "expectations": [
+        "Annotates the absent case in the return type (for example `str | None`) rather than returning an empty string or a sentinel",
+        "Does not raise an exception for the ordinary not-found case"
       ]
     }
   ]
