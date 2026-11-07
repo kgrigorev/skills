@@ -50,10 +50,10 @@
       ],
       "expectations": [
         "Passes the criteria section to the auditor in its prompt",
-        "Flags order_total in orders/pricing.py for exceeding the 80x24 box, with its line count",
-        "Flags order_total for cyclomatic complexity above about 7 and its deep nesting, and proposes replacing nested blocks with calls to pure functions",
-        "Flags the dependency cycle between orders.models and orders.pricing, naming both edges",
-        "Proposes breaking the cycle by keeping the types below the pricing functions, for example by removing Order.total, rather than adding an interface layer",
+        "Flags order_total in orders/pricing.py for size, stating its line count against the 24-line limit",
+        "Flags order_total for cyclomatic complexity, stating its count against the limit of about 7, and for deep nesting, and proposes replacing nested blocks with calls to pure functions",
+        "Flags the dependency cycle between orders.models and orders.pricing as a dependency finding, naming both edges",
+        "Proposes breaking the cycle by keeping the types below the pricing functions, for example by removing Order.total, rather than hiding it behind a type-only import or adding an interface layer",
         "Edits no files"
       ]
     }

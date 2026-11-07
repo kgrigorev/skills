@@ -80,7 +80,8 @@ finding states the measured value.
   cycle with its edges. Types sit below, functions over them above, entry
   points on top. Fix a cycle by moving the shared type down, passing a
   function or generic instead, or extracting the relationship into its own
-  type, before adding an interface layer. Check at module grain, not between
+  type, before adding an interface layer. A type-only or deferred import
+  hides a cycle without removing it. Check at module grain, not between
   types inside one module.
 - **Nesting.** Each enclosing branch, loop or closure is one more thing held
   in mind, and a closure that reads its parent's variables hides inputs.
