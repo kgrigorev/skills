@@ -39,11 +39,12 @@ into one. The audit is read-only: never edit the target.
    package, a .NET project, a top-level `src/` module), or several small
    ones grouped to about 5–10k lines. Leave out vendored and generated code.
 4. **Start the auditors.** Send every `code-quality-auditor` call in one
-   message so they run in parallel. Each prompt gives the target path and
-   that batch's packages. If the repo defines no such agent, start
-   general-purpose read-only agents with the same brief: cognitive load,
-   readability, idiomatic use, conciseness, and YAGNI/KISS, findings ranked
-   by impact with file and line.
+   message so they run in parallel. Each prompt gives the target path, that
+   batch's packages, and the [criteria](#criteria) below verbatim, since an
+   auditor cannot read this skill. If the repo defines no such agent, start
+   general-purpose read-only agents with the same brief: cognitive load by
+   the criteria, readability, idiomatic use, conciseness, and YAGNI/KISS,
+   findings ranked by impact with file and line.
 5. **Merge.** When all have reported:
    - remove duplicate findings;
    - combine a pattern found in several batches into one finding that lists
@@ -56,6 +57,35 @@ into one. The audit is read-only: never edit the target.
 
 Use a Workflow instead of plain parallel agents only when the user asked for
 one, for example to add a separate verifier per finding.
+
+## Criteria
+
+Cognitive load is measured against working memory: a reader holds about 7
+things at once (variables in scope, pending branches, collaborators). A
+finding states the measured value.
+
+- **Size.** A function fits an 80×24 box: at most 80 columns, 24 lines, one
+  statement per line. Dense languages such as Haskell or F# want less.
+  Cramming lines to fit is a finding, and so are helpers split off only to
+  meet the count.
+- **Cyclomatic complexity.** Count 1, plus 1 per `if`, loop, `case` arm and
+  `&&`/`||`. Flag a function above about 7. A call to a well-named function
+  adds nothing; that is complexity hidden where it belongs.
+- **Thresholds are ratchets, not targets.** Use the repo's own limits when it
+  has them. Report a unit over a limit as debt to pay back down, and code
+  that games a limit as a finding of its own. Under every limit is not proof
+  of clarity.
+- **Acyclic dependencies.** Modules and packages form a graph without cycles:
+  one back-edge fuses every component on the cycle into one. Report each
+  cycle with its edges. Types sit below, functions over them above, entry
+  points on top. Fix a cycle by moving the shared type down, passing a
+  function or generic instead, or extracting the relationship into its own
+  type, before adding an interface layer. Check at module grain, not between
+  types inside one module.
+- **Nesting.** Each enclosing branch, loop or closure is one more thing held
+  in mind, and a closure that reads its parent's variables hides inputs.
+  Propose replacing the nested block with one call to a pure function, which
+  the reader can replace with its result.
 
 ## Common mistakes
 

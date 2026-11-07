@@ -37,6 +37,25 @@
         "Asks the user to name a subproject path",
         "Does not start any auditor before a target is named"
       ]
+    },
+    {
+      "id": 3,
+      "name": "flags-nesting-and-cycle",
+      "prompt": "Do a code quality audit of services/orders.",
+      "expected_output": "Starts one auditor whose prompt carries the skill's criteria verbatim. The report flags order_total in orders/pricing.py as about 60 lines, nested six levels deep and well above complexity 7, proposing pure functions in place of the nested blocks, and flags the orders.models <-> orders.pricing import cycle with both edges, proposing that the Order and Line types sit below the pricing functions.",
+      "files": [
+        "evals/files/services/orders/orders/__init__.py",
+        "evals/files/services/orders/orders/models.py",
+        "evals/files/services/orders/orders/pricing.py"
+      ],
+      "expectations": [
+        "Passes the criteria section to the auditor in its prompt",
+        "Flags order_total in orders/pricing.py for exceeding the 80x24 box, with its line count",
+        "Flags order_total for cyclomatic complexity above about 7 and its deep nesting, and proposes replacing nested blocks with calls to pure functions",
+        "Flags the dependency cycle between orders.models and orders.pricing, naming both edges",
+        "Proposes breaking the cycle by keeping the types below the pricing functions, for example by removing Order.total, rather than adding an interface layer",
+        "Edits no files"
+      ]
     }
   ]
 }
