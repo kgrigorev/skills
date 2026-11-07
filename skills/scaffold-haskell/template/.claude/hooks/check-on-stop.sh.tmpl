@@ -5,7 +5,10 @@
 # and tells the owner, so Claude can report a failure it cannot fix.
 input=$(cat)
 cd "$CLAUDE_PROJECT_DIR" || exit 0
-if [ -z "$(git status --porcelain)" ] || scripts/check >"${TMPDIR:-/tmp}/{{package}}-check.log" 2>&1; then
+# Each run gets its own log. A shared path would mix output from sessions in other worktrees.
+log=$(mktemp "${TMPDIR:-/tmp}/{{package}}-check.XXXXXX") || exit 0
+trap 'rm -f "$log"' EXIT
+if [ -z "$(git status --porcelain)" ] || scripts/check >"$log" 2>&1; then
   exit 0
 fi
 case $input in
@@ -14,5 +17,5 @@ case $input in
   exit 0
   ;;
 esac
-tail -n 40 "${TMPDIR:-/tmp}/{{package}}-check.log" >&2
+tail -n 40 "$log" >&2
 exit 2
