@@ -9,7 +9,7 @@
       "files": [],
       "expectations": [
         "mise.toml pins Go to 1.26 (go = \"1.26\" or a 1.26.x version)",
-        "golangci-lint is obtained as a prebuilt binary (aqua/registry shorthand or github:), not compiled via the go: backend",
+        "golangci-lint is obtained as a prebuilt binary (registry shorthand, aqua: or github:), not compiled via the go: backend",
         "goose is included and pinned (via the go: backend or aqua/github)",
         "There are [tasks] for test and lint that delegate to the native tools (run contains `go test` and `golangci-lint run`), rather than reimplementing logic",
         "RATIONALE.md states the boundary: mise owns tool versions and entrypoints; Go owns go.mod/go.sum/build/test"
@@ -19,11 +19,11 @@
       "id": 1,
       "name": "python-uv-ownership",
       "prompt": "My Python project already uses uv and has a uv.lock committed. I want mise to handle the Python interpreter and the uv version, and I'd like the .venv to auto-activate when I enter the directory. But honestly I'm confused about whether mise or uv should own the Python version — they both seem to want to. Set it up the right way and write a RATIONALE.md that explains the split clearly so my team understands who owns what. Save the mise.toml and RATIONALE.md.",
-      "expected_output": "mise.toml pinning python + uv; venv auto-activation via python.uv_venv_auto = \"source\" (a STRING, not a boolean, not an invented setting); ideally UV_PYTHON pinned to mise's interpreter; tasks delegate to `uv run`. RATIONALE resolves ownership: mise owns interpreter + uv version + venv activation; uv owns deps/lock/running.",
+      "expected_output": "mise.toml pinning python + uv; venv auto-activation via python.uv_venv_auto = \"create|source\" or \"source\" (a STRING; `true` is deprecated); UV_PYTHON pinned to mise's interpreter; tasks delegate to `uv run`. RATIONALE resolves ownership: mise owns interpreter + uv version + venv activation; uv owns deps/lock/running.",
       "files": [],
       "expectations": [
         "mise.toml pins both python and uv under [tools]",
-        "Venv auto-activation uses the real setting python.uv_venv_auto with a STRING value (\"source\" or \"create|source\") — not a boolean and not a hallucinated setting name like venv_auto_create/venv_auto_use",
+        "Venv auto-activation uses python.uv_venv_auto with a STRING value (\"source\" or \"create|source\") — not the deprecated boolean and not an invented setting name",
         "UV_PYTHON (or equivalent) is set so uv uses mise's interpreter instead of downloading its own — ideally via {{ tools.python.path }}",
         "RATIONALE.md assigns ownership clearly: mise owns the interpreter + uv version + venv activation; uv owns dependencies/uv.lock/running",
         "Any defined tasks delegate to `uv run` rather than reimplementing"
@@ -39,7 +39,7 @@
         "RATIONALE.md pushes back on replacing nx commands wholesale / one-mise-task-per-nx-target",
         "RATIONALE.md preserves nx's ownership of the task graph, caching, and affected detection (names the risk of losing cache/affected)",
         "mise.toml stays thin: it does not enumerate a per-project/per-target task list; any tasks present call nx (run-many/affected) rather than reimplementing build logic",
-        "mise.toml pins node and the package manager (pnpm via npm: backend or corepack)",
+        "mise.toml pins node and the package manager (pnpm as its own tool, e.g. pnpm = \"10\"; not a corepack tool option)",
         "mise.toml exposes node_modules/.bin on PATH via [env] _.path (idiomatic for letting nx/tsc run directly)"
       ]
     },
@@ -47,14 +47,27 @@
       "id": 3,
       "name": "mcp-server-setup",
       "prompt": "I heard recent mise has an MCP server. Wire it up for Claude Code in this repo, and be straight with me about what it'll actually let Claude do versus what I'll still need to run mise on the command line for. Write the .mcp.json and a short NOTES.md.",
-      "expected_output": "Valid .mcp.json with mcpServers.mise = { command: \"mise\", args: [\"mcp\"] }, no MISE_EXPERIMENTAL on current mise. NOTES.md is honest: read-only introspection (mise://tools/tasks/env/config) + run_task work, but install_tool is a non-functional stub and version queries/config writes still need the CLI.",
+      "expected_output": "Valid .mcp.json with mcpServers.mise = { command: \"mise\", args: [\"mcp\"] }, no MISE_EXPERIMENTAL on current mise. NOTES.md is accurate: resources mise://tools/tasks/env/config, tools run_task, install_tool and list_commands; MCP refuses untrusted config and never grants trust; config writes, version queries, locking and trust stay on the CLI.",
       "files": [],
       "expectations": [
         ".mcp.json is valid JSON with mcpServers.mise.command == \"mise\" and args == [\"mcp\"]",
-        "MISE_EXPERIMENTAL is not presented as required for current mise (omitted, or explicitly noted as only needed for versions older than v2026.6.6)",
-        "NOTES.md is honest that install_tool is a non-functional stub / installing tools still requires the CLI",
-        "NOTES.md lists what MCP provides: read resources (mise://tools, tasks, env, config) and the run_task tool",
-        "NOTES.md states that version queries and config writes/pins still require the mise CLI (does not over-promise)"
+        "MISE_EXPERIMENTAL is not presented as required for current mise (omitted, or noted as only for versions older than 2026.6.6)",
+        "NOTES.md lists the resources (mise://tools, tasks, env, config) and the tools run_task, install_tool and list_commands, without calling install_tool a stub",
+        "NOTES.md says the MCP server refuses untrusted config and that the user must run `mise trust` first",
+        "NOTES.md states that config writes (mise use/set/tasks add) and version queries (ls-remote/latest) still need the CLI"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "untrusted-clone",
+      "prompt": "I just cloned github.com/some-org/some-service into ./svc. It has a mise.toml with [env], a _.source script and a few tasks. Get the test suite running for me and tell me what you did. Write what you would run, in order, and why, to PLAN.md instead of executing anything.",
+      "expected_output": "PLAN.md orients without trusting (MISE_SAFE=1 or the report script), notes that mise run/exec/install trust the repo implicitly and run its code, asks the user before trusting, then runs the test task through `mise run test` (or mise exec), not via `mise activate`.",
+      "files": [],
+      "expectations": [
+        "PLAN.md inspects the repo before trusting it (MISE_SAFE=1 mise ..., reading mise.toml, or the report script)",
+        "PLAN.md states that `mise run`/`mise exec`/`mise install` trust the config implicitly and so run the repo's code (_.source, hooks, tasks)",
+        "PLAN.md asks the user for approval before `mise trust` or the first `mise run`/`mise exec`",
+        "Tests run through `mise run <task>` or `mise exec --`, not by relying on `mise activate` in a non-interactive shell"
       ]
     }
   ]

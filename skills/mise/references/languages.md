@@ -1,320 +1,188 @@
-# mise per-language recipes
+# mise recipes per language
 
-Researched against mise `v2026.6.x`. Sources: `mise.jdx.dev/lang/*`,
-`mise.jdx.dev/dev-tools/backends/*`, `mise.jdx.dev/mise-cookbook/*`.
+Checked against mise `2026.11.3`. Docs: `mise.jdx.dev/lang/<language>.html`,
+`mise.jdx.dev/dev-tools/backends/`. Who owns what per ecosystem:
+[tasks-and-boundary.md](tasks-and-boundary.md).
 
-Each section gives the idiomatic `mise.toml`, which **backend** installs what, the env vars
-mise sets, and the **boundary** with the native tool (the part that keeps the repo clean —
-see [tasks-and-boundary.md](tasks-and-boundary.md) for the doctrine).
+## Choosing a backend
 
-## Table of contents
+Write the registry shorthand (`ruff`, `golangci-lint`, `pnpm`) and mise picks the backend;
+`mise registry <tool>` shows which. Write a prefix only to force a source. When you choose,
+prefer the publisher's own prebuilt release:
 
-1. [Backends — choosing where a tool comes from](#backends--choosing-where-a-tool-comes-from)
-2. [Go](#go)
-3. [Node.js, Bun & TypeScript](#nodejs-bun--typescript)
-4. [Nx monorepos](#nx-monorepos)
-5. [Python with uv](#python-with-uv)
-6. [Rust (systems / extensions)](#rust-systems--extensions)
-7. [C / C++](#c--c)
-8. [Scala with scala-cli](#scala-with-scala-cli)
+1. `packslip:` (signed release manifest), then `aqua:` / `github:` / `gitlab:` / `forgejo:`
+   (release binaries, no compile)
+2. `http:` / `s3:` (archives at URLs you give)
+3. language package backends: `npm:`, `pypi:` (alias `pipx:`), `cargo:`, `go:`, `gem:`,
+   `dotnet:`, `spm:`, `conda:` (these need the runtime, or compile)
+4. plugins last: `vfox:`, then `asdf:` (legacy, never on Windows)
 
----
-
-## Backends — choosing where a tool comes from
-
-A "backend" is how mise obtains a tool. Pick by this priority (earlier = preferred):
-
-| Backend | Prefix | For | Notes |
-|---|---|---|---|
-| **core** | *(none)* | node, python, go, ruby, java, rust, .NET | Rust-native, fastest; sets `JAVA_HOME`/`GOROOT`/etc. |
-| **aqua** | `aqua:` | 2000+ prebuilt CLI binaries | Reimplemented in mise; no aqua CLI needed. Preferred for binaries. |
-| **github** | `github:` | binaries from GitHub Releases | Replaces deprecated `ubi:`; provenance verification, auto OS/arch. |
-| **vfox** | `vfox:` | Lua plugins, cross-platform incl. Windows | Preferred plugin system over asdf. |
-| **cargo** | `cargo:` | crates.io CLIs | Needs cargo; uses `cargo-binstall` if present. |
-| **go** | `go:` | `go install` CLIs | Needs go. |
-| **npm** | `npm:` | npm global CLIs | Needs node. |
-| **pipx** | `pipx:` | Python CLI apps (isolated) | Uses `uvx` automatically if uv is installed. |
-| **gem / dotnet / spm** | `gem:`/`dotnet:`/`spm:` | Ruby / .NET / Swift CLIs | Need the respective runtime. |
-| **asdf** | `asdf:` | legacy community plugins | Last resort; arbitrary shell, no Windows, no new entries accepted. |
-
-Registry shorthands (e.g. `golangci-lint`, `ripgrep`) resolve to a backend automatically — you
-usually don't write the prefix for well-known tools. Use an explicit prefix to force a source.
-`ubi:` is deprecated → migrate to `github:`.
-
----
+`ubi:` is deprecated and removed in 2027.1.0; migrate to `github:`. The `pkgx:` backend is
+gone. Core tools (node, python, go, rust, java, ruby, bun, …) need no prefix.
 
 ## Go
 
 ```toml
 [tools]
 go = "1.26"
-# Go-based CLI tooling via the go: backend
-"go:github.com/pressly/goose/v3/cmd/goose" = "latest"
-"go:mvdan.cc/gofumpt"                        = "latest"
-# linter: prefer the prebuilt aqua binary over `go install` (much faster, no compile)
-golangci-lint = "latest"                     # resolves to aqua:golangci/golangci-lint
-# private modules during a tool install:
-"go:github.com/acme/internal-tool" = { version = "latest", install_env = { GOPRIVATE = "github.com/acme/*" } }
-```
+golangci-lint = "2"                           # aqua binary, no compile
+"go:github.com/pressly/goose/v3/cmd/goose" = "3"
+"go:example.com/internal/tool" = { version = "latest", install_env = { GOPRIVATE = "example.com/*" } }
 
-**Env vars mise sets:** `GOROOT` (to mise's install; `go.set_goroot=true` default), optionally
-`GOBIN`. `GOPATH` is **not** set by default (`go.set_gopath` is deprecated). Go-installed CLIs
-land on `PATH` via mise's bin dir.
-
-**Boundary:** mise owns the Go *version*, `GOROOT`/`GOBIN`, and Go-based CLI tools. Go owns
-`go.mod`/`go.sum`/`go.work`, `go build`, `go test`, module resolution. In a `go.work`
-workspace, mise just provides the toolchain — don't try to model workspace logic in mise.
-
-```toml
 [tasks.test]
 run = "go test ./..."
 [tasks.lint]
 run = "golangci-lint run"
 ```
 
----
+mise sets `GOROOT`, and `GOBIN` unless you already set one. It never sets `GOPATH`. Install
+Go CLIs as their own `go:` tools: a plain `go install` binary belongs to one Go version and
+vanishes when you upgrade Go. With `go` in `idiomatic_version_file_enable_tools`, mise reads
+`toolchain goX.Y.Z` (or an exact `go X.Y.Z`) from `go.mod`/`go.work`; a bare `go 1.26` is
+ignored.
 
-## Node.js, Bun & TypeScript
+## Node, Bun, TypeScript
 
 ```toml
 [tools]
-node = "22"          # or "lts"
-bun  = "latest"      # if the project uses bun
-npm  = "11"          # pin a specific npm independent of node's bundled one (optional)
-# CLI tools as global binaries
-"npm:typescript"     = "latest"
-"npm:@biomejs/biome" = "latest"
+node = "24"            # lts → 26 since 2026-10-28; pin the major you mean
+pnpm = "10"            # or bun = "1", npm = "11"
+"npm:@biomejs/biome" = "2"
 
 [env]
-# make locally-installed bins (tsc, eslint, vite…) directly runnable
 _.path = ["{{ config_root }}/node_modules/.bin"]
 
-[settings]
-# opt in to reading .nvmrc / .node-version / package.json engines (OFF by default)
-idiomatic_version_file_enable_tools = ["node"]
-```
-
-Corepack (for pnpm/yarn pinned by `packageManager`): `node = { version = "22", corepack =
-true }`, or manage the package manager explicitly with `npm:pnpm`.
-
-**Boundary:** mise owns node/bun/npm *versions*, the `.bin` PATH entry, and global CLI tools.
-The package manager (npm/pnpm/yarn/bun) owns `package.json` deps, lockfiles, workspaces, and
-the `scripts`. mise tasks delegate:
-
-```toml
 [tasks.dev]
 run = "pnpm dev"
 [tasks.test]
-run = "bun test"          # or "pnpm test"
+run = "pnpm test"
 ```
 
-**Project type doesn't change the boundary.** Whether it's a CLI tool, a library, a bunch of
-scripts, or a Vite/React frontend, mise's job is the same: pin the runtime + package manager,
-set env, expose `.bin`. Build/test/bundle stays in the package manager's scripts.
+- Pin the package manager as its own tool. Corepack is optional, enabled by the
+  `node.corepack` _setting_, not a tool option.
+- `.nvmrc`, `.node-version` and `package.json` `devEngines.runtime` are read only with
+  `mise settings add idiomatic_version_file_enable_tools node --local`. `engines.node` is
+  never read. For `packageManager`, enable `pnpm`/`yarn`/`npm` the same way.
+- `npm:` tools install without node (embedded installer) and are checked against Sigstore
+  provenance by default.
 
----
+The package manager owns `package.json` deps, lockfile, workspaces and scripts. CLI, library,
+or Vite app, the split is the same.
 
-## Nx monorepos
+## nx monorepos
 
-The key decision: **nx owns the task graph; mise stays thin.** nx's value is its project
-graph, affected detection, and (local/remote) caching — reimplementing nx targets as mise
-tasks throws all of that away.
+nx owns the project graph, cache and affected detection. mise pins tools and env, and adds
+at most a few root verbs:
 
 ```toml
-# repo-root mise.toml
 [tools]
-node = "22"
-# pin the package manager too, for reproducibility:
-"npm:pnpm" = "9"          # or use corepack
+node = "24"
+pnpm = "10"
 
 [env]
-_.path = ["{{ config_root }}/node_modules/.bin"]   # nx, tsc, etc. directly runnable
+_.path = ["{{ config_root }}/node_modules/.bin"]
 
-[settings]
-idiomatic_version_file_enable_tools = ["node"]
-
-# Thin, top-level conveniences ONLY — call nx, don't replace it
 [tasks.install]
 run = "pnpm install --frozen-lockfile"
 [tasks.build]
-run  = "nx run-many -t build"
+run = "nx run-many -t build"
 depends = ["install"]
 [tasks.affected]
 run = "nx affected -t build test lint"
 ```
 
-| Concern | Owner |
-|---|---|
-| node + package-manager version | mise |
-| env var injection | mise `[env]` |
-| build/test/lint, caching, affected, codegen, project graph | **nx** |
-
-Do not create one mise task per nx target. Add at most a few orchestration verbs at the root;
-everything else goes through `nx`/`pnpm` directly.
-
----
-
 ## Python with uv
 
-This is the ecosystem with the most mise/native overlap, because **both mise and uv can
-install Python interpreters and manage venvs.** Pick one model and pin it; don't let both
-manage the interpreter ambiguously.
-
-**Recommended model (uv project with `uv.lock`):** mise installs the interpreter and `uv`;
-uv manages the project environment on top; mise auto-activates the venv.
+mise and uv can both install interpreters and venvs. Pick one owner for the interpreter: mise
+installs Python and uv, uv manages the project env on top.
 
 ```toml
 [tools]
-uv     = "latest"
-python = "3.12"
+python = "3.13"
+uv = "0.11"
+ruff = "latest"                  # aqua binary; other CLIs: "pypi:black" = "25"
+
+[env]
+UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }   # uv uses mise's python
 
 [settings]
-# auto-activate an existing .venv when entering (needs a uv.lock present).
-# string values; the old boolean form was removed in 2026.7.
-python.uv_venv_auto = "source"          # or "create|source" to create then activate
-```
+python.uv_venv_auto = "create|source"   # needs uv.lock; "source" only activates
 
-Force uv to use mise's exact interpreter (avoids uv silently downloading its own):
-
-```toml
-[env]
-UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
-```
-
-**Non-uv project (plain venv):** different mechanism, different code path:
-
-```toml
-[env]
-_.python.venv = { path = ".venv", create = true }
-```
-
-**Python CLI tools** go through the `pipx:` backend (which uses `uvx` under the hood when uv
-is present):
-
-```toml
-[tools]
-"pipx:ruff" = "latest"
-"pipx:mypy" = "latest"
-```
-
-**Boundary:** mise owns the *interpreter* version and `uv` version (and venv auto-activation);
-uv owns `pyproject.toml`, `uv.lock`, dependency resolution, and running code. mise tasks
-delegate to `uv run`:
-
-```toml
 [tasks.test]
 run = "uv run pytest"
 [tasks.lint]
 run = "uv run ruff check ."
-[tasks.type]
-run = "uv run mypy"
 ```
 
-(This repo's `learn/ai-native-engineering/mise.toml` is a clean real example of exactly this
-pattern.) `mise sync python --uv` can align mise's and uv's interpreter lists if they drift.
+- `python.uv_venv_auto` takes `false`, `"source"`, or `"create|source"`. `true` is
+  deprecated.
+- Without uv: `[env] _.python.venv = { path = ".venv", create = true }`.
+- `mise sync python --uv` links mise's Pythons into uv, so uv finds them without
+  downloading its own.
+- Precompiled Pythons differ slightly from source builds; if a tool trips on that, set
+  `python.compile = true`.
 
----
+## Rust
 
-## Rust (systems / extensions)
-
-mise does **not** install Rust binaries directly — it installs/uses **rustup** and sets
-`RUSTUP_TOOLCHAIN`. Toolchains live under rustup's control (`~/.rustup`, `~/.cargo`).
+mise drives rustup: it installs the toolchain into `RUSTUP_HOME`, sets `RUSTUP_TOOLCHAIN`,
+and puts `$CARGO_HOME/bin` on PATH.
 
 ```toml
 [tools]
-rust = { version = "stable", profile = "minimal",
-         components = "rust-src,rust-analyzer,clippy",
-         targets = "wasm32-unknown-unknown" }
-# cargo CLIs (use cargo-binstall automatically when available)
-"cargo:sqlx-cli"   = "latest"
-"cargo:cargo-pgrx" = "0.12.6"      # Postgres extension tooling
-```
+rust = { version = "1.92", profile = "minimal", components = ["clippy", "rustfmt"], targets = ["wasm32-unknown-unknown"] }
+"cargo:sqlx-cli" = "0.8"
 
-**Env vars:** `RUSTUP_TOOLCHAIN` (set to the requested version); `RUSTUP_HOME`/`CARGO_HOME`
-respected if already set (override via `MISE_RUSTUP_HOME`/`MISE_CARGO_HOME`).
-
-**`rust-toolchain.toml`:** mise reads it (channel/components/profile/targets) — when present,
-don't duplicate the toolchain in `mise.toml`. CI may need `experimental = true`.
-
-**Boundary:** mise owns the toolchain version + components/targets (via rustup) and `cargo:`
-CLIs. rustup owns actual rustc/cargo binaries. cargo owns `Cargo.toml`/`Cargo.lock`,
-`cargo build/test`. For Postgres/SQLite extension work, mise pins `cargo-pgrx`/`sqlx-cli`;
-cargo+pgrx do the building.
-
-```toml
 [tasks.test]
 run = "cargo test"
-[tasks.build]
-run = "cargo build --release"
 ```
 
----
+A `rust-toolchain.toml` is read only with `rust` in `idiomatic_version_file_enable_tools`.
+Without that, `RUSTUP_TOOLCHAIN` from any mise `rust` entry (global included) overrides the
+file. Check with `mise x -- rustup show active-toolchain`.
 
 ## C / C++
 
-**Fundamental limit:** mise does **not** install system compilers (gcc/clang), libc, or system
-headers — use the OS package manager (apt/brew/pacman) for those. mise manages **build tools
-and CLIs** plus env.
+mise installs build tools and CLIs, not compilers, libc or system headers (use the OS package
+manager).
 
 ```toml
 [tools]
-cmake  = "3.30"
-"github:ninja-build/ninja" = "latest"
-ccache = "latest"
-"pipx:conan" = "2"          # C/C++ dependency manager (or use vcpkg)
+cmake = "4"
+ninja = "1"
+ccache = "4"
+conan = "2"                      # pypi
 
 [env]
-CMAKE_GENERATOR             = "Ninja"
+CMAKE_GENERATOR = "Ninja"
 CMAKE_CXX_COMPILER_LAUNCHER = "ccache"
-CCACHE_DIR                  = "{{ config_root }}/.ccache"
-```
 
-**Boundary:** mise = build tools (cmake/ninja/ccache), CLIs (clang-format, protoc, buf),
-env vars. OS package manager = compilers + system libs. conan/vcpkg = C/C++ library deps.
-The build itself stays in cmake/ninja:
-
-```toml
 [tasks.configure]
 run = "cmake -B build -S ."
 [tasks.build]
 run = "cmake --build build"
+depends = ["configure"]
 [tasks.test]
 run = "ctest --test-dir build"
 ```
 
----
+`cmake_minimum_required` in `CMakeLists.txt` no longer selects a version.
 
-## Scala with scala-cli
+## Scala and the JVM
 
 ```toml
 [tools]
-java      = "temurin-25"     # mise sets JAVA_HOME automatically (under `mise activate`)
-scala-cli = "latest"
-# sbt = "latest"             # only for legacy sbt projects
+java = "21"                      # Temurin by default (java.shorthand_vendor)
+scala-cli = "1"
+# sbt = "1"                      # only for sbt projects
 
-[settings]
-java.shorthand_vendor = "temurin"   # then `java = "25"` means temurin-25
-
-[env]
-JAVA_OPTS = "-Xss4m"
-```
-
-JDK distributions: `temurin-25`, `zulu-25`, `corretto-25`, `openjdk-25`. Version files
-`.java-version`/`.sdkmanrc` are read when enabled.
-
-**Boundary:** mise owns the JDK version+distribution (`JAVA_HOME`) and the scala-cli/sbt
-*version*. scala-cli owns the Scala version (`//> using scala …` directives), dependencies,
-compilation, and packaging. mise tasks delegate:
-
-```toml
-[tasks.compile]
-run = "scala-cli compile ."
 [tasks.test]
 run = "scala-cli test ."
-[tasks.run]
-run = "scala-cli run ."
 ```
 
-**Gotcha:** `JAVA_HOME` may not refresh when switching projects unless `mise activate` is in
-use. If sbt/Maven picks up the wrong JDK in automation, invoke through mise:
-`mise exec -- sbt compile`.
+- Vendor-prefixed versions pin a build: `temurin-21`, `zulu-21`, `corretto-21`. Set
+  `java.shorthand_vendor` in shared config if the team must stay on one vendor.
+- `java@lts` is 25. `.java-version` and `.sdkmanrc` are opt-in idiomatic files.
+- `JAVA_HOME` is set under `mise exec`, tasks and activated shells; shims alone set it only
+  for the `java` process. If sbt or Gradle sees the wrong JDK, run it as
+  `mise x -- sbt compile`.
+- scala-cli owns the Scala version (`//> using scala`), deps and packaging.
