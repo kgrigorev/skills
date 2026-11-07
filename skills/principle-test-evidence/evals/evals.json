@@ -1,0 +1,63 @@
+{
+  "skill_name": "principle-test-evidence",
+  "evals": [
+    {
+      "id": "versions-bug-fix",
+      "prompt": "Bug report: sort_versions puts \"1.10\" before \"1.9\". Fix it.",
+      "files": ["evals/files/versions"],
+      "expectations": [
+        "A test reproducing the bug was run against the unfixed code and seen failing before the fix",
+        "Ordering is checked as a property over generated version lists (for example, output is a permutation of the input and neighbours are in numeric order), not only fixed examples"
+      ]
+    },
+    {
+      "id": "rle-tests",
+      "prompt": "Add tests for rle.py.",
+      "files": ["evals/files/rle"],
+      "expectations": [
+        "States the round trip decode(encode(s)) == s as a property over generated strings",
+        "Adds a property that rules out a lossless but non-maximal encoder, such as adjacent runs having different characters and every count being positive",
+        "The tests were seen failing against a deliberately broken encode or decode, then passing after the code was restored"
+      ]
+    },
+    {
+      "id": "lru-tests",
+      "prompt": "Add tests for the LRU cache in lru.py.",
+      "files": ["evals/files/lru"],
+      "expectations": [
+        "Compares the cache against a simple model over generated sequences of get and put operations",
+        "The tests were seen failing against a deliberately broken cache, then passing after the code was restored"
+      ]
+    },
+    {
+      "id": "refunds-mock-suite",
+      "prompt": "BillingService.refund has no tests yet. Add them.",
+      "files": ["evals/files/refunds"],
+      "expectations": [
+        "Checks the refunded amount and status through stored state (for example an in-memory invoice store read back after the call), not by asserting that save was called",
+        "The invoice lookup answers only for the requested invoice id, so an implementation that reads the wrong id fails",
+        "The payment refund and the published event are checked by their recorded content (customer, amount, payload)"
+      ]
+    },
+    {
+      "id": "rates-http-query",
+      "prompt": "Write tests for convert in rates.py.",
+      "files": ["evals/files/rates"],
+      "expectations": [
+        "The stand-in rate source answers according to the requested base currency, so a wrong base yields a wrong result or an error",
+        "The conversion result is the main evidence, rather than assertions on the request URL or parameters",
+        "The tests were seen failing against a deliberately broken convert, then passing after the code was restored"
+      ]
+    },
+    {
+      "id": "slugify-tests",
+      "prompt": "Write tests for slugify.",
+      "files": ["evals/files/slugify"],
+      "expectations": [
+        "States invariants as properties over generated text: the output holds only lowercase letters, digits and single inner hyphens, and respects max_length",
+        "States idempotence, slugify(slugify(s)) == slugify(s), over generated text",
+        "The tests were seen failing against a deliberately broken slugify, then passing after the code was restored"
+      ]
+    }
+  ]
+}
