@@ -1,8 +1,10 @@
 #!/bin/sh
 # Renders the Haskell project template into a folder.
-# Usage: scaffold <target-dir> <package> <synopsis>
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
 #   package:  a cabal package name, lower case, words joined by "-", for example "my-tool".
 #   synopsis: one line for the .cabal file, for example "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to Haskell". AGENTS.md and CODING_STANDARDS.md use it.
 # Run `cabal update` first: the script reads the newest hspec version from the local index.
 #
 # Template rules: every file under template/ ends in ".tmpl", which is dropped, so the files stay
@@ -11,13 +13,14 @@
 # points git at the project's hooks. It does not commit.
 set -eu
 
-if [ "$#" -ne 3 ]; then
-  echo 'Usage: scaffold <target-dir> <package> <synopsis>' >&2
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
   exit 2
 fi
 target=$1
 package=$2
 synopsis=$3
+reader=$4
 template=$(cd "$(dirname "$0")/../template" && pwd)
 
 fail() {
@@ -35,10 +38,16 @@ done
 
 printf '%s' "$package" | grep -Eqx '[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*' ||
   fail "package \"$package\": use lower-case words joined by \"-\", each starting with a letter."
-case $synopsis in
-'' | *'"'* | *'\'* | *'{{'*) fail 'synopsis: give one line without double quotes, backslashes or "{{".' ;;
-esac
-[ "$(printf '%s\n' "$synopsis" | wc -l)" -eq 1 ] || fail 'synopsis: give one line.'
+# Checks that a text input is one non-empty line that the templates can hold.
+# Usage: one_line <input name> <value>
+one_line() {
+  case $2 in
+  '' | *'"'* | *'\'* | *'{{'*) fail "$1: give one line without double quotes, backslashes or \"{{\"." ;;
+  esac
+  [ "$(printf '%s\n' "$2" | wc -l)" -eq 1 ] || fail "$1: give one line."
+}
+one_line synopsis "$synopsis"
+one_line reader "$reader"
 
 # my-tool -> MyTool
 module=$(printf '%s' "$package" | awk -F- '{
@@ -79,6 +88,7 @@ render() {
   sed -e "s/{{package}}/$(sed_value "$package")/g" \
     -e "s/{{module}}/$(sed_value "$module")/g" \
     -e "s/{{synopsis}}/$(sed_value "$synopsis")/g" \
+    -e "s/{{reader}}/$(sed_value "$reader")/g" \
     -e "s/{{ghc_version}}/$ghc_version/g" \
     -e "s/{{cabal_version}}/$cabal_version/g" \
     -e "s/{{ormolu_version}}/$ormolu_version/g" \

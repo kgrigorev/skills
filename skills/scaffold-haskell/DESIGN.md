@@ -20,3 +20,5 @@ Every other gate states its reason in a comment in its own file.
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
 - Project-specific material (domain terms, reference documents) stays out of the template.
+- The reader profile is an input, not fixed text. How much the comments explain depends on who
+  reads the code.

@@ -14,7 +14,7 @@ Paths below are relative to this skill's folder unless they start with `<target>
 
 ## Steps
 
-1. **Inputs.** Get three values. Take them from the request and ask once for the missing ones.
+1. **Inputs.** Get four values. Take them from the request and ask once for the missing ones.
    - Target folder. It may exist, for example a fresh `gh repo clone`; the script never
      overwrites a file.
    - Package name: lower-case words joined by `-`. Offer the folder name as the default. The
@@ -22,13 +22,18 @@ Paths below are relative to this skill's folder unless they start with `<target>
    - Synopsis: one noun phrase, capitalised, no final period, for example
      `A Haskell tool that renames photos`. It goes into the `.cabal` file, `README.md`,
      `AGENTS.md` and the stub's banner.
+   - Reader: who reads the code. Never guess it. A noun phrase that completes "The reader
+     is ...". It starts in lower case and has no final period, for example
+     `a Go developer new to Haskell`. It goes into `AGENTS.md` and `CODING_STANDARDS.md` and sets
+     how much the comments explain.
 
-   Done when you have all three.
+   Done when you have all four.
 
-2. **Render.** Run `cabal update`, then `sh scripts/scaffold <target> <package> "<synopsis>"`. The
-   script copies the template, fills in the names and the local tool versions, pins
-   `index-state` to today, formats the Haskell files, runs `git init` when needed and enables
-   the hooks in `.githooks/`. The project pins the `ghc` on `PATH`; to pin another version, run
+2. **Render.** Run `cabal update`, then
+   `sh scripts/scaffold <target> <package> "<synopsis>" "<reader>"`. The script copies the
+   template, fills in the names, the reader and the local tool versions, pins `index-state` to
+   today, formats the Haskell files, runs `git init` when needed and enables the hooks in
+   `.githooks/`. The project pins the `ghc` on `PATH`; to pin another version, run
    `ghcup set ghc <version>` first.
    - A tool is missing: propose `brew bundle --file=template/Brewfile.tmpl` (macOS), then
      `ghcup install ghc recommended`, `ghcup set ghc recommended` and
@@ -57,8 +62,8 @@ Paths below are relative to this skill's folder unless they start with `<target>
      ```
 
    - Install HLS: `ghcup install hls latest`.
-   - Install the `commit-message` and `pull-request` skills, if missing:
-     `npx skills add kgrigorev/skills -s commit-message pull-request -g`.
+   - Vendor the skills this project needs into the repo: run `npx skills add <source> -s <skill>`
+     without `-g` in `<target>`. This writes `.agents/skills/` and `skills-lock.json`.
    - For a harness that reads neither `AGENTS.md` nor `CLAUDE.md`, add its file as a one-line
      pointer to `AGENTS.md`, never a copy.
 

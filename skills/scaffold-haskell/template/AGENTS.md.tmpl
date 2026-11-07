@@ -1,7 +1,7 @@
 # AGENTS.md
 
-{{synopsis}}. The owner reviews every change and is new to Haskell, so write code a
-beginner can read. Setup is in `README.md`.
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
 
 ## Checks
 
@@ -41,13 +41,6 @@ bans by name, so names like `read`, `last` and `error` are taken: call your own 
 - `with-compiler` in `cabal.project` names the GHC version. `scripts/check` and CI read it there.
   To change GHC, update it together with `tested-with` and the `base` bound in
   `{{package}}.cabal`.
-
-## Domain docs
-
-- `GLOSSARY.md` at the repo root defines the project's terms. Use them in code, tests, commits and
-  PRs.
-- `docs/adr/` records design decisions, one numbered file each: `0001-short-title.md`.
-- Create either one when the first term or decision is settled.
 
 ## Writing
 
