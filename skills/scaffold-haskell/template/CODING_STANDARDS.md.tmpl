@@ -1,33 +1,48 @@
 # Coding standards
 
 The reviewer applies these to every Haskell change. `scripts/check` already enforces formatting,
-warnings, imports, extensions and the banned functions, so they are not repeated here.
+warnings, type signatures, imports, extensions and the banned functions, so they are not repeated
+here.
 
-The reader is a beginner Haskell developer. Every rule serves that reader.
+The reader is {{reader}}. Every rule serves that reader.
 
 ## Plain Haskell
 
-Use data types, records, pattern matching, `Maybe`, `Either` and `IO`. Type-level programming,
-lens, monad transformers and new type classes need the owner's approval first.
+Use data types, records, pattern matching, `Maybe`, `Either` and `IO`, plus the approved extras
+below. Type-level programming, lens, monad transformers, effect libraries and new type classes
+need the owner's approval first. Once approved, they go into the list.
+
+Approved extras:
+
+- None.
+
+Instances of library classes are fine, for example `Show` or `ToJSON`.
+
+## Comments
+
+A reader can follow a module from top to bottom by its comments alone.
+
+- Every module starts with a `-- |` comment that says what the module is for.
+- Every top-level definition has a `-- |` comment that says what it is for and why.
+- Explain a Haskell construct briefly the first time a module uses it, if the reader may not know
+  it. For example `<$>`, `traverse` or a `where` block. One short sentence, sometimes with the
+  equivalent in a language the reader knows.
+- Plain English and short sentences. No filler, no praise of the code, no restating the code in
+  words.
 
 ## Text and errors
 
 - Use `Text` for text. `String` only where a library forces it.
-- Expected failures are values: return `Either` with the project's error type.
+- Expected failures are values: return `Either` with the module's error type. Exceptions are for
+  the unexpected only, such as a full disk.
 
 ## Functions and names
 
-- Every top-level definition in `src/` has a type signature and a `-- |` comment that says what it
-  is for.
 - Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
   nesting.
 - Write explicit arguments and lambdas. Composing two or three functions with `.` is fine.
 - Names say what a value is: `environment`, `argument`. Single letters only in tiny lambdas.
-- Use `GLOSSARY.md` terms for the project's concepts.
-
-## Design decisions
-
-A change that goes against an ADR in `docs/adr/` changes that ADR in the same PR.
+- Use the same name for the same concept everywhere: in code, tests and docs.
 
 ## Dependencies
 
@@ -36,4 +51,4 @@ A new entry in `build-depends` in `{{package}}.cabal` needs the owner's approval
 ## Tests
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
-- Test names describe behaviour in `GLOSSARY.md` terms.
+- Test names describe behaviour.

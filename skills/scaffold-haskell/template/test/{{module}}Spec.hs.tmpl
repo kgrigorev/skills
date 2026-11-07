@@ -1,9 +1,11 @@
+-- | Tests for the {{module}} module.
 module {{module}}Spec (spec) where
 
 import Data.Text qualified as Text
 import Test.Hspec (Spec, describe, it, shouldSatisfy)
 import {{module}} (banner)
 
+-- | The tests. hspec-discover finds this name in every *Spec module.
 spec :: Spec
 spec =
   describe "banner"

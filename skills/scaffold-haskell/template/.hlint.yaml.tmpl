@@ -24,7 +24,7 @@
   - {name: [Data.Map, Data.Map.Lazy], within: [], message: "Use Data.Map.Strict."}
   - {name: Control.Arrow, within: [], message: "Hard to read. Write a lambda or a helper function."}
 
-# Point-free style is hard for beginners to read. Do not suggest it.
+# Point-free style hides the arguments and is hard to read. Do not suggest it.
 - ignore: {name: Eta reduce}
 - ignore: {name: Avoid lambda}
 - ignore: {name: Avoid lambda using `infix`}
