@@ -26,8 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # A block (run: |) keeps YAML from reading the ": " in the sed pattern as a key.
       - id: ghc
-        run: echo "version=$(sed -n 's/^with-compiler: *ghc-//p' cabal.project)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(sed -n 's/^with-compiler: *ghc-//p' cabal.project)" >> "$GITHUB_OUTPUT"
 
       - id: setup
         uses: haskell-actions/setup@v2

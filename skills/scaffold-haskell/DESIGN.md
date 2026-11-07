@@ -19,6 +19,8 @@ Every other gate states its reason in a comment in its own file.
 
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
+- CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-haskell.yml`. When you
+  scaffold with newer tools, bump the versions at the top of that file to match.
 - Project-specific material (domain terms, reference documents) stays out of the template.
 - The template works with any set of agent skills. It names no skill and holds no convention that
   comes from one, such as a glossary file or a folder of decision records. A project adds those

@@ -1,0 +1,87 @@
+name: scaffold-haskell
+
+# Renders the scaffold-haskell template into a sample project and runs the project's
+# scripts/check. A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold-haskell/**
+      - .github/workflows/scaffold-haskell.yml
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold-haskell/**
+      - .github/workflows/scaffold-haskell.yml
+  # The scaffold takes the newest hspec from Hackage, so a new release can break the template
+  # without a change here. A weekly run catches that.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-haskell-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The scaffold pins the tool versions it finds on PATH. Keep these equal to the versions you
+  # scaffold with, so CI tests the project you would get.
+  GHC_VERSION: "9.14.1"
+  CABAL_VERSION: "3.18.2.0"
+  ORMOLU_VERSION: "0.9.0.0"
+  HLINT_VERSION: "3.10"
+  ACTIONLINT_VERSION: "1.7.12"
+
+jobs:
+  scaffold-haskell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs GHC and cabal with ghcup, as the template's own CI does, and runs cabal update.
+      # The scaffold needs the fresh index to find the newest hspec.
+      - id: setup
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ env.GHC_VERSION }}
+          cabal-version: ${{ env.CABAL_VERSION }}
+
+      # The same step as in template/.github/workflows/ci.yml.tmpl. Change both together.
+      - name: Install Ormolu and HLint
+        run: |
+          mkdir -p "$HOME/tools"
+          cd "$HOME/tools"
+          curl -fsSL -o ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
+          unzip -q ormolu.zip
+          curl -fsSL "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz" | tar xz
+          echo "$HOME/tools" >> "$GITHUB_PATH"
+          echo "$HOME/tools/hlint-$HLINT_VERSION" >> "$GITHUB_PATH"
+
+      # The cabal store holds the built dependencies, such as hspec. Restoring it saves most of
+      # the build time. The cache never replaces a saved key, and the dependencies change without
+      # a template change. So each run saves under its own key and restores the newest one.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: cabal-store-${{ runner.os }}-${{ env.GHC_VERSION }}-${{ github.run_id }}
+          restore-keys: cabal-store-${{ runner.os }}-${{ env.GHC_VERSION }}-
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold-haskell/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to Haskell"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # ci.yml.tmpl would give every new project a red CI.
+      - name: Lint the sample project's CI workflow
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" |
+            tar xz -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" "$RUNNER_TEMP/sample-tool/.github/workflows/ci.yml"
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"
