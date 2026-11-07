@@ -1,284 +1,172 @@
-# mise configuration reference
+# mise configuration
 
-Researched against mise `v2026.6.x`. Authoritative source:
-<https://mise.jdx.dev/configuration.html> and `/configuration/settings.html`.
-
-## Table of contents
-
-1. [Config files and precedence](#config-files-and-precedence)
-2. [Commit vs gitignore](#commit-vs-gitignore)
-3. [The mise.toml sections](#the-misetoml-sections)
-4. [`[tools]` in depth](#tools-in-depth)
-5. [`[env]` — environment & secrets](#env--environment--secrets)
-6. [Environments / profiles (`MISE_ENV`)](#environments--profiles-mise_env)
-7. [Trust & the security model](#trust--the-security-model)
-8. [Lockfiles (`mise.lock`)](#lockfiles-miselock)
-9. [Hooks](#hooks)
-10. [Templating (Tera)](#templating-tera)
-11. [Settings reference (selected)](#settings-reference-selected)
-
----
+Checked against mise `2026.11.3`. Every key with its type and default:
+<https://mise.jdx.dev/configuration/reference.html>. For keys in a file you have open,
+`mise config explain [KEY]`.
 
 ## Config files and precedence
 
-mise merges every config file it finds from the current directory up to the root, plus
-global and system configs. **Higher in this list wins** (more specific overrides less
-specific):
+mise merges every config from the current directory up to the root, then global and system.
+Closer directories win. Within one directory, highest first:
 
-1. `mise.local.toml` — local developer overrides (**gitignore**)
-2. `mise.<env>.local.toml` — local + env-specific overrides (**gitignore**)
-3. `mise.<env>.toml` — env-specific shared config, e.g. `mise.ci.toml` (commit)
-4. `mise.toml` — primary project config (commit)
-5. `mise/config.toml`, `.mise/config.toml`, `.config/mise.toml`,
-   `.config/mise/config.toml` — alternate project locations (commit)
-6. `.config/mise/conf.d/*.toml` — fragments, loaded alphabetically (commit)
-7. `~/.config/mise/config.toml` — global user config
-8. `/etc/mise/config.toml` — system-wide
+1. `mise.<env>.local.toml` (gitignore)
+2. `mise.local.toml` (gitignore)
+3. `mise.<env>.toml`, e.g. `mise.ci.toml` (commit)
+4. `mise.toml` (commit), or the alternate locations `mise/config.toml`, `.mise/config.toml`,
+   `.config/mise.toml`, `.config/mise/config.toml`
+5. `conf.d/*.toml` fragments in those config dirs, alphabetical. A dot before `.toml` marks an
+   environment fragment (`node.ci.toml` loads only under env `ci`), so name multi-word
+   fragments with hyphens (`node-tools.toml`).
 
-Legacy / idiomatic files also participate as fallbacks: `.tool-versions` (asdf format, fully
-supported) and — only when explicitly enabled per tool — `.nvmrc`, `.node-version`,
-`.python-version`, `.ruby-version`, `.go-version`, `.sdkmanrc`, `.java-version`.
+Then `~/.config/mise/config.toml` (global) and `/etc/mise/config.toml` (system). A global
+`config.override.toml` sits above project config, for settings a project may not override.
+`.tool-versions` is always read; idiomatic files (`.nvmrc`, `.python-version`, …) only for
+tools in `idiomatic_version_file_enable_tools`.
 
-**Platform-specific variants** (auto-enabled when `auto_env = true`): `mise.unix.toml`,
-`mise.linux.toml`, `mise.macos.toml`, `mise.windows.toml`, and arch-qualified forms like
-`mise.macos-arm64.toml`. Precedence low→high: `unix` < `{os}` < `{os}-{arch}` < explicit
-`MISE_ENV` entries.
+Platform files load automatically: `mise.unix.toml` < `mise.<os>.toml` <
+`mise.<os>-<arch>.toml` (e.g. `mise.macos-arm64.toml`).
 
-**Merge semantics:** `[tools]`, `[env]`, `[settings]` merge additively with child-overrides-
-parent per key. `[tasks]` are replaced wholesale per task key (a child task fully replaces a
-parent task of the same name — they are not deep-merged).
+`include = ["../shared/mise.toml", "git::…", "oci::…"]` merges a shared file beneath the one
+that includes it.
 
-## Commit vs gitignore
+**Merge:** `[tools]`, `[env]` and `[settings]` merge per key, closer file wins. A task of the
+same name replaces the farther one whole.
 
-| Pattern | Action | Why |
-|---|---|---|
-| `mise.toml`, `mise.<env>.toml`, alternate locations, `conf.d/*.toml` | **commit** | shared, reproducible |
-| `.tool-versions` | **commit** | legacy version pins |
-| `mise.lock` | **commit** | reproducible, checksum-verified installs |
-| `mise.local.toml`, `mise.*.local.toml` | **gitignore** | per-dev overrides, may hold secrets |
+Commit `mise.toml`, env files, `conf.d/`, `.tool-versions` and `mise.lock`. Gitignore
+`mise.local.toml` and `mise.*.local.toml`.
 
-Recommended `.gitignore`:
-
-```gitignore
-mise.local.toml
-mise.*.local.toml
-```
-
-## The mise.toml sections
+## Sections of mise.toml
 
 ```toml
-min_version = "2026.6.0"        # hard error if mise is older; { soft = "…" } only warns
+min_version = "2026.11.0"   # error on older mise; { soft = "…" } only warns
 
-[tools]                          # versions — see "in depth" below
-node = "22"
-
-[env]                            # env vars + dotenv + PATH — see "in depth" below
-NODE_ENV = "development"
-
-[settings]                       # mise behavior (see settings reference)
-idiomatic_version_file_enable_tools = ["node", "python"]
-
-[tasks.test]                     # tasks — see tasks-and-boundary.md
-run = "uv run pytest"
-
-[tool_alias.node.versions]       # version aliases (current syntax; old `[alias.node]` works)
-my_lts = "20"
-
-[hooks]                          # lifecycle hooks — see below
-enter = "echo entering"
-
-[vars]                           # template variables reusable in tasks/env
-region = "eu-central-1"
-
-[redactions]                     # secret masking in task output (see security)
+[tools]                     # versions; recipes in languages.md
+[env]                       # env vars, dotenv, PATH
+[tasks.test]                # see tasks-and-boundary.md
+[settings]                  # ignored until the file is trusted
+[tool_alias.node.versions]  # version aliases
+[vars]                      # template variables: {{ vars.region }}
+[hooks]                     # see Hooks
+[_]                         # free-form metadata mise ignores
 ```
 
-Anything under a top-level `[_]` table is ignored by mise — a place for arbitrary metadata.
-
-## `[tools]` in depth
+## `[tools]`
 
 ```toml
 [tools]
-# simple pin
-go = "1.26"
-node = "22"            # = "latest matching 22"; resolves to latest INSTALLED match, not newest available
-python = "3.12"
-rust = "stable"
-
-# table form with options
-node = { version = "22", postinstall = "corepack enable" }
-go   = { version = "1.26", postinstall = "go install golang.org/x/tools/cmd/goimports@latest" }
-
-# multiple versions of one tool
-python = ["3.12", "3.11"]
-
-# backend-qualified tools (CLI utilities, not just runtimes)
-"npm:prettier"        = "3"
-"cargo:sqlx-cli"      = "latest"
-"go:github.com/pressly/goose/v3/cmd/goose" = "latest"
-"pipx:ruff"           = "latest"
-"aqua:golangci/golangci-lint" = "latest"
+go = "1.26"                                  # newest installed 1.26.x
+node = "lts"
+python = ["3.13", "3.12"]                    # several versions; first is default
+ruff = "latest"                              # registry shorthand → backend chosen for you
+"github:owner/repo" = "1.2.3"                # explicit backend
+"go:example.com/tool" = { version = "latest", install_env = { GOPRIVATE = "example.com/*" } }
+cmake = { version = "4", os = ["linux", "macos"] }
 ```
 
-Tool-table options worth knowing: `version`, `postinstall` (shell after install),
-`os = ["linux","macos"]` (restrict by platform), `depends` (install ordering),
-`install_env` (env vars set only during install — e.g. `GOPRIVATE`). Backends and
-per-language specifics are in [languages.md](languages.md).
+Version forms: exact (`1.26.3`), prefix (`1.26`, `24`), `latest`, `lts`, `ref:<git-ref>` on
+source backends, aliases. `mise ls-remote <tool>` lists versions; `mise latest <tool>@24`
+resolves one.
 
-Version-spec forms: exact (`1.26.1`), partial (`1.26`, `22`), `latest`, `lts`, prefix ranges,
-`ref:<git-ref>`/`tag:<tag>` for some backends, and aliases. `mise ls-remote <tool>` lists
-installable versions.
+Common table options: `version`, `os`, `postinstall` (shell after install), `install_env`,
+`depends`. Each backend has its own options, and an option the backend doesn't read fails the
+install. Check with `mise config explain tools.<name>`.
 
-## `[env]` — environment & secrets
-
-mise sets these env vars when the directory is active (via `activate`) or for the duration
-of a `mise exec`/`mise run`. Special `_.` keys are directives, not literal vars:
+## `[env]`
 
 ```toml
 [env]
-# literal vars
 NODE_ENV = "development"
-DATABASE_URL = "postgres://localhost/dev"
-
-# load a dotenv file (STRING, never an array — array form crashes)
-_.file = ".env"
-_.file = { path = ".env.json", redact = true }     # JSON dotenv + mark all values secret
-
-# prepend to PATH (config_root = dir containing the config file)
-_.path = ["{{ config_root }}/node_modules/.bin", "{{ config_root }}/bin"]
-
-# run a script and import the env vars it exports
-_.source = "./scripts/load-secrets.sh"
-
-# auto-create/activate a Python venv (non-uv projects) — see languages.md
-_.python.venv = { path = ".venv", create = true }
-
-# per-variable secret redaction
-SECRET = { value = "…", redact = true }
-
-# reference a value computed from a tool path (templating + tools = true)
-UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
+SECRET = { value = "…", redact = true }      # masked in task output
+_.file = [".env", { path = ".env.local", redact = true }]  # dotenv, JSON, YAML, TOML
+_.file = { path = [".env", ".env.local"], find_up = true }  # search parents (monorepo .env)
+_.path = ["{{ config_root }}/node_modules/.bin", { path = ["~/bin"], position = "append" }]
+_.source = "./scripts/env.sh"                # import exports from a script
+UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }  # needs tool paths resolved
 ```
 
-Enable shell expansion in values with `env_shell_expand = true` in `[settings]` if you need
-`$VAR`/`$(cmd)` interpolation (off by default).
+- `_.` directives run in written order, so a `_.path` can use a var a `_.source` exported.
+- `$VAR` and `${VAR}` expand in values (`env_shell_expand`, on by default). Values read from
+  JSON/YAML/TOML env files stay literal unless the entry sets `expand = true`.
+- `_.path` entries go ahead of tool paths; `position = "append"` puts them after tool paths
+  and ahead of the inherited `PATH`.
+- `redactions = ["*_TOKEN", "API_KEY"]` (top level) redacts by name or glob. Redaction filters
+  task output, so `raw = true` tasks bypass it. `mise env --redacted` prints the redacted
+  vars _unmasked_; keep its output out of logs and chat.
+- `mise set KEY=val` / `mise unset KEY` write `[env]` for you; `mise set` lists values and
+  their source files.
 
-## Environments / profiles (`MISE_ENV`)
-
-Layer alternate configs (dev/ci/prod) on top of the base `mise.toml`. Activate via:
+## Environments (`MISE_ENV`)
 
 ```bash
-mise -E ci install          # global flag, applies to all subcommands
-MISE_ENV=ci mise run test    # env var
-# or commit a .miserc.toml:    env = ["ci"]
+mise -E ci run test          # or MISE_ENV=ci; several: -E ci,test (later wins)
 ```
 
-`MISE_ENV=ci,test` activates multiple (last wins). With env `ci` active, precedence high→low:
-`mise.ci.local.toml` > `mise.local.toml` > `mise.ci.toml` > `mise.toml`.
+`MISE_ENV` decides which files load, so `mise.toml` can't set it. Set it in the shell, in CI,
+or as `env = ["dev"]` in `.miserc.toml` (project) or `~/.miserc.toml` (global).
 
-**Constraint:** `MISE_ENV` cannot be set *inside* `mise.toml` — it decides which files load
-before any are parsed. Set it in the shell, CI, or `.miserc.toml`.
+## Trust
 
-## Trust & the security model
+Config can run code (hooks, `_.source`, templates with `exec()`, tasks, postinstall), so mise
+loads it only once trusted.
 
-mise will execute code from config (env scripts, hooks, `postinstall`, templates), so it
-gates loading behind explicit trust to stop a freshly-cloned repo from running arbitrary
-code.
-
-- **Loads without trust:** `min_version`, `[tools]` with plain version strings/arrays, and
-  `[tasks]` with no templates and no tool options — nothing there executes at load time.
-- **Requires trust:** `[env]`, hooks, `[settings]`, aliases, templates, and tool *options*.
-
-Commands:
-
-```bash
-mise trust                 # trust configs in this dir + parents
-mise trust --all           # …everywhere up the tree
-mise trust --show          # show trust status, change nothing
-mise untrust               # revoke (future loads re-prompt)
-```
-
-Behavior by context:
-
-- **Detected CI:** auto-trusts (unless paranoid mode). Standard CI "just works."
-- **Non-interactive, non-CI** (IDE extensions, TTY-less scripts): mise can't prompt, so it
-  **silently skips** untrusted config — no obvious error. Pre-run `mise trust`, or set
-  `trusted_config_paths` globally.
-- Denied-by-accident configs land in `~/.local/state/mise/ignored-configs/`; delete the
-  symlink there to un-ignore.
-- **Monorepo:** trusting the root implicitly trusts all descendant configs.
-
-Global auto-trust (in `~/.config/mise/config.toml`):
-
-```toml
-trusted_config_paths = ["~/work/my-trusted-projects"]
-# env: MISE_TRUSTED_CONFIG_PATHS (":"-separated). ["/"] disables trust entirely (not advised).
-```
-
-**Secret redaction:** mark env vars whose values must not appear in task logs.
-
-```toml
-redactions = ["API_KEY", "*_TOKEN", "SECRET_*"]   # exact names or globs
-[env]
-API_KEY = { value = "…", redact = true }
-```
-
-Redaction works by filtering task output line-by-line, so it requires non-`raw` task output
-(`raw = true` tasks bypass it). View with `mise env --redacted`.
-
-**Paranoid mode** (`MISE_PARANOID=1`): every config must be trusted (even otherwise-safe
-ones), files are hashed to detect tampering, short-name community plugins are blocked
-(full git URLs required), all fetches use HTTPS, and provenance is re-verified on every
-install.
+- **No trust needed:** a file with no template syntax holding only `min_version`,
+  plain-version `[tools]`, and `[tasks]` without `secrets`.
+- **Everything else** needs trust. Untrusted, `mise ls`/`env`/`tasks`/`config` fail with
+  "Config files in … are not trusted", and shell activation skips the file with a warning.
+  `[settings]` from an untrusted file is ignored.
+- **Implicit trust:** `mise run`, `mise <task>`, `mise exec`, `mise install`, `mise watch`
+  and `mise tasks add` trust the active config and persist it. MCP calls, shims and
+  `--help` do not.
+- Trust covers the repo's git worktrees too. `mise trust --show` shows status;
+  `mise untrust` revokes.
+- **Safe mode** (`MISE_SAFE=1`): mise reads config inertly. No trust needed and none granted;
+  `exec()`, `_.source`, hooks and tasks are refused; project `[env]`, `_.path`, `_.file` and
+  `[settings]` are ignored. Use it to inspect an unfamiliar repo or to run
+  `mise lock --bump --dry-run --json` on untrusted branches.
+- **Paranoid mode** (`paranoid = true`, global): no implicit or worktree trust, trust bound to
+  file contents (editing a file revokes it), env files trusted separately. Can be enabled per
+  category.
 
 ## Lockfiles (`mise.lock`)
 
-Pins exact versions + SHA256/Blake3 checksums + download URLs + per-platform metadata for
-reproducible, tamper-checked installs. **Not automatic** — generate with `mise lock`, then
-mise keeps it current as tools change. Each config variant gets its own lock
-(`mise.ci.toml` → `mise.ci.lock`).
+Exact versions, checksums, URLs and provenance per platform. Create with `mise lock`, or set
+`lockfile = true` to keep one. Each config gets its own (`mise.ci.toml` → `mise.ci.lock`).
 
-Enable and enforce via `[settings]`:
-
-```toml
-[settings]
-lockfile = true                 # read/update lockfiles (lets mise.toml hold loose specs, lock holds exact)
-locked   = true                 # FAIL install if no pre-resolved entry for this platform → no upstream API calls
-locked_verify_provenance = true # re-verify SLSA/cosign/minisign/GitHub attestations at install
-```
-
-`mise lock --platform linux-x64,macos-arm64` pre-resolves for CI platforms you don't build
-on locally. `mise lock --minimum-release-age 90d` only locks versions older than N days
-(supply-chain hardening). Commit `mise.lock`.
+- Default `lockfile_mode = "generate"`: installs rebuild the lock from current requests and
+  lock every platform, so a lock from one machine installs on another.
+- `mise install --locked` (or `locked = true`) uses only lockfile URLs and fails on entries
+  without checksums. Run `mise lock` once to fill them.
+- `mise lock --bump` advances fuzzy requests (`latest`, `24`) in the lockfile only;
+  `--platform linux-x64,macos-arm64` adds platforms; `--minimum-release-age 7d` holds back
+  fresh versions.
+- Lockfile format 4 (since 2026.11.1) is unreadable by older mise. Everyone sharing it needs
+  `≥ 2026.11.1`; `mise lock --upgrade` moves an older lockfile to the new format.
+- `npm:` tools are verified against Sigstore provenance by default, and the first install pins
+  the building repository in the lockfile.
 
 ## Hooks
 
 ```toml
 [hooks]
-enter = "echo entering"                 # requires `mise activate`
-leave = "echo leaving"                   # requires `mise activate`
-cd    = "echo dir changed"               # requires `mise activate`
-preinstall  = "echo before install"      # works without activate
-postinstall = "echo after install"       # works without activate
-enter = { task = "setup" }               # delegate a hook to a task
+enter = "echo entering"          # needs `mise activate`; starts in the project root
+leave = "echo leaving"           # needs `mise activate`
+cd = "echo moved"                # needs `mise activate`
+preinstall = "echo before"       # runs on `mise install`
+postinstall = { task = "setup" } # a hook can run a task
 
-[[watch_files]]                          # requires `mise activate`
+[[watch_files]]                  # needs `mise activate`
 patterns = ["src/**/*.rs"]
 run = "cargo fmt"
 ```
 
-`enter`/`leave`/`cd`/`watch_files` only fire under `mise activate` (the shell-hook
-mechanism). `preinstall`/`postinstall` fire during `mise install` regardless. Available hook
-env vars include `MISE_PROJECT_ROOT`, `MISE_PREVIOUS_DIR`, `MISE_INSTALLED_TOOLS`.
+Your Bash tool has no activation, so `enter`/`leave`/`cd`/`watch_files` never fire there.
+Hooks get `MISE_PROJECT_ROOT`, `MISE_PREVIOUS_DIR`, `MISE_INSTALLED_TOOLS`.
 
-## Templating (Tera)
+## Templates (Tera v2)
 
-mise renders config values through the Tera template engine. Common helpers: `{{
-config_root }}` (dir of the config file), `{{ cwd }}`, `{{ env.FOO }}`, `{{ tools.python.path
-}}` (needs `tools = true` on that value), `{{ vars.region }}` (from `[vars]`), `{{
-exec(command="…") }}`. Use templates for paths and computed env; keep them simple — heavy
-logic belongs in a task or script, not a template.
-
-> Deprecation note: old Tera arg-functions for tasks (`{{arg()}}`, `{{flag()}}`) are
-> deprecated in favor of the `usage` spec (see [tasks-and-boundary.md](tasks-and-boundary.md))
-> and are slated for removal in late 2026.
+Values render through Tera: `{{ config_root }}`, `{{ cwd }}`, `{{ env.HOME }}`,
+`{{ vars.x }}`, `{{ tools.python.path }}` (with `tools = true`), `{{ mise_config_dir }}`,
+`{{ exec(command="git rev-parse HEAD") }}`, `read_json/read_toml/read_yaml(path=…)`,
+`os()`, `arch()`. Keep templates to paths and lookups; put logic in a task or script.
+Templates that broke in the v2 upgrade can opt back with `[env] MISE_TERA_V1 = true` until
+2027.4.0.

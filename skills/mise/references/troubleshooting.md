@@ -1,137 +1,81 @@
-# mise troubleshooting, limitations & gotchas
+# mise troubleshooting
 
-Researched against mise `v2026.6.x`. Sources: `mise.jdx.dev/faq.html`,
-`/troubleshooting.html`, `/dev-tools/comparison-to-asdf.html`, `/direnv.html`,
-`/ide-integration.html`.
+Checked against mise `2026.11.3`. Start with `mise doctor` (exits 1 on a problem, names the
+fix), then `mise config` (what loaded), `mise ls --current` (what's active), `which -a <tool>`
+(PATH order), `mise env --paths` (the PATH entries mise adds).
 
-First move when anything is off: **`mise doctor`** (alias `mise dr`). It reports untrusted
-configs, PATH problems, missing tools, and shim issues. Then `mise config` (what's loaded),
-`mise ls --current` (what's active), `which -a <tool>` (PATH ordering).
+## Tools or env missing in a script, CI step or agent shell
 
-## The big one: tools/env "missing" in non-interactive shells
-
-**Symptom:** a script or agent runs `node`/`go`/etc. and gets "command not found," or env
-vars from `[env]` aren't set — even though `mise.toml` pins them.
-
-**Cause:** `mise activate` works by hooking the **shell prompt**. Non-interactive shells (agent
-Bash tools, `bash script.sh`, CI steps, tmux panes, `.profile`/`.bash_profile`) have no
-prompt, so the hook never fires and `PATH`/env are never modified. `mise activate` only
-belongs in interactive RC files (`.bashrc`/`.zshrc`).
-
-**Fix — use a mechanism that doesn't depend on the prompt:**
+`mise activate` updates PATH and env from the shell prompt hook. Non-interactive shells
+(agent Bash tools, `bash script.sh`, CI steps) have no prompt, so nothing changes. Run through
+mise instead:
 
 ```bash
-mise exec -- <cmd>                  # one command, tools+env loaded, no shell mutation
-mise run <task>                     # tasks load tools+env automatically
-eval "$(mise activate bash --shims)"  # persistent PATH for a non-interactive session
-export PATH="$HOME/.local/share/mise/shims:$PATH"   # or add shims dir directly
+mise x -- <cmd>
+mise run <task>
+eval "$(mise activate bash --shims)"   # persistent PATH via shims; shims load [env] per call
 ```
 
-Inside a mise *task* (file or TOML), tools+env are already loaded — no `mise exec` needed
-there.
+## "Config files in … are not trusted"
 
-## Trust prompts silently swallowed
+`mise ls`, `env`, `tasks` and `config` fail on an untrusted config; shell activation skips it
+with a warning. `mise run`, `exec`, `install` and `watch` trust it implicitly. Ask the user,
+then `mise trust`. To look first without trusting: `MISE_SAFE=1 mise tasks` (safe mode ignores
+project `[env]` and refuses tasks and hooks). A project's `[settings]` takes effect only after
+trust. Details: [configuration.md](configuration.md#trust).
 
-In non-interactive, non-CI contexts mise can't prompt for trust, so it **silently skips**
-untrusted config (no clear error). Pre-run `mise trust` (or `mise trust --all`), or set
-`trusted_config_paths` globally. Denied configs hide in
-`~/.local/state/mise/ignored-configs/` — delete the symlink to recover. Detected CI auto-
-trusts (unless paranoid mode). See [configuration.md](configuration.md#trust--the-security-model).
+## Wrong version active
 
-## Wrong version active despite mise
+Another manager or a system binary is ahead on PATH. Compare `which -a <tool>` with
+`mise ls --current`; put mise's activation or shims first. `mise doctor` warns when other
+paths take precedence.
 
-PATH-ordering issue — another manager or a system binary shadows mise. Diagnose with
-`which -a <tool>` and `mise ls --current`. Ensure mise's activation/shims come first on PATH.
-`MISE_ACTIVATE_AGGRESSIVE=1` forces mise's paths to the front as a workaround.
+## `.nvmrc` / `.python-version` / `go.mod` / `rust-toolchain.toml` ignored
 
-## Idiomatic version files ignored
+Idiomatic files are opt-in per tool:
+`mise settings add idiomatic_version_file_enable_tools node --local`. Node reads
+`devEngines.runtime`, never `engines.node`. Go reads only `toolchain` or exact `go X.Y.Z`.
+`.tool-versions` needs no opt-in.
 
-`.nvmrc`, `.python-version`, etc. are **disabled by default**. Enable per tool:
+## Install fails
 
-```toml
-[settings]
-idiomatic_version_file_enable_tools = ["node", "python"]
-```
+- **"no versions found"** for a release under a day old: the default 24 h
+  `minimum_release_age`. Pin the exact version, or set `minimum_release_age` lower.
+- **"option '…' is not used by the … backend"**: tool options are now checked. Remove it or
+  move it to the right setting (`node.corepack` is a setting, for example).
+- **`--locked` fails on missing checksums or URLs**: run `mise lock` to fill the lockfile.
+- **"unsupported lockfile version 4"**: someone on mise ≥ 2026.11.1 wrote the lockfile. Upgrade
+  mise (`mise self-update`, or the package manager that installed it).
+- **npm provenance failure**: the package was built from a different repository than the one
+  pinned in `mise.lock`. Investigate before overriding.
+- **asdf-style `mise install` didn't add my tool**: `install` only installs pins. `mise use`
+  adds them.
 
-Migrators from nvm/pyenv hit this constantly. `.tool-versions` (asdf format) *is* read without
-opt-in.
+## `node = "24"` isn't the newest 24.x
 
-## `mise install` didn't add my tool
+A prefix resolves to the newest _installed_ match. `mise install node@24` or `mise upgrade`
+fetches newer; `mise up --bump` rewrites the pin in config.
 
-`mise install` only installs what's already pinned; it does not add pins. Use `mise use
-<tool>@<ver>` to add to config *and* install. (asdf's semantics are reversed — a common
-trip-up.)
+## direnv
 
-## `node = "22"` isn't the newest 22
+mise `[env]` replaces direnv. Running both fights over PATH, and the maintainers won't treat
+conflicts as bugs. Pick mise. `mise direnv` is deprecated and goes in 2027.10.4.
 
-A partial spec resolves to the latest **installed** match, not the latest *available*. Run
-`mise install node@22` / `mise upgrade` / `mise up --bump` to advance. `mise up --bump` can get
-confused by non-semver version strings.
+## IDEs
 
-## `_.file` array crash
-
-`_.file` (dotenv) takes a **string**, not an array: `_.file = ".env"`. The array form crashes.
-For multiple files, use multiple mechanisms or a `conf.d` fragment.
-
-## Don't run mise + direnv together
-
-mise's `[env]` replaces direnv's core use. Running both causes **PATH-ordering conflicts**
-(both fighting over the same tool's path). The mise maintainers explicitly do not treat
-mise/direnv incompatibilities as bugs and won't accept compatibility PRs. Pick one. Unrelated,
-non-PATH env vars can coexist, but anything touching PATH is fragile. The old `use mise`
-direnv function was removed.
-
-## IDE integration
-
-IDEs launched before mise is configured won't pick up env/PATH changes, and **arbitrary `[env]`
-vars only reach the IDE if a shim is executed** (env doesn't propagate just by opening the
-editor). Use shims for IDEs (`mise activate <shell> --shims`). VS Code on macOS doesn't read
-login-shell profiles by default. Helpers: the `mise-vscode` and `intellij-mise` extensions;
-JetBrains sometimes needs a symlink mimicking asdf's layout (`ln -s ~/.local/share/mise
-~/.asdf`). Xcode needs the config added to build-phase Input Files.
+An IDE sees mise's tools and `[env]` only through shims or a mise extension (`mise-vscode`,
+`intellij-mise`). Point it at shims (`mise activate <shell> --shims` in the login profile) or
+at the stable `global` link inside each tool's install dir. Restart the IDE after switching
+versions it reads at startup (`JAVA_HOME`). `mise lsp` gives editors diagnostics and
+completion for `mise.toml`.
 
 ## Windows
 
-- **Native Windows: shims only.** `[env]` var support from `mise.toml` is not available
-  natively — use `mise exec`/`mise run`. **WSL is fully supported.**
-- Path-length limits bite — use a short `MISE_INSTALLS_DIR`.
-- WSL shim leakage from Windows: set `appendWindowsPath = false` in `/etc/wsl.conf`.
-- VS Code `spawn EINVAL`: set `windows_shim_mode` to `exe`/`hardlink`/`symlink`.
-- PowerShell task support is comparatively recent and still maturing.
+Native Windows runs tools through shims; `mise x` and `mise run` load `[env]`. WSL behaves
+like Linux. Long install paths: `experimental = true` switches new installs to the shorter
+identity layout. `asdf:` plugins never run on Windows.
 
-## Performance
+## Slow prompt
 
-`mise hook-env` runs on every prompt/`cd` (~5–10 ms typical). It can drag in large monorepos
-with many tools or expensive `_.source` scripts. Profile with `MISE_TIMINGS=1 mise hook-env`.
-mise is still much faster than asdf's shim model (no per-invocation shim overhead under
-`activate`).
-
-## Maturity edges to keep in mind
-
-- Precompiled Python binaries "aren't 100% reliable" (a first-use warning shows). Set
-  `python.compile = true` to build from source if a prebuilt misbehaves.
-- Lockfiles work but the format is still maturing — commit them, but re-verify after mise
-  upgrades.
-- The registry of shorthands is large and may be reorganized over time; prefer explicit
-  backend prefixes (`aqua:`/`github:`/`cargo:`) when you need stability.
-- Some backends were experimental in early 2025 (go, rust, spm, vfox, dotnet, gem); most have
-  since stabilized, but verify with the installed version if a backend behaves oddly.
-
-## How mise compares (for choosing/justifying)
-
-- **vs asdf:** faster (no per-call shim overhead; up to ~7× faster installs), reads
-  `.tool-versions` natively (one-way — asdf can't read `mise.toml`), adds cargo/npm/go/aqua/
-  github backends, better supply-chain story (provenance verification, mise-plugins org).
-  Not 100% asdf-compatible by design; incompatible with asdf-go (≥0.16) commands. Switching
-  reinstalls tools into mise's own dir.
-- **vs direnv:** mise's `[env]` covers most needs; don't run both (see above).
-- **vs nvm/pyenv/rbenv:** one tool for everything; remember idiomatic version files are
-  opt-in.
-
-## Where mise genuinely shines
-
-Polyglot repos (one tool for every runtime + CLI), per-project env without direnv, layered
-team/personal config, a uniform task entrypoint across languages, and clean CI via shims/
-`mise exec` without shell-activation gymnastics. The boundary doctrine in
-[tasks-and-boundary.md](tasks-and-boundary.md) is what keeps those benefits from turning into
-duplication.
+`mise hook-env` runs on every prompt. Profile with `MISE_TIMINGS=1 mise hook-env -s bash`; expensive
+`_.source` scripts and `exec()` templates are the usual cause.
