@@ -62,6 +62,13 @@
         "Keeps currency as a runtime value (for example a validated code), since the variants share behaviour and the set is open",
         "Does not recommend a 160-variant sum type"
       ]
+    },
+    {
+      "prompt": "Our checkout pipeline is `validate(order) -> price(order) -> charge(order)`, every step typed `Order -> Order`. Last week someone called `charge` on an order that was never priced. How do we stop that with types?",
+      "expectations": [
+        "Gives each step a return type that records what it established, such as PricedOrder, and makes charge accept only that type",
+        "Explains that skipping or reordering the pricing step then fails to compile"
+      ]
     }
   ]
 }
