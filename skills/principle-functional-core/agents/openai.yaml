@@ -1,0 +1,3 @@
+interface:
+  display_name: "Functional core"
+  short_description: "Pure decisions in the core, I/O in a thin shell"
