@@ -65,8 +65,10 @@ Paths below are relative to this skill's folder unless they start with `<target>
      ```
 
    - Install HLS: `ghcup install hls latest`.
-   - Vendor the skills this project needs into the repo: run `npx skills add <source> -s <skill>`
-     without `-g` in `<target>`. This writes `.agents/skills/` and `skills-lock.json`.
+   - Vendor the skills this project needs into the repo: in `<target>`, run
+     `npx skills add <source> -s <skill> -a <agents> -y`, without `-g`. `-a` names the harnesses
+     that need links, such as `claude-code`; `-y` skips the prompts an agent cannot answer. This
+     writes `.agents/skills/` and `skills-lock.json`.
    - For a harness that reads neither `AGENTS.md` nor `CLAUDE.md`, add its file as a one-line
      pointer to `AGENTS.md`, never a copy.
 
