@@ -1,5 +1,5 @@
 ---
-name: principle-type-system-discipline
+name: type-design
 description: "Type discipline: make illegal states unrepresentable; parse, don't validate. Use when designing a type or data model, writing or reviewing a function signature, handling external input (JSON, rows, env, args), deciding between null, exceptions and Result, or reaching for a cast, a non-null assertion or `any`."
 ---
 

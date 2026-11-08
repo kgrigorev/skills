@@ -1,5 +1,5 @@
 {
-  "skill_name": "principle-type-system-discipline",
+  "skill_name": "type-design",
   "evals": [
     {
       "prompt": "Add a timestamp to this TypeScript todo type so the UI can show when an item was finished: `type Todo = { id: string; title: string; completed: boolean }`.",
