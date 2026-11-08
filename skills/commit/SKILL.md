@@ -1,5 +1,5 @@
 ---
-name: commit-message
+name: commit
 description: Write a git commit message. Use whenever you commit.
 ---
 
