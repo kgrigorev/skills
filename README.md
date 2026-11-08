@@ -8,7 +8,7 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 | `commit-message` | Writes short conventional commits without attribution. |
 | `pull-request` | Opens small PRs with short bodies from the repo's template, and stacks. |
 | `mise` | Pins tools, env vars and tasks with mise; knows what belongs in mise vs other runners. |
-| `principle-type-system-discipline` | Makes illegal states unrepresentable; parses at boundaries. |
+| `type-design` | Makes illegal states unrepresentable; parses at boundaries. |
 | `audit-code-quality` | Splits a large codebase into batches and audits them in parallel. |
 
 ## Install
