@@ -1,5 +1,5 @@
 ---
-name: principle-test-evidence
+name: test-design
 description: "Test evidence: a test counts once you have seen it fail, and checks outcomes and properties. Use when writing tests, fixing a bug, adding tests to code that already works, choosing between mocks, stubs and fakes, or chasing a coverage target."
 ---
 
