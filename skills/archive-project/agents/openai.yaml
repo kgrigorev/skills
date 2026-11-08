@@ -1,0 +1,3 @@
+interface:
+  display_name: "Archive project"
+  short_description: "Import a finished repo into the archive, then retire it"

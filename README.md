@@ -12,6 +12,7 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 | `functional-core` | Keeps decisions in pure functions and I/O in a thin shell: read, calculate, write. |
 | `test-design` | Tests seen red, properties over generated input, outcomes over calls. |
 | `audit` | Splits a large codebase into batches and audits them in parallel. |
+| `archive-project` | Imports a finished repo into your archive repo, checks the push, then retires the original on your word. |
 
 ## Install
 
