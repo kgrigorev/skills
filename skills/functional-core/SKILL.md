@@ -1,5 +1,5 @@
 ---
-name: principle-functional-core
+name: functional-core
 description: "Functional core, imperative shell: decisions in pure functions, I/O at the edges. Use when writing or reviewing code where business rules meet a database, an HTTP or payment API, email or a queue; when building a handler, service, background job or scheduled task; when logic reads the clock, randomness or config; or when testing a rule needs mocks, fakes or a database."
 ---
 
@@ -7,7 +7,7 @@ description: "Functional core, imperative shell: decisions in pure functions, I/
 
 Split the code in two. The **core** is pure: same input, same output, no effects; every business decision lives there. The **shell** is everything that touches the world (database, network, email, clock, randomness, files, environment); it gathers data, calls the core, and acts on the answer. Impure code may call pure code; pure code calls only pure code. Each rule below ends on its **test**: a question you ask of the code.
 
-Applies in any language. The patterns are the same whether the shell is a controller, a message consumer, a cron job or `main`. For the shape of what the core returns and takes, see `principle-type-system-discipline` (domain-named sums, parameters that ask for exactly what they use).
+Applies in any language. The patterns are the same whether the shell is a controller, a message consumer, a cron job or `main`. For the shape of what the core returns and takes, see `type-design` (domain-named sums, parameters that ask for exactly what they use).
 
 ## Shape
 

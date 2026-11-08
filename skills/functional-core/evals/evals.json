@@ -1,5 +1,5 @@
 {
-  "skill_name": "principle-functional-core",
+  "skill_name": "functional-core",
   "evals": [
     {
       "prompt": "We're a clinic booking app in C# (.NET 8, EF Core). Write a background service that sends a reminder email 24 hours before each appointment. Don't send twice. Include unit tests.",
