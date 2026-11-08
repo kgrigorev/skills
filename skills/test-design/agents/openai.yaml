@@ -1,0 +1,3 @@
+interface:
+  display_name: "Test evidence"
+  short_description: "Tests seen red, properties over generated input, outcomes over calls"
