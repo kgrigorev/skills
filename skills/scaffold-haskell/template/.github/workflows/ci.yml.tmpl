@@ -52,13 +52,28 @@ jobs:
       - if: steps.index.outputs.cache-hit != 'true'
         run: cabal update
 
-      - name: Install Ormolu and HLint
+      # GitHub release downloads sometimes fail with 5xx errors. Cache the tools, so most runs
+      # download nothing, and retry the download on a cache miss.
+      - id: tools
+        uses: actions/cache@v6
+        with:
+          path: ~/tools
+          key: tools-${{ runner.os }}-ormolu-${{ env.ORMOLU_VERSION }}-hlint-${{ env.HLINT_VERSION }}
+
+      - name: Download Ormolu and HLint
+        if: steps.tools.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$HOME/tools"
           cd "$HOME/tools"
-          curl -fsSL -o ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
+          get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$1" "$2"; }
+          get ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
+          get hlint.tar.gz "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz"
           unzip -q ormolu.zip
-          curl -fsSL "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz" | tar xz
+          tar xzf hlint.tar.gz
+          rm ormolu.zip hlint.tar.gz
+
+      - name: Put Ormolu and HLint on the PATH
+        run: |
           echo "$HOME/tools" >> "$GITHUB_PATH"
           echo "$HOME/tools/hlint-$HLINT_VERSION" >> "$GITHUB_PATH"
 
