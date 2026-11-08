@@ -1,0 +1,52 @@
+{
+  "skill_name": "functional-core",
+  "evals": [
+    {
+      "prompt": "We're a clinic booking app in C# (.NET 8, EF Core). Write a background service that sends a reminder email 24 hours before each appointment. Don't send twice. Include unit tests.",
+      "expectations": [
+        "The rule deciding which appointments get a reminder is a pure function over plain values (appointments, the current time), with no DbContext, TimeProvider or email sender among its inputs",
+        "The worker reads appointments, calls that function, then sends and records reminders based on its result",
+        "The unit tests of the reminder rule pass plain values and need no database, fake TimeProvider or fake sender"
+      ]
+    },
+    {
+      "prompt": "Kotlin + Spring Boot. Implement password reset: a user requests a reset, we generate a token valid for 1 hour and email a link; then an endpoint accepts the token and new password. A token can be used once. Write the service and tests.",
+      "expectations": [
+        "The redeem decision (unknown, expired, already used, or valid) is a pure function taking the token record and the current time as values, not a Clock or repository",
+        "The service reads, calls the pure decision, then writes or rejects based on its labelled result",
+        "Tests of the expiry and single-use rules call that function with plain values, without Spring context, H2, a mutable clock or mocks"
+      ]
+    },
+    {
+      "prompt": "Python (Django). Write a nightly job that deactivates accounts with no login in 180 days. 14 days before deactivation, users should get a warning email; on deactivation, a notice email. Admin accounts are never deactivated. Include tests.",
+      "expectations": [
+        "A pure function decides, per account, between warning, deactivating and doing nothing, from plain values (last login, warning sent at, admin flag, now), with no ORM or mail calls inside",
+        "The job reads the accounts first, then performs the writes and emails each decision names, with no business branching between the I/O calls",
+        "The rule tests call the pure function with plain values and need no database, patched send_mail or patched timezone.now"
+      ]
+    },
+    {
+      "prompt": "TypeScript, Express. I'm starting a small order service: an OrderService that needs a Postgres pool, a Stripe payment client and an email sender, plus a route POST /orders that places an order (checks stock, charges the card, emails a receipt). Set up the project structure and the wiring, and show the OrderService and the route.",
+      "expectations": [
+        "The stock check and total calculation are a pure function over the fetched products and requested items, returning labelled outcomes such as accepted with lines and total, out of stock, or unknown product",
+        "OrderService reads, calls the pure function, then charges, writes and emails based on its result",
+        "Adapters are constructed in one composition root at the entry point and passed in"
+      ]
+    },
+    {
+      "prompt": "Rust (axum, sqlx). Write the nightly job that applies late fees to overdue library loans: 0.50 EUR per day overdue, capped at 10 EUR per loan, and emails each borrower one summary of their new fees. Include tests.",
+      "expectations": [
+        "The fee calculation and the per-borrower summary are pure functions over loans and today's date passed as values, with no pool, clock call or mailer inside",
+        "The job reads overdue loans, calls the pure functions, then writes fees and sends emails from their result",
+        "The fee tests call the pure functions with plain values and need no database or mocks"
+      ]
+    },
+    {
+      "prompt": "In our TypeScript backend (Node, node-postgres), write a function that cancels expired reservations. Reservations are in a `reservations` table with columns id, status ('pending' | 'confirmed' | 'cancelled'), expires_at. Pending reservations past their expiry should be cancelled. Include tests.",
+      "expectations": [
+        "Cancels in a way that stays safe under concurrency, such as one conditional UPDATE or locked rows",
+        "Keeps the solution proportionate: no ports, interfaces or decision types beyond what a low-decision bulk update needs"
+      ]
+    }
+  ]
+}
