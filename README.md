@@ -5,13 +5,13 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 | Skill | What it does |
 | --- | --- |
 | `scaffold-haskell` | Creates a Haskell project with agent rules and quality gates. |
-| `commit-message` | Writes short conventional commits without attribution. |
+| `commit` | Writes short conventional commits without attribution. |
 | `pull-request` | Opens small PRs with short bodies from the repo's template, and stacks. |
 | `mise` | Pins tools, env vars and tasks with mise; knows what belongs in mise vs other runners. |
 | `type-design` | Makes illegal states unrepresentable; parses at boundaries. |
 | `functional-core` | Keeps decisions in pure functions and I/O in a thin shell: read, calculate, write. |
 | `test-design` | Tests seen red, properties over generated input, outcomes over calls. |
-| `audit-code-quality` | Splits a large codebase into batches and audits them in parallel. |
+| `audit` | Splits a large codebase into batches and audits them in parallel. |
 
 ## Install
 

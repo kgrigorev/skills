@@ -1,5 +1,5 @@
 ---
-name: audit-code-quality
+name: audit
 description: >-
   Use when asked for a code quality audit, quality pass, or code-smell review
   of a whole project or subproject, especially one too large for a single
@@ -7,7 +7,7 @@ description: >-
   style-guide conformance, and for security review.
 ---
 
-# audit-code-quality
+# audit
 
 ## Overview
 
