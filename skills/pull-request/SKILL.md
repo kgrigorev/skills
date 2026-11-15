@@ -15,23 +15,28 @@ record of why the change exists, and reviewers skim it. Keep it short.
    within the budget.
 2. **Template.** Read the repo's PR template now, even if you read it earlier:
    `.github/pull_request_template.md`, or a file in `.github/PULL_REQUEST_TEMPLATE/`. It is the
-   format. Fill its slots in order and add no sections. Without a template, use:
+   format. Fill its slots in order and add no sections. Without a template, write three short
+   paragraphs of prose:
 
    ```
-   <one sentence: why this change exists>
+   <what the PR does, starting with a verb: "Adds ...", "Makes ...", "Splits ...">
 
-   - <up to 6 one-line points the diff does not make obvious>
-   - Test: <the test that was red before and is green now>
-   - Risk: <easy to undo or not, and what it can break>
-   - Not verified: <what you did not check; delete the line when you checked everything>
+   <why it should exist: the problem it solves or the value it adds>
+
+   <what a reviewer needs beyond the diff: how you checked it, a risk that is not obvious,
+   anything you did not verify>
    ```
 
 3. **Title.** Follow the repo's convention: `AGENTS.md`, a CI title check, or else
    `git log --format=%s -20`. Default: `type(scope): what changed`, at most 72 characters.
-4. **Body.** A slot holds one line, unless the template gives it its own limit, such as a sketch
-   of at most 10 lines. Leave out what the diff shows: file lists, code, renames. Then reread it
-   and delete every line a reviewer would not miss. Done when each slot is within its limit and
-   the body fits one screen.
+4. **Body.** Write for a human who reads it once. Each paragraph is one or two plain sentences,
+   and a template slot holds one line unless the template gives it its own limit, such as a
+   sketch of at most 10 lines. State the reason in general terms, as it will still read after
+   the merge, rather than the story of how the need came up. Leave out what the diff and the
+   repo's files already show: file lists, code, renames, lists of details. Use a bullet list
+   only for a real list of parallel items. Then reread it and delete every sentence a reviewer
+   would not miss. Done when the body is about 60 to 100 words and each slot is within its
+   limit.
 5. **Create.** `gh pr create --assignee @me --title "<title>" --body-file -` with the body on
    stdin. No tool or AI attribution. Report the URL.
 

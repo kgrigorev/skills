@@ -24,7 +24,7 @@ harnesses block force-push; then report the commands and let the owner run them.
 PRs as drafts. Pass `--open` to make new and existing PRs ready for review. Either way, fix each
 generated title and body with `gh pr edit`.
 
-Each body names the PR below it in one point: `Depends on #<number>.` When the bottom PR merges
+Each body names the PR below it in one sentence: `Depends on #<number>.` When the bottom PR merges
 and its branch is deleted, GitHub moves the next PR's base to `main`.
 
 ## Review a stack
