@@ -24,8 +24,27 @@ harnesses block force-push; then report the commands and let the owner run them.
 PRs as drafts. Pass `--open` to make new and existing PRs ready for review. Either way, fix each
 generated title and body with `gh pr edit`.
 
-Each body names the PR below it in one sentence: `Depends on #<number>.` When the bottom PR merges
-and its branch is deleted, GitHub moves the next PR's base to `main`.
+Each body names the PR below it in one line: in the format the repo's PR doc sets, else
+`Depends on #<number>.`
+
+## Merge a stack
+
+Merge bottom-up with a merge commit, one PR at a time. The PR above already holds the lower
+commits, so once they land on `main` its diff shrinks to its own commits with no rewrite. A
+squash leaves GitHub to rebase the PR above, which can conflict. When the bottom PR merges and
+its branch is deleted, GitHub moves the next PR's base to `main`.
+
+`gh pr merge <number> --merge` merges one layer. When GitHub refuses it (403 for a PR in a
+GitHub-managed stack), use the async endpoint with the PR's head commit
+(`gh pr view <number> --json headRefOid`):
+
+```sh
+gh api -X PUT repos/<owner>/<repo>/pulls/<number>/merge-async \
+  -f merge_method=merge -f merge_action=direct_merge -f sha=<head>
+```
+
+Done when `gh pr view <number> --json state` says `MERGED`; the response's status is `pending`,
+`merged`, `enqueued` or `failed`.
 
 ## Review a stack
 
