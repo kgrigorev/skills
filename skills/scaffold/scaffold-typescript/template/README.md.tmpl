@@ -1,0 +1,42 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh), then run in the repository:
+
+```sh
+brew install mise gh
+mise install                           # node and pnpm from mise.toml
+mise exec -- pnpm install              # dependencies from pnpm-lock.yaml
+git config core.hooksPath .githooks
+gh extension install github/gh-stack   # optional: stacked PRs
+```
+
+mise installs the exact Node and pnpm in `mise.toml` and checks them against `mise.lock`. Add
+`eval "$(mise activate zsh)"` to `~/.zshrc` to put them on `PATH` in every shell; otherwise
+prefix commands with `mise exec --`. pnpm refuses to run with any other Node or pnpm version
+(`devEngines` in `package.json`). The git hook runs the checks before each push. `gh stack` is
+optional: it helps to open and update stacked PRs.
+
+Editor: TypeScript 7 ships its language server in `tsc`. Run it as
+`node_modules/.bin/tsc --lsp --stdio`; in VS Code, install the `TypeScriptTeam.native-preview`
+extension. The oxc extension, or `oxlint --lsp` and `oxfmt --lsp`, shows lint and format results.
+
+## Commands
+
+```sh
+scripts/check                 # every quality gate: lockfile, format, lint, types, unused code, tests
+pnpm start Ada                # run the program (Node runs the .ts files directly)
+pnpm test                     # tests only
+pnpm exec vitest run -t "greets the world"   # one test by name
+pnpm fmt                      # format
+pnpm lint --fix               # fix what lint can fix
+pnpm typecheck                # type check only
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too. CI also runs
+pnpm's supply-chain policy for the lockfile (job `lockfile-policy`), which needs the registry.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

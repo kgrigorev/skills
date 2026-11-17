@@ -1,0 +1,13 @@
+# pnpm settings for this project (pnpm 11+ reads them here, not from .npmrc).
+# Agents: change this file only with the owner's approval.
+
+# `pnpm add` writes exact versions, so every upgrade is a visible diff.
+saveExact: true
+# Fail the install when a package does not support the pinned Node version.
+engineStrict: true
+# No dependency may run install scripts. Add a package by name only with the owner's approval.
+allowBuilds: {}
+# pnpm 11+ defaults kept on purpose: minimumReleaseAge 1 day, blockExoticSubdeps, strictDepBuilds.
+# `pnpm exec` and `pnpm run` fail when node_modules does not match the lockfile, instead of
+# installing (pnpm's default here is to install, which rewrites pnpm-lock.yaml mid-check).
+verifyDepsBeforeRun: error

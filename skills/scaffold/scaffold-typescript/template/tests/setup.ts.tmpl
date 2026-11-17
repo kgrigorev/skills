@@ -1,0 +1,6 @@
+// Fixes the fast-check seed, so a property test gives the same result on every run and machine.
+// To explore new inputs, change the seed in its own commit. A failure prints the seed and the
+// path that reproduce it. Agents: change this file only with the owner's approval.
+import * as fc from "fast-check";
+
+fc.configureGlobal({ seed: 1, numRuns: 200 });

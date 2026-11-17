@@ -1,0 +1,129 @@
+name: scaffold-typescript
+
+# Renders the scaffold-typescript template into a sample project and runs the project's
+# scripts/check. A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-typescript/**
+      - .github/workflows/scaffold-typescript.yml
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-typescript/**
+      - .github/workflows/scaffold-typescript.yml
+  # The template pins exact versions, but the registry and the mise downloads can change under
+  # it. A weekly run catches that.
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The scaffold writes the mise version it runs with into the project's ci.yml. Keep this equal
+  # to the version you scaffold with, so CI tests the project you would get.
+  MISE_VERSION: "2026.11.8"
+  ACTIONLINT_VERSION: "1.7.12"
+  # From actionlint_<version>_checksums.txt on the release page. Change both together.
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
+jobs:
+  scaffold-typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only mise itself: the scaffold installs node and pnpm from the template's mise.toml.
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold/scaffold-typescript/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to TypeScript"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # ci.yml.tmpl would give every new project a red CI.
+      - name: Lint the sample project's CI workflows
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Each planted defect must turn scripts/check red at its own gate. A gate that stays green
+      # has stopped working, for example after a tool upgrade changed a default.
+      - name: Planted defects fail the checks
+        working-directory: ${{ runner.temp }}/sample-tool
+        # As in the project's ci.yml: mise reads the planted mise.local.toml instead of refusing it.
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ runner.temp }}/sample-tool
+        run: |
+          git add -A
+          log=$RUNNER_TEMP/defect.log
+          # Usage: red <description> <gate heading that must be the last one printed>
+          red() {
+            if scripts/check >"$log" 2>&1; then
+              echo "Still green with a planted defect: $1" >&2
+              exit 1
+            fi
+            if [ "$(grep '^==> ' "$log" | tail -n 1)" != "==> $2" ]; then
+              cat "$log" >&2
+              echo "Red at the wrong gate for: $1" >&2
+              exit 1
+            fi
+            echo "Red as expected: $1"
+            git checkout --quiet -- .
+            git clean --quiet -fd
+          }
+          edit() { perl -pi -e "$1" "$2"; }
+          edit 's/"knip": "[0-9.]+"/"knip": "6.45.0"/' package.json
+          red 'package.json changed without pnpm-lock.yaml' 'Dependencies match pnpm-lock.yaml'
+          echo 'export const helper = 1;' >src/helper.mts
+          red 'a .mts file' 'Only .ts sources, and only the gate configs'
+          edit 's/"private": true,/"private": true,\n  "knip": { "ignore": ["src\/**"] },/' package.json
+          red 'knip settings in package.json' 'Only .ts sources, and only the gate configs'
+          printf '[env]\nNODE_OPTIONS = "--no-warnings"\n' >mise.local.toml
+          red 'mise.local.toml' 'Only mise.toml sets the tools'
+          mkdir dist
+          printf 'export const helper = 1;\n' >dist/helper.ts
+          git add -f dist/helper.ts
+          red 'a committed file under an ignored folder' 'Only .ts sources, and only the gate configs'
+          git rm --quiet --cached dist/helper.ts
+          rm -r dist
+          edit 's/=== ""/==""/' src/sample-tool.ts
+          red 'formatting' 'Format (oxfmt). Fix: pnpm fmt'
+          printf 'export function loose(x: any): any {\n  return x;\n}\n' >>src/sample-tool.ts
+          red 'any' 'Lint (oxlint with type information, rules in .oxlintrc.json)'
+          printf 'export function loose(x: any): any {\n  return x;\n}\n' >>src/sample-tool.ts
+          echo src/sample-tool.ts >.eslintignore
+          red 'any hidden by .eslintignore' 'Lint (oxlint with type information, rules in .oxlintrc.json)'
+          edit 's/it\("greets the world/it.skip("greets the world/' tests/sample-tool.test.ts
+          red 'skipped test' 'Lint (oxlint with type information, rules in .oxlintrc.json)'
+          printf 'export function safe(text: string): void {\n  try {\n    JSON.parse(text);\n  } catch {}\n}\n' >>src/sample-tool.ts
+          red 'empty catch' 'Lint (oxlint with type information, rules in .oxlintrc.json)'
+          printf '// oxlint-disable-next-line no-debugger\ndebugger;\n' >>src/main.ts
+          red 'suppression comment' 'No switched-off checks'
+          printf '// oxlint-disable-next-line no-debugger\ndebugger;\n' >>src/main.ts
+          printf 'export const spaced = 1;\n' >'src/a name with spaces.ts'
+          red 'suppression comment next to a file name with spaces' 'No switched-off checks'
+          edit 's/^(?=  return )/  const unused = 1;\n/' src/sample-tool.ts
+          red 'unused local (a compiler warning)' 'Type check (tsc, settings in tsconfig.json)'
+          printf '\nexport function shout(text: string): string {\n  return text.toUpperCase();\n}\n' >>src/sample-tool.ts
+          red 'unused export' 'Unused files, exports and dependencies (knip)'
+          edit 's/Hello, world!/Hello!/' tests/sample-tool.test.ts
+          red 'failing test' 'Test (vitest)'

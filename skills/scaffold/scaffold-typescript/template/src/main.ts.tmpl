@@ -1,0 +1,6 @@
+// The {{package}} program. It only reads the command line and prints; the work happens in the library.
+import { argv } from "node:process";
+import { banner, greet } from "./{{package}}.ts";
+
+console.log(banner);
+console.log(greet(argv[2] ?? ""));

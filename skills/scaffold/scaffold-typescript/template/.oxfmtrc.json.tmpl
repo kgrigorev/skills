@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  // Formatter: oxfmt defaults, which match Prettier's (80 columns, double quotes, semicolons).
+  // pnpm writes these files in its own style; formatting them would fail the check after every `pnpm add`.
+  // Agents: change this file only with the owner's approval.
+  "ignorePatterns": ["pnpm-lock.yaml", "pnpm-workspace.yaml"]
+}

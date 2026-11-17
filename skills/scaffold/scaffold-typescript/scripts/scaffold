@@ -1,0 +1,57 @@
+#!/bin/sh
+# Renders the TypeScript project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  the npm package name, lower case, words joined by "-", for example "my-tool".
+#             It also names the library file, src/my-tool.ts.
+#   synopsis: one line for package.json, for example "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to TypeScript". AGENTS.md and CODING_STANDARDS.md use it.
+#
+# The script never overwrites a file. It installs node and pnpm with mise, writes mise.lock and
+# pnpm-lock.yaml, formats the files, runs `git init` when needed and points git at the project's
+# hooks. It needs the network. It does not commit.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+template=$(cd "$(dirname "$0")/../template" && pwd)
+# shellcheck source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+check_inputs "$2" "$3" "$4"
+require_tools mise git
+require_hidden "$template"
+
+# CI installs the same mise version as this machine.
+mise_version=$(mise --version | awk '{ print $1 }')
+
+set_var package "$2"
+set_var synopsis "$3"
+set_var reader "$4"
+set_var mise_version "$mise_version"
+render_template "$template" "$target"
+
+cd "$target"
+# Before the install: the placeholder search must not walk node_modules.
+finish_project
+
+# mise.toml names node and pnpm. mise.lock records their URLs and checksums for every platform.
+mise install --quiet
+mise lock --quiet
+# Resolves the exact devDependencies in package.json and writes pnpm-lock.yaml.
+mise exec -- pnpm install --silent
+# Sorts package.json the way oxfmt and `pnpm add` keep it.
+mise exec -- pnpm exec oxfmt >/dev/null
+
+printf 'Created %s in %s\n' "$2" "$(pwd)"
+printf 'node %s, pnpm %s, mise %s\n' "$(mise exec -- node --version)" \
+  "$(mise exec -- pnpm --version)" "$mise_version"
+mise exec -- node -e '
+  const deps = JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).devDependencies;
+  console.log(Object.entries(deps).map(([name, version]) => name + " " + version).join(", "));
+'
+list_files
+printf 'mise.lock\npnpm-lock.yaml\n'

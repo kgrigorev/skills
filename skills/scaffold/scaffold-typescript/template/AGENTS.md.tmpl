@@ -1,0 +1,102 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: the lockfile, a file-type check, oxfmt, oxlint with type
+information, a search for switched-off checks, the type check, knip for unused code, and the
+vitest tests. The git hook and CI run it too.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.claude/`, `tsconfig.json`, `.oxlintrc.json`,
+  `.oxfmtrc.json`, `knip.jsonc`, `vitest.config.ts`, `tests/setup.ts`, `pnpm-workspace.yaml`,
+  `mise.toml`, `mise.lock`, `.gitignore`, `.gitattributes`, `devEngines` and `scripts` in
+  `package.json`, and existing tests.
+
+`scripts/check` starts itself through `mise exec`, so it works in a shell without mise. Other
+commands need the same prefix:
+
+```sh
+mise exec -- pnpm exec vitest run -t "greets the world"         # one test by name
+mise exec -- pnpm exec vitest run tests/{{package}}.test.ts     # one test file
+mise exec -- pnpm fmt                                           # format
+mise exec -- pnpm lint --fix                                    # fix what lint can fix
+mise exec -- pnpm typecheck                                     # type check only
+```
+
+After a branch switch or a change to `package.json`, `pnpm exec` stops with "Run pnpm install".
+Run `mise exec -- pnpm install` then. Use pnpm only: npm refuses to run here.
+
+Sandboxed agents: pnpm writes to its store and cache (`~/Library/pnpm`, `~/Library/Caches/pnpm`
+on macOS; `~/.local/share/pnpm`, `~/.cache/pnpm` on Linux), and mise to `~/.local/share/mise`.
+`pnpm install`, `pnpm add` and `gh` need the network. Without these, `scripts/check` fails for
+reasons outside the code.
+
+Language server: `node_modules/.bin/tsc --lsp --stdio` (TypeScript 7). The older
+`typescript-language-server` needs `tsserver`, which TypeScript 7 does not ship.
+
+## TypeScript
+
+Read `CODING_STANDARDS.md` before writing or reviewing TypeScript.
+
+The checks enforce these rules:
+
+- Source files are `.ts` only: no `.js`, `.mts`, `.cts`, `.tsx`, and no hand-written `.d.ts`.
+  No committed file under an ignored path such as `dist/`.
+- Only `mise.toml` configures mise: no `mise.local.toml`, `.tool-versions` or `.config/mise/`.
+- Relative imports name the `.ts` file (`./parse.ts`). Built-in modules use `node:` (`node:fs`).
+- Only TypeScript that Node can strip: no `enum`, `namespace` or constructor parameter
+  properties. Use a union of string literals and plain fields.
+- No `any`, no `!`, no `as` that narrows a type. Data from outside is `unknown` until a type
+  guard checks it.
+- A `switch` on a union handles every member. Compare with `=== undefined` or `=== ""`
+  instead of relying on truthiness.
+- Tests use fixed inputs: no clock, no `Math.random` or `crypto` random values, no fast-check
+  seed or `numRuns` other than in `tests/setup.ts`. No skipped, conditional, expected-to-fail
+  or retried tests. A missing snapshot fails; write it on purpose with `vitest run -u`.
+- No empty block, such as `catch {}`.
+- No comment that switches off a check (`oxlint-disable`, `@ts-expect-error`,
+  `prettier-ignore` and the like).
+
+## Layout
+
+- Logic goes in the library under `src/`. `src/main.ts` only reads the command line, calls it
+  and prints.
+- `tests/` holds the vitest suite. Every `tests/**/*.test.ts` file runs.
+- knip fails on an unused file, export or dependency. A new program needs a script in
+  `package.json`, so knip sees it as an entry point.
+- Node and pnpm versions live in `mise.toml` and in `devEngines` in `package.json`. Change
+  both together.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```
