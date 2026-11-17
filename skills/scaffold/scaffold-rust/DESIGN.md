@@ -112,14 +112,18 @@ Every other gate states its reason in a comment in its own file.
 - The suppression search reads each `.rs` file whole, so an attribute that rustfmt splits over
   lines matches too. It rejects any attribute that holds a `$`: a `macro_rules!` could build
   `#[allow]` from an `allow` token at the call site. This also rejects the common
-  `$(#[$meta])*` pattern; macros need the owner's approval anyway. `unsafe_code = "forbid"`
+  `$(#[$meta])*` pattern; macros need the owner's approval anyway. Lines that hold only a plain
+  `//` comment are dropped first, so a comment can say "no `#[allow]` here" without failing the
+  check. Doc comments stay, since they hold the doc examples, and so do strings and comments at
+  the end of a line: a string such as `"#[allow(x)]"` still fails, which is rare in real code. `unsafe_code = "forbid"`
   holds regardless. Deleting a line from `[lints]` is a gate-file change that review catches.
 - Doc examples marked `ignore`, `no_run` or `should_panic` are rejected: each lets a wrong
   assertion pass. `compile_fail` stays allowed, because it shows what the types forbid. The
   match takes any rustdoc separator, so `rust ignore` is caught too.
 - proptest settings in the code (`proptest_config`, `ProptestConfig`, `TestRunner`) are
   rejected: `with_cases(0)` passed a wrong property, and a fixed case count overrides the
-  weekly job's `PROPTEST_CASES`.
+  weekly job's `PROPTEST_CASES`. `test_runner::TestCaseError` and `TestCaseResult` are allowed:
+  a property helper returns them, and they set nothing.
 - A thrown-away Result: `let _ =` is a lint, `.ok();` is the `unused_result_ok` lint, and
   `_ = f();` is rejected by the search. `drop(f())`, `if let Ok(_)` and other forms pass;
   review catches them.
@@ -150,6 +154,10 @@ Every other gate states its reason in a comment in its own file.
 - CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-rust.yml`, weekly too,
   so a new Clippy lint that fires on the stub shows up there first. It pins the tool versions at
   the top of that file. When you scaffold with newer tools, bump them there to match.
+- `tests/scaffold/rust/` holds attacks on the gates: bad changes that must fail at a named step,
+  and good code an agent would write that must pass. `scripts/test-scaffold rust` replays them
+  on a fresh render, and the same workflow runs it on its sample project. When a gate changes,
+  add the attack that it closes, and a green case for any code it must still accept.
 - Project-specific material (domain terms, reference documents) stays out of the template.
 - The template works with any set of agent skills. It names no skill and holds no convention that
   comes from one, such as a glossary file or a folder of decision records. A project adds those

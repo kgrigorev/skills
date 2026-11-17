@@ -13,6 +13,9 @@ if [ -z "${CHECK_UNDER_MISE:-}" ]; then
     exit 1
   fi
   unset MISE_ENV
+  # A step header like the ones below, so a failure here, or in the Rust version check after
+  # `mise exec`, names its step too.
+  printf '==> %s\n' 'Tools (mise reads only mise.toml and rust-toolchain.toml)'
   # mise also reads .mise.toml, .config/mise.toml, .tool-versions and other files. One of them
   # can set variables or put a fake cargo-clippy first on PATH, so only mise.toml and
   # rust-toolchain.toml may configure mise in this project. Checked before mise runs any tool.
@@ -187,13 +190,16 @@ while [ "$dir" != / ]; do
 done
 
 step 'No switched-off checks in the code'
-# Each file is read whole, so an attribute split over lines matches too.
+# Each file is read whole, so an attribute split over lines matches too. Lines holding only a
+# plain // comment are dropped first, so a comment may name what it warns against. Doc comments
+# stay: they hold the doc examples.
 # - #[allow] and #[expect], also inside #[cfg_attr]: they switch a lint off.
 # - An attribute that a macro builds from its input, such as #[$level(...)].
 # - #[rustfmt::skip], and doc examples marked ignore, no_run or should_panic.
 # - #[path] and include!, which pull in code from outside the scanned .rs files.
 # - #[doc(hidden)], which hides a public item from the missing_docs lint.
 # - proptest settings in the code, such as with_cases(0). The weekly job sets the cases.
+#   A helper may still return proptest::test_runner::TestCaseError.
 # - `_ = f();`, which throws away a Result.
 rust_off=$(cat <<'EOF'
 \#\s*!?\s*\[\s*(?:cfg_attr\b[^\]]*?\b)?(?:r\#)?(?:allow|expect)\s*\(
@@ -203,7 +209,8 @@ rust_off=$(cat <<'EOF'
 |\#\s*!?\s*\[\s*path\s*=
 |\binclude\s*!
 |\bdoc\s*\(\s*hidden\b
-|\b(?:proptest_config|ProptestConfig|TestRunner|test_runner)\b
+|\b(?:proptest_config|ProptestConfig|TestRunner)\b
+|\btest_runner\b(?!\s*::\s*TestCase(?:Error|Result)\b)
 |^[ \t]*_\s*=(?![=>])
 EOF
 )
@@ -213,6 +220,7 @@ find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -prin
     chomp; $file = $_;
     open my $in, "<", $file or die "$file: $!\n";
     local $/; $text = <$in>;
+    $text =~ s{^[ \t]*//(?![/!])[^\n]*}{}mg;
     while ($text =~ /$re/mg) {
       $line = 1 + (substr($text, 0, $-[0]) =~ tr/\n//);
       ($hit) = substr($text, $-[0]) =~ /^([^\n]*)/;
