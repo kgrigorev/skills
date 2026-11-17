@@ -60,8 +60,16 @@ holds the old lower commits, so its diff against `main` shows them again. Rebase
 merges: `git rebase --onto origin/main <old lower branch> <branch>`. Then push as in "Build a
 stack".
 
-Done when `gh pr view <number> --json state` says `MERGED` for each PR. For any refusal (failing
-checks, a missing review, a ruleset), report GitHub's message. Do not retry through another
+On a branch with a merge queue (`gh api repos/{owner}/{repo}/rules/branches/main` lists a
+`merge_queue` rule), the queue sets the method and the merge commit's message; follow the
+merge-commit or squash steps by its `merge_method`. `gh pr merge` only adds the PR to the queue,
+and fails when the repo does not allow auto-merge; then add it with
+`gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async`. Either way the merge lands later:
+wait until the PR says `MERGED` before you move the next PR and delete the branch. Deleting a
+PR's branch before it merges closes the PR.
+
+Done when `gh pr view <number> --json state` says `MERGED` for each PR. For any other refusal
+(failing checks, a missing review, a ruleset), report GitHub's message. Do not retry through another
 endpoint.
 
 ## Review a stack
