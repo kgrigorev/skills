@@ -1,0 +1,13 @@
+#include "{{namespace}}.hpp"
+
+#include <format>
+#include <string>
+#include <string_view>
+
+namespace {{namespace}} {
+
+std::string_view banner() { return "{{package}}: {{synopsis}}"; }
+
+std::string greet(std::string_view name) { return std::format("Hello, {}!", name); }
+
+} // namespace {{namespace}}

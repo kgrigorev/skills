@@ -1,0 +1,76 @@
+#!/bin/sh
+# Renders the C++ project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  the program name, lower case, words joined by "-", for example "my-tool". The C++
+#             namespace, file stem and CMake project use it with "_": "my_tool".
+#   synopsis: one line for README.md, AGENTS.md and the banner, for example
+#             "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to C++". AGENTS.md and CODING_STANDARDS.md use it.
+# Needs mise and git on PATH, and the network: mise resolves the tools and writes mise.lock, and
+# the first format installs the pinned clang-format.
+#
+# The script never overwrites a file. It runs `git init` when needed, points git at the project's
+# hooks, writes mise.lock and formats the C++ files. It does not commit.
+set -eu
+
+# shellcheck source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+
+# The pinned tools. A version is pinned once it is the latest stable release and at least two
+# days old. clang, clang-tidy and clang-format come from one LLVM release on conda-forge.
+# Bump them together with .github/workflows/scaffold-cpp.yml in kgrigorev/skills.
+cmake_version=4.5.0
+ninja_version=1.13.2
+llvm_version=23.1.5
+mise_version=2026.11.8
+# mise.lock covers these platforms, so CI and every developer machine install the same files.
+platforms='macos-arm64 linux-x64 linux-arm64'
+
+require_hidden "$template"
+check_inputs "$package" "$synopsis" "$reader"
+require_tools mise git
+
+# my-tool -> my_tool
+namespace=$(printf '%s' "$package" | tr - _)
+
+set_var package "$package"
+set_var namespace "$namespace"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+set_var cmake_version "$cmake_version"
+set_var ninja_version "$ninja_version"
+set_var llvm_version "$llvm_version"
+set_var mise_version "$mise_version"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# mise reads only config files that the user trusts. The script just wrote this one, so it
+# trusts it for its own mise calls only. scripts/check does the same.
+MISE_TRUSTED_CONFIG_PATHS=$(pwd -P)
+export MISE_TRUSTED_CONFIG_PATHS
+mise lock --quiet --platform "$(printf '%s' "$platforms" | tr ' ' ,)"
+for platform in $platforms; do
+  grep -q "platforms\.$platform" mise.lock || fail "mise.lock has no entry for $platform."
+done
+
+# A long namespace can push a line past the column limit.
+scripts/format
+
+printf 'Created %s (namespace %s) in %s\n' "$package" "$namespace" "$(pwd)"
+printf 'clang %s (conda-forge), CMake %s, Ninja %s, mise %s or newer; mise.lock: %s\n' \
+  "$llvm_version" "$cmake_version" "$ninja_version" "$mise_version" "$platforms"
+list_files
+echo mise.lock

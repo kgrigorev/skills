@@ -1,0 +1,43 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh), then run in the repository:
+
+```sh
+brew bundle
+mise install                          # tools from mise.toml and mise.lock, about 1.2 GB once
+git config core.hooksPath .githooks
+scripts/check
+gh extension install github/gh-stack  # optional: stacked PRs
+```
+
+Homebrew installs mise and the GitHub CLI. mise installs every build tool at the version in
+`mise.toml`: clang {{llvm_version}} with clang-tidy, clangd and clang-format, CMake {{cmake_version}} and
+Ninja {{ninja_version}}. `mise.lock` pins each download by checksum. Use mise {{mise_version}} or newer.
+`mise install` asks you to trust `mise.toml` once. `scripts/check` starts itself inside
+`mise exec`, so it works in any shell. The git hook runs the checks before each push.
+
+Linux works the same way without Homebrew: install mise and the GitHub CLI, then run the same
+commands.
+
+Editor: point clangd at the pinned one (`mise which clangd`), not Xcode's. `.clangd` points it at
+the compile commands that `scripts/check` writes to `build/dev/`.
+
+## Commands
+
+```sh
+scripts/check                                      # every quality gate: format, lint, build, test
+scripts/format                                     # format the C++ files
+mise exec --locked -- cmake --build --preset dev   # build
+mise exec --locked -- ctest --preset dev           # run the tests
+build/dev/{{package}}                              # run the program
+```
+
+The `dev` preset builds with sanitizers for checking, not for release.
+
+`scripts/check` is the single list of gates. The git hook and CI run it too.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

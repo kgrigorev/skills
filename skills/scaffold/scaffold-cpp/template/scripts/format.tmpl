@@ -1,0 +1,9 @@
+#!/bin/sh
+# Formats the project's C++ files with the pinned clang-format.
+set -eu
+cd "$(dirname "$0")/.."
+# mise runs only config files that the user trusts. Running this script already trusts the code
+# in this folder, so it trusts the folder's mise.toml too, for this run only.
+git ls-files --cached --others --exclude-standard -- '*.cpp' '*.hpp' |
+  while read -r file; do if [ -e "$file" ]; then printf '%s\n' "$file"; fi; done |
+  MISE_TRUSTED_CONFIG_PATHS=$(pwd -P) xargs -r mise exec --locked -- clang-format -i

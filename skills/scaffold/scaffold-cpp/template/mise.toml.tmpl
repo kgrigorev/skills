@@ -1,0 +1,16 @@
+# Pins every tool scripts/check runs. CI installs the same versions from this file and mise.lock.
+# Agents: change it only with the owner's approval.
+# The compiler, clang-tidy, clangd and clang-format come from one LLVM release, so they agree on
+# warnings, headers and formatting. conda-forge builds that release with its own C++ standard
+# library for macOS and Linux, and mise.lock pins every package by checksum.
+# clang-tools does not put clang-format on PATH, so clang-format has its own entry.
+[tools]
+cmake = "{{cmake_version}}"
+ninja = "{{ninja_version}}"
+"conda:clangxx" = "{{llvm_version}}"
+"conda:clang-tools" = "{{llvm_version}}"
+"conda:clang-format" = "{{llvm_version}}"
+
+[settings]
+# mise.lock records the URL and checksum of every tool and package, per platform.
+lockfile = true

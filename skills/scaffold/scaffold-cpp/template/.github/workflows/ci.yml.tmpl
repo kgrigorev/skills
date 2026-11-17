@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # A pinned image label, not ubuntu-latest: the image still gives the kernel and the loader
+    # that the sanitizers use, so an image change should be a visible diff.
+    # macOS builds with libc++ and Linux with libstdc++. The git hook and the Stop hook run the
+    # check on the owner's Mac, so CI covers Linux.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # The project's mise.toml is trusted: it is the file under review.
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs exactly the tools in mise.toml, checked against mise.lock (the action adds
+      # --locked when a lockfile exists), and caches them by the hash of both files.
+      - uses: jdx/mise-action@v5
+        with:
+          version: {{mise_version}}
+
+      # FetchContent downloads and the compiled GoogleTest and rapidcheck. Ninja rebuilds what
+      # changed: checkout gives every source file a new time stamp.
+      - uses: actions/cache@v6
+        with:
+          path: build/dev
+          key: build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'CMakeLists.txt', 'CMakePresets.json', 'cmake/**') }}
+          restore-keys: build-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: scripts/check

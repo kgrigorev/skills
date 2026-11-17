@@ -1,0 +1,46 @@
+# scripts/check runs clang-tidy on every source file. Any finding fails the check.
+# Agents: change this file only with the owner's approval.
+#
+# Off, and why:
+# - modernize-use-trailing-return-type: style only; `auto f() -> int` everywhere hurts reading.
+# - readability-identifier-length, readability-magic-numbers, cppcoreguidelines-avoid-magic-numbers:
+#   flag `i`, `x` and every literal in tests; reviewers judge names and constants better.
+# - bugprone-easily-swappable-parameters: fires on most two-argument functions. CODING_STANDARDS.md
+#   asks for distinct types instead.
+# - cppcoreguidelines-owning-memory, cppcoreguidelines-pro-bounds-constant-array-index: need the
+#   GSL library, which the project does not use.
+# - cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: flags every `v[i]`. The test
+#   build turns on the hardened standard library, which stops an out-of-range `[]` at run time.
+# - portability-avoid-pragma-once: every supported compiler has `#pragma once`; guards add noise.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -portability-avoid-pragma-once
+WarningsAsErrors: '*'
+# Every header the project's files include, except the test libraries under _deps/. scripts/check
+# makes sure each .hpp is included and no flag marks a project folder as system headers.
+HeaderFilterRegex: '.*'
+ExcludeHeaderFilterRegex: '/_deps/'
+SystemHeaders: false
+FormatStyle: file
+CheckOptions:
+  readability-function-cognitive-complexity.IgnoreMacros: true
+  # By default an empty catch passes when its comment says @TODO or @FIXME.
+  bugprone-empty-catch.IgnoreCatchWithKeywords: ''

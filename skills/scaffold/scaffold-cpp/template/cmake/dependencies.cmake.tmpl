@@ -1,0 +1,20 @@
+# Test libraries, fetched by exact URL and SHA-256, so every machine builds the same code.
+# A new dependency needs the owner's approval.
+include_guard(GLOBAL)
+include(FetchContent)
+
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(googletest
+  URL https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz
+  URL_HASH SHA256=6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5
+  DOWNLOAD_NO_PROGRESS TRUE SYSTEM EXCLUDE_FROM_ALL)
+
+# rapidcheck has no releases. The pin is a commit on its default branch.
+set(RC_ENABLE_GTEST ON CACHE BOOL "" FORCE)
+FetchContent_Declare(rapidcheck
+  URL https://github.com/emil-e/rapidcheck/archive/2c3c4365aca21ef4e612768fdc95b1ce8b39a651.tar.gz
+  URL_HASH SHA256=d7c87d2a728b9cd7adec09aed44f34938cd1b0928b373f9b490c5b2f6d5ab9dc
+  DOWNLOAD_NO_PROGRESS TRUE SYSTEM EXCLUDE_FROM_ALL)
+
+FetchContent_MakeAvailable(googletest rapidcheck)

@@ -1,0 +1,15 @@
+// The {{package}} library. All the logic lives here, so tests can reach it.
+#pragma once
+
+#include <string>
+#include <string_view>
+
+namespace {{namespace}} {
+
+// The line the program prints when it starts.
+[[nodiscard]] std::string_view banner();
+
+// Greets someone by name: "Hello, Ada!".
+[[nodiscard]] std::string greet(std::string_view name);
+
+} // namespace {{namespace}}

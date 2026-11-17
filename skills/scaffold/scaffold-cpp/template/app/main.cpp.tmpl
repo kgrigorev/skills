@@ -1,0 +1,18 @@
+// The {{package}} executable. Keep it thin: the work happens in the library.
+#include "{{namespace}}.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <print>
+
+int main() {
+  try {
+    std::println("{}", {{namespace}}::banner());
+    return EXIT_SUCCESS;
+  } catch (const std::exception &error) {
+    // An escaped exception would end the program without a message.
+    static_cast<void>(std::fputs(error.what(), stderr));
+    return EXIT_FAILURE;
+  }
+}

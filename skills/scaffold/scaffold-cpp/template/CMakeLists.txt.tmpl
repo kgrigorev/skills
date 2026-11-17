@@ -1,0 +1,29 @@
+# Agents: change the C++ standard and the include order below only with the owner's approval.
+cmake_minimum_required(VERSION 4.0)
+project({{namespace}} VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+# The project uses headers, not C++ modules. Without this, CMake scans for modules and tries to
+# build `import std`, which needs a tool the toolchain does not ship.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
+# Dependencies first, with their own flags; then the strict flags for everything below.
+include(cmake/dependencies.cmake)
+include(cmake/strict.cmake)
+
+# The logic. The executable and the tests link it.
+add_library({{namespace}}_lib src/{{namespace}}.cpp)
+target_include_directories({{namespace}}_lib PUBLIC src)
+
+add_executable({{package}} app/main.cpp)
+target_link_libraries({{package}} PRIVATE {{namespace}}_lib)
+
+enable_testing()
+include(GoogleTest)
+add_executable({{namespace}}_test tests/{{namespace}}_test.cpp)
+target_link_libraries({{namespace}}_test PRIVATE {{namespace}}_lib GTest::gtest_main rapidcheck_gtest)
+# PRE_TEST lists the tests when ctest runs, not at build time, so a sanitizer build never runs
+# test code during the build.
+gtest_discover_tests({{namespace}}_test DISCOVERY_MODE PRE_TEST)

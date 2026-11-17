@@ -1,0 +1,19 @@
+// Tests for the {{package}} library.
+#include "{{namespace}}.hpp"
+
+#include <gtest/gtest.h>
+#include <rapidcheck/Assertions.h>
+#include <rapidcheck/gtest.h>
+
+#include <string>
+
+namespace {
+
+TEST(Banner, NamesTheProgram) { EXPECT_TRUE({{namespace}}::banner().starts_with("{{package}}")); }
+
+// A property: rapidcheck calls the body with many generated names.
+RC_GTEST_PROP(Greet, WrapsAnyName, (const std::string &name)) {
+  RC_ASSERT({{namespace}}::greet(name) == "Hello, " + name + "!");
+}
+
+} // namespace
