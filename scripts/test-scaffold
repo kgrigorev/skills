@@ -1,0 +1,117 @@
+#!/bin/sh
+# Tests that a scaffold's scripts/check rejects bad code and accepts good code.
+# Usage: scripts/test-scaffold <stack> [--project <rendered project>] [attack name...]
+#
+# Without --project, renders skills/scaffold/scaffold-<stack> into a temporary folder first.
+# The project must pass scripts/check as rendered. Then each tests/scaffold/<stack>/*.sh runs
+# inside the project, scripts/check runs, and the project is reset to the rendered state.
+#
+# Each attack file starts with header lines:
+#   # expect: red <text>   scripts/check fails, and the last "==> " step it printed contains <text>
+#   # expect: green        scripts/check passes (good code the gates must not reject)
+#   # env: NAME=value      optional, repeatable: set for scripts/check only
+# The rest of the file is a sh script that changes the project (cwd is the project root).
+set -eu
+repo=$(cd "$(dirname "$0")/.." && pwd)
+
+[ "$#" -ge 1 ] || { echo 'Usage: scripts/test-scaffold <stack> [--project <dir>] [attack...]' >&2; exit 2; }
+stack=$1
+shift
+project=''
+if [ "${1:-}" = --project ]; then
+  project=$2
+  shift 2
+fi
+attacks=$repo/tests/scaffold/$stack
+[ -d "$attacks" ] || { echo "No attacks in $attacks" >&2; exit 2; }
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/test-scaffold.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+if [ -z "$project" ]; then
+  project=$work/sample-tool
+  sh "$repo/skills/scaffold/scaffold-$stack/scripts/scaffold" "$project" sample-tool \
+    'A sample tool that tests the template' 'a developer new to the language' >"$work/render.log" 2>&1 ||
+    { cat "$work/render.log" >&2; exit 1; }
+fi
+cd "$project"
+
+# The rendered state is a commit in the project's own repo, so each attack starts from it.
+git add -A
+if ! git rev-parse -q --verify HEAD >/dev/null; then
+  git -c user.name=test -c user.email=test@example.invalid commit -q -m rendered --no-verify
+fi
+base=$(git rev-parse HEAD)
+reset() {
+  git reset -q --hard "$base"
+  git clean -qfd
+}
+
+# Runs scripts/check with the attack's env lines. Writes the output to $work/out.
+# Usage: run_check <attack file>
+run_check() {
+  envs=$(sed -n 's/^# env: //p' "$1")
+  # shellcheck disable=SC2086 # each env line is one NAME=value word
+  env $envs scripts/check >"$work/out" 2>&1
+}
+
+echo "Base: scripts/check on the rendered project"
+if ! run_check /dev/null; then
+  tail -n 30 "$work/out" >&2
+  echo 'The rendered project fails scripts/check. Fix the template first.' >&2
+  exit 1
+fi
+
+if [ "$#" -gt 0 ]; then
+  files=$(for name in "$@"; do printf '%s/%s.sh\n' "$attacks" "$name"; done)
+else
+  files=$(find "$attacks" -name '*.sh' -type f | sort)
+fi
+
+pass=0
+bad=''
+for file in $files; do
+  name=$(basename "$file" .sh)
+  expect=$(sed -n 's/^# expect: //p' "$file" | head -n 1)
+  case $expect in
+  green | red\ ?*) ;;
+  *) echo "$name: header needs '# expect: green' or '# expect: red <step text>'" >&2; exit 2 ;;
+  esac
+  if ! sh -eu "$file" >"$work/attack.log" 2>&1; then
+    result="attack script failed: $(tail -n 1 "$work/attack.log")"
+  else
+    git add -A
+    if run_check "$file"; then got=green; else got=red; fi
+    step=$(sed -n 's/^==> //p' "$work/out" | tail -n 1)
+    case $expect in
+    green) [ "$got" = green ] && result=ok || result="red at: $step" ;;
+    red\ *)
+      want=${expect#red }
+      if [ "$got" = green ]; then
+        result='GREEN: the gates let it through'
+      else
+        case $step in
+        *"$want"*) result=ok ;;
+        *) result="red at the wrong step: $step (want: $want)" ;;
+        esac
+      fi
+      ;;
+    esac
+  fi
+  if [ "$result" = ok ]; then
+    pass=$((pass + 1))
+    printf 'ok    %s\n' "$name"
+  else
+    bad="$bad $name"
+    printf 'FAIL  %s: %s\n' "$name" "$result"
+    tail -n 8 "$work/out" | sed 's/^/      /'
+  fi
+  reset
+done
+
+printf '\n%s passed' "$pass"
+if [ -n "$bad" ]; then
+  printf ', failed:%s\n' "$bad"
+  exit 1
+fi
+printf '.\n'
