@@ -29,10 +29,34 @@ Each body names the PR below it in one line: in the format the repo's PR doc set
 
 ## Merge a stack
 
-Merge bottom-up, one PR at a time, each layer the same way, the top one included. With merge
-commits allowed (`gh repo view --json mergeCommitAllowed`), use one per layer. The PR above
-already holds the lower commits, so once they land on `main` its diff shrinks to its own commits
-with no rewrite. Keep the PR body as the merge commit's body:
+A stack on GitHub (linked by `gh stack submit` or `gh stack link`) merges only through GitHub's
+async merge API: the other merge APIs, which `gh pr merge` uses, refuse stacked PRs. Use
+`gh stack merge` on a branch of the stack. It merges the whole stack, all or none, with the
+method the repo allows (`--merge` when merge commits are allowed, else `--squash`), and without
+a terminal it does not ask:
+
+```sh
+gh stack merge --yes --merge
+```
+
+Pass it no number: a bare number is read first as a stack number, so a PR number can merge
+another stack. To merge only the lower part, call the API on the highest PR to merge, with the
+same method (`squash` without merge commits). It merges that PR and every PR below it:
+
+```sh
+gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async -f merge_method=merge
+```
+
+While its `status` is `pending`, poll
+`gh api repos/{owner}/{repo}/pulls/<number>/merge-async/<details.uuid>`; `failed` carries the
+reason. On a branch with a merge queue the PRs join the queue, which sets the method: leave out
+`--merge` and `merge_method`. Done when `gh pr view <number> --json state` says `MERGED`.
+GitHub runs its rules when the merge runs, and stacked merges cannot bypass them.
+
+Other stacks merge bottom-up, one PR at a time, each layer the same way, the top one included.
+With merge commits allowed (`gh repo view --json mergeCommitAllowed`), use one per layer. The PR
+above already holds the lower commits, so once they land on `main` its diff shrinks to its own
+commits with no rewrite. Keep the PR body as the merge commit's body:
 
 ```sh
 gh pr view <number> --json body -q .body |
@@ -43,30 +67,11 @@ Deleting the branch is what moves the next PR's base to `main`. Before the next 
 that `gh pr view <next> --json baseRefName` says `main`.
 
 Without merge commits, squash each layer. The PR above still holds the old lower commits, so its
-diff against `main` shows them again. Rebase it before it merges: `gh stack rebase`, or
+diff against `main` shows them again. Rebase it before it merges:
 `git rebase --onto origin/main <old lower branch> <branch>`. Then push as in "Build a stack".
 
-A PR in a GitHub-managed stack (built with `gh stack`) merges only through the async endpoint:
-GitHub's other merge APIs, which `gh pr merge` uses, do not support stacked PRs. One call merges
-the PR and every open PR below it, so call it on the bottom PR, with its head commit
-(`gh pr view <number> --json headRefOid`):
-
-```sh
-gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async \
-  -f merge_method=merge -f sha=<head>
-```
-
-Use `squash` without merge commits. On a branch with a merge queue, leave out `merge_method`:
-the call then adds the PR to the queue, which sets the method. The response's `status`:
-
-- `merged`: done.
-- `pending`: poll `gh api repos/{owner}/{repo}/pulls/<number>/merge-async/<details.uuid>`.
-- `enqueued`: the queue has it; it is not merged yet.
-- `failed`: report `details.message` and stop.
-
-Done when `gh pr view <number> --json state` says `MERGED`. For any other refusal (failing
-checks, a missing review, a ruleset), report GitHub's message. Do not retry through another
-endpoint.
+For any refusal (failing checks, a missing review, a ruleset), report GitHub's message. Do not
+retry through another endpoint.
 
 ## Review a stack
 
