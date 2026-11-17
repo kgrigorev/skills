@@ -5,12 +5,12 @@ name: scaffold-haskell
 on:
   pull_request:
     paths:
-      - skills/scaffold-haskell/**
+      - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
   push:
     branches: [main]
     paths:
-      - skills/scaffold-haskell/**
+      - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
   # The scaffold takes the newest hspec from Hackage, so a new release can break the template
   # without a change here. A weekly run catches that.
@@ -86,7 +86,7 @@ jobs:
 
       - name: Render the template
         run: |
-          sh skills/scaffold-haskell/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+          sh skills/scaffold/scaffold-haskell/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
             "A sample project that tests the template" "a Go developer new to Haskell"
 
       # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
