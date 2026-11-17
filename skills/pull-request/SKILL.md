@@ -1,12 +1,12 @@
 ---
 name: pull-request
-description: Open or update a GitHub pull request. Use when you open a PR, edit its title or description, split work into stacked PRs, or review a stack of PRs.
+description: Open, update or merge a GitHub pull request. Use when you open or merge a PR, edit its title or description, split work into stacked PRs, or review a stack of PRs.
 ---
 
 # Pull request
 
-With squash merges the PR title and body become the commit on `main`. The body is the lasting
-record of why the change exists, and reviewers skim it. Keep it short.
+The PR body is the lasting record of why the change exists (a squash merge makes the title and
+body the commit on `main`), and reviewers skim it. Keep it short.
 
 ## Open a PR
 
@@ -45,6 +45,17 @@ record of why the change exists, and reviewers skim it. Keep it short.
 After new commits, check that the title and body still match the diff. Fix them with
 `gh pr edit <number> --title "<title>" --body-file -`, under the same rules.
 
+## Merge a PR
+
+Merge only when the owner asks, with the checks green and the reviews in. The repo's own merge
+rules come first: its PR doc, `AGENTS.md` or contributing guide, and the methods its settings
+allow (`gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`).
+
+Without rules, squash a PR that was never part of a stack. A stacked PR (its base is another
+branch, or another open PR targets its branch) merges by [`STACKS.md`](STACKS.md), and so does
+the rest of its stack once the lower layers land. When GitHub refuses a merge, report its
+message.
+
 ## Stacks
 
-To build, update or review a stack of PRs, read [`STACKS.md`](STACKS.md).
+To build, update, review or merge a stack of PRs, read [`STACKS.md`](STACKS.md).
