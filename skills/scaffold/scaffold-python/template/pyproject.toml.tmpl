@@ -1,0 +1,146 @@
+[project]
+name = "{{package}}"
+version = "0.1.0"
+description = "{{synopsis}}"
+readme = "README.md"
+# The lower bound only. .python-version pins the exact Python that every machine and CI use.
+requires-python = ">={{python_minor}}"
+# A new dependency needs the owner's approval (CODING_STANDARDS.md).
+dependencies = []
+
+[project.scripts]
+{{package}} = "{{module}}.__main__:main"
+
+[dependency-groups]
+# Exact versions: a new ruff or mypy release adds rules, and scripts/check must give the same
+# result on every machine until someone bumps a version on purpose. Agents: owner approval.
+dev = []
+
+[build-system]
+# The same version as required-version below, so uv builds the package itself without a download.
+requires = ["uv_build=={{uv_version}}"]
+build-backend = "uv_build"
+
+[tool.uv]
+# uv refuses to run at any other version, so uv.lock is written and read the same way everywhere.
+# CI (astral-sh/setup-uv) installs this version; mise.toml and mise.lock install it locally.
+required-version = "=={{uv_version}}"
+# Only uv's own Python builds, never a system Python: the same interpreter on every machine.
+python-preference = "only-managed"
+
+# Settings below are quality gates. Agents: change them only with the owner's approval.
+
+[tool.ruff]
+# Lint and format every file, also one that .gitignore or a .ignore file names. ruff's default
+# exclude list still skips .venv and the tool caches.
+respect-gitignore = false
+
+[tool.ruff.lint]
+# Every stable rule. The set grows only when the ruff pin is bumped. Preview rules stay off.
+select = ["ALL"]
+ignore = [
+  "COM812",                   # trailing commas: the formatter decides them
+  "CPY001",                   # copyright header in every file: not wanted
+  "TD",                       # TODO format rules: FIX002 already rejects every TODO
+  "TC001", "TC002", "TC003",  # moving imports under TYPE_CHECKING: import-time tuning, not a defect
+  "EM101", "EM102", "TRY003", # message text in `raise X("...")`: style only; the
+                              # `msg = ...; raise X(msg)` workaround catches no defect
+]
+
+[tool.ruff.lint.pydocstyle]
+# Google style (Args:, Returns:, Raises:). Also switches off the D rules that contradict it.
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",    # pytest checks with assert
+  "D103",    # the test name says what it checks
+  "INP001",  # tests are not a package: pytest imports them with importlib
+  "PLR2004", # expected values in tests are literals
+]
+"src/*/__main__.py" = [
+  "T201", # the entry point prints the program's output
+]
+"tests/conftest.py" = [
+  "TID251", # the gate file registers the Hypothesis profiles with hypothesis.settings
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Absolute imports only: a reader sees where every name comes from.
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# APIs that overrule a check. ruff resolves aliases (`import typing as t`, `cast as coerce`),
+# which the text search in scripts/check cannot.
+"typing.cast".msg = "cast overrules the type checker. Narrow the type with isinstance or a TypeGuard."
+"typing_extensions.cast".msg = "cast overrules the type checker. Narrow the type with isinstance or a TypeGuard."
+"typing.no_type_check".msg = "no_type_check switches the type checker off."
+"typing_extensions.no_type_check".msg = "no_type_check switches the type checker off."
+"contextlib.suppress".msg = "suppress swallows errors. Catch the specific exception and handle it."
+"os._exit".msg = "os._exit ends the process before pytest reports failures and coverage saves data."
+"pytest.skip".msg = "A skipped test checks nothing."
+"pytest.xfail".msg = "An expected failure checks nothing."
+"pytest.importorskip".msg = "A skipped test checks nothing."
+"pytest.exit".msg = "pytest.exit stops the run before the remaining tests."
+"unittest.skip".msg = "A skipped test checks nothing."
+"unittest.skipIf".msg = "A skipped test checks nothing."
+"unittest.skipUnless".msg = "A skipped test checks nothing."
+"unittest.expectedFailure".msg = "An expected failure checks nothing."
+"unittest.SkipTest".msg = "A skipped test checks nothing."
+"warnings.filterwarnings".msg = "A warning is a failure. Fix its cause."
+"warnings.simplefilter".msg = "A warning is a failure. Fix its cause."
+"warnings.catch_warnings".msg = "A warning is a failure. Fix its cause. pytest.warns tests an expected warning."
+"hypothesis.settings".msg = "Hypothesis settings live in the profiles in tests/conftest.py."
+
+[tool.mypy]
+# strict turns on every optional check, including no untyped definitions and no implicit Any.
+strict = true
+# Check sys.platform branches as CI (Linux) does, so macOS and CI give the same result.
+platform = "linux"
+warn_unreachable = true
+# Any switches the type checker off for a value. Use object, a Protocol or a TypedDict.
+disallow_any_explicit = true
+# Optional checks that strict leaves off; each catches real mistakes.
+enable_error_code = [
+  "deprecated",          # calls to APIs marked @deprecated
+  "exhaustive-match",    # match without a case for every value
+  "explicit-override",   # overriding a method without @override
+  "ignore-without-code", # belt and braces: scripts/check bans type: ignore anyway
+  "mutable-override",    # unsafe override of a mutable attribute
+  "possibly-undefined",  # a name bound only in some branches
+  "redundant-expr",      # conditions that are always true or false
+  "redundant-self",      # needless Self annotation
+  "truthy-bool",         # `if obj:` where obj is always true
+  "truthy-iterable",     # `if items:` on an Iterable that is always true
+  "unimported-reveal",   # leftover reveal_type
+  "unused-awaitable",    # a coroutine or Task that is never awaited
+]
+files = ["src", "tests"]
+
+[tool.pytest]
+minversion = "9.2"
+testpaths = ["tests"]
+# strict: unknown config keys and markers are errors, and an xfail test that passes fails.
+strict = true
+# importlib: tests import the installed package, never a copy found through sys.path.
+addopts = ["--import-mode=importlib", "-ra"]
+# A warning is a failure. uv.lock fixes the dependencies, so the set of warnings is the same everywhere.
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+# Branch coverage: an `if` without a test for both outcomes counts as untested.
+branch = true
+source = ["{{module}}"]
+
+[tool.coverage.report]
+# Every line and branch of the library runs in a test. Code that no test needs can go.
+fail_under = 100
+show_missing = true
+skip_covered = true
+# The `python -m` guard runs only as a script; tests call main() directly.
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.pyright]
+# For the editor and agent language server only (pyright-lsp). mypy in scripts/check is the gate.
+venvPath = "."
+venv = ".venv"

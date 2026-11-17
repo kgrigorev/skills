@@ -1,0 +1,10 @@
+"""Tests for the command."""
+
+import pytest
+
+from {{module}}.__main__ import main
+
+
+def test_main_prints_the_banner(capsys: pytest.CaptureFixture[str]) -> None:
+    main()
+    assert capsys.readouterr().out.startswith("{{package}}")

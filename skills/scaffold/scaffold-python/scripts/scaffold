@@ -1,0 +1,110 @@
+#!/bin/sh
+# Renders the Python project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  lower case, words joined by "-", for example "my-tool". The Python module name
+#             uses "_" instead: "my_tool".
+#   synopsis: one line for pyproject.toml, README.md and the stub's banner, for example
+#             "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to Python". AGENTS.md and CODING_STANDARDS.md use it.
+#
+# The script never overwrites a file. It picks the newest patch of the pinned Python minor, adds
+# the newest dev tools as exact pins, writes uv.lock and mise.lock, formats the Python files,
+# runs `git init` when needed and points git at the project's hooks. It needs the network:
+# pypi.org, files.pythonhosted.org, releases.astral.sh and github.com. It does not commit.
+set -eu
+
+# uv: every project pins one exact uv (required-version in pyproject.toml), and the build backend
+# uv_build has the same version. Bump it after a scratch project passes scripts/check, together
+# with UV_VERSION in .github/workflows/scaffold-python.yml.
+uv_version=0.13.8
+# Python: the newest minor that has been out for about three months, so compiled dependencies
+# have wheels for it. The scaffold takes the newest patch of this minor that uv can download.
+python_minor=3.14
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+
+# shellcheck source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+require_hidden "$template"
+check_inputs "$package" "$synopsis" "$reader"
+require_tools mise git
+
+# my-tool -> my_tool
+module=$(printf '%s' "$package" | tr - _)
+
+# A variable from the caller's shell must not change what uv resolves or where it installs.
+unset VIRTUAL_ENV UV_INDEX_URL UV_EXTRA_INDEX_URL UV_DEFAULT_INDEX UV_CONSTRAINT UV_OVERRIDE \
+  UV_PYTHON UV_PYTHON_PREFERENCE UV_NO_SYNC UV_FROZEN UV_LOCKED
+
+# Runs the pinned uv: the one on PATH when it has the right version, else the one from mise.
+if [ "$(uv --version 2>/dev/null | cut -d ' ' -f 2)" = "$uv_version" ]; then
+  uv() { command uv "$@"; }
+else
+  uv() { mise exec "uv@$uv_version" -- uv "$@"; }
+fi
+
+# --- Toolchain versions -------------------------------------------------------------------------
+
+# Lines look like "cpython-3.14.10-macos-aarch64-none   <download available>".
+minor_pattern=$(printf '%s' "$python_minor" | sed 's/\./\\./g')
+python_version=$(uv python list "$python_minor" --only-downloads |
+  sed -n "s/^cpython-\($minor_pattern\.[0-9][0-9]*\)-.*/\1/p" | sort -t . -k 3 -n | tail -n 1)
+[ -n "$python_version" ] ||
+  fail "uv $uv_version offers no CPython $python_minor download. Check python_minor in this script."
+
+# A module with the name of a keyword, a standard library module or a dev tool cannot be imported
+# as the project's own code.
+uv run --quiet --no-project --python "$python_version" python -I -c '
+import keyword, sys
+name = sys.argv[1]
+taken = {"coverage", "hypothesis", "mypy", "pytest", "ruff", "tests"}
+sys.exit(keyword.iskeyword(name) or keyword.issoftkeyword(name)
+         or name in sys.stdlib_module_names or name in taken)' "$module" ||
+  fail "package \"$package\": the module name \"$module\" is a Python keyword or the name of a standard or dev tool module. Pick another name."
+
+# --- Render -------------------------------------------------------------------------------------
+
+set_var package "$package"
+set_var module "$module"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+set_var uv_version "$uv_version"
+set_var python_version "$python_version"
+set_var python_minor "$python_minor"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# --- Lock files and tools -----------------------------------------------------------------------
+
+# mise.toml installs the pinned uv for people and agents. mise reads only trusted config files,
+# and mise.lock holds the uv download's checksum for every platform.
+mise trust --quiet mise.toml
+mise_log=$(mise lock 2>&1) || { printf '%s\n' "$mise_log" >&2; fail 'mise lock failed.'; }
+chmod 644 mise.lock
+
+# The newest dev tools today, written as exact pins and locked in uv.lock. They stay until
+# someone bumps them on purpose.
+uv add --quiet --dev --bounds exact coverage hypothesis mypy pytest ruff
+
+# Ruff sorts imports, and the sections depend on the module name.
+uv run --quiet --no-sync ruff check --quiet --select I --fix
+uv run --quiet --no-sync ruff format --quiet
+
+printf 'Created %s (module %s) in %s\n' "$package" "$module" "$(pwd)"
+dev_pins=$(sed -n 's/^ *"\([a-z-]*\)==\([^"]*\)",*$/\1 \2/p' pyproject.toml | paste -s -d , - |
+  sed 's/,/, /g')
+printf 'uv %s, Python %s, %s\n' "$uv_version" "$python_version" "$dev_pins"
+list_files
+printf '%s\n' uv.lock mise.lock

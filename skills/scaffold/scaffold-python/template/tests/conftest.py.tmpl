@@ -1,0 +1,72 @@
+"""Shared test settings and gates. Agents: change only with the owner's approval."""
+
+from collections.abc import Generator
+
+import pytest
+from hypothesis import HealthCheck, settings
+
+# scripts/check runs the "check" profile: the same examples on every run and machine.
+# database=None: a failure saved on one machine cannot change the result on another.
+# deadline=None, too_slow: a slow machine must not turn a passing test into a failure.
+settings.register_profile(
+    "check",
+    derandomize=True,
+    database=None,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+
+# The weekly audit workflow runs "explore": new random examples, many more of them.
+settings.register_profile("explore", max_examples=2000, database=None, deadline=None)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to run with settings from any file but pyproject.toml.
+
+    A pytest.toml, pytest.ini or tox.ini would replace strict mode, the warning
+    filter and the import mode there without a word.
+    """
+    if config.inipath != config.rootpath / "pyproject.toml":
+        msg = f"pytest read its settings from {config.inipath}. Remove that file."
+        raise pytest.UsageError(msg)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> Generator[None]:
+    """Fail when a plugin or conftest drops tests that the caller did not deselect.
+
+    -k, -m and --deselect still work by hand. scripts/check passes none of them.
+    """
+    collected = len(items)
+    yield
+    asked = any(
+        config.getoption(name) for name in ("keyword", "markexpr", "deselect")
+    )
+    dropped = collected - len(items)
+    if dropped and not asked:
+        msg = f"Collected tests were dropped: {dropped}. Run or delete them."
+        raise pytest.UsageError(msg)
+
+
+# Tests that did not run: skipped (by a mark, pytest.skip or unittest.SkipTest) or
+# expected to fail (xfail). A test that does not run checks nothing.
+_not_run: list[str] = []
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Remember every test that was skipped or marked as expected to fail."""
+    if report.skipped:
+        _not_run.append(report.nodeid)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """Fail the run when a test did not run."""
+    if _not_run and session.exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        writer = session.config.get_terminal_writer()
+        writer.line("Tests that did not run (make them run or delete them):", red=True)
+        for nodeid in _not_run:
+            writer.line(f"  {nodeid}")

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold Python"
+  short_description: "New Python project with agent rules and quality gates"

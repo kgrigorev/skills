@@ -1,0 +1,74 @@
+name: scaffold-python
+
+# Renders the scaffold-python template into a sample project and runs the project's
+# scripts/check. A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-python/**
+      - .github/workflows/scaffold-python.yml
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-python/**
+      - .github/workflows/scaffold-python.yml
+  # The scaffold takes the newest ruff, mypy, pytest, Hypothesis and coverage from PyPI, so a new
+  # release can break the template without a change here. A weekly run catches that.
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-python-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Equal to uv_version in skills/scaffold/scaffold-python/scripts/scaffold. Change both together.
+  UV_VERSION: "0.13.8"
+  ACTIONLINT_VERSION: "1.7.12"
+
+jobs:
+  scaffold-python:
+    # The same image as the template's own CI.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # The scaffold needs mise: it writes mise.lock for the project. It installs no tools here.
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+
+      # The same action as in template/.github/workflows/ci.yml.tmpl, so scripts/check finds the
+      # right uv on PATH, as it does in a project's CI.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: skills/scaffold/scaffold-python/**
+          cache-python: true
+
+      # mise lock reads uv's release from the GitHub API. The token keeps it under the rate limit.
+      - name: Render the template
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          sh skills/scaffold/scaffold-python/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to Python"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # workflow template would give every new project a red CI.
+      - name: Lint the sample project's workflows
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"

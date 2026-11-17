@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # An explicit image: ubuntu-latest moves to a new release on GitHub's schedule.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the uv version from required-version in pyproject.toml. The action has no major
+      # tag, so it is pinned by commit.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          # Caches downloaded packages, keyed on uv.lock and pyproject.toml.
+          enable-cache: true
+          # Python comes from .python-version. Caching it saves the download on every run.
+          cache-python: true
+
+      - run: scripts/check

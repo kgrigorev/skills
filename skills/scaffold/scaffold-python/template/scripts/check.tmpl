@@ -1,0 +1,105 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+# pyproject.toml names the one uv version (required-version). Agent shells do not activate mise,
+# so the uv on PATH may be another one: then run again under mise, which puts the uv from
+# mise.toml (checksum in mise.lock) first. CI installs the right uv with setup-uv and never
+# takes this branch.
+uv_required=$(sed -n 's/^required-version = "==\(.*\)"$/\1/p' pyproject.toml)
+uv_found=$(uv --version 2>/dev/null | cut -d ' ' -f 2) || uv_found=''
+if [ "$uv_found" != "$uv_required" ] && [ -z "${CHECK_UNDER_MISE:-}" ] &&
+  command -v mise >/dev/null 2>&1; then
+  CHECK_UNDER_MISE=1 exec mise --quiet exec -- "$0" "$@"
+fi
+
+# The result must depend only on the commit, not on the caller's shell. These variables change
+# what the tools check: PYTEST_* (PYTEST_ADDOPTS can pass -p no:warnings or --noconftest),
+# PYTHON* (PYTHONPATH, PYTHONWARNINGS, ...), MYPY* (MYPYPATH), HYPOTHESIS_*, COVERAGE_*, RUFF_*,
+# UV_* (UV_PYTHON, UV_NO_SYNC, UV_INDEX_URL, UV_CONSTRAINT, ...) and GIT_* (GIT_DIR,
+# GIT_CONFIG_*, ...). Kept: the UV_* variables that only say where files go; setup-uv sets them
+# in CI.
+for name in $(env | sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' |
+  grep -E '^(PYTEST_|PYTHON|MYPY|HYPOTHESIS_|COVERAGE_|RUFF_|UV_|GIT_|VIRTUAL_ENV$)' |
+  grep -vxE 'UV_CACHE_DIR|UV_PYTHON_INSTALL_DIR|UV_PYTHON_BIN_DIR|UV_TOOL_DIR|UV_TOOL_BIN_DIR'); do
+  unset "$name"
+done
+# The same hash seed everywhere, so set iteration order cannot differ between runs.
+export PYTHONHASHSEED=0
+# git reads only the repository's own config: a global core.excludesFile or core.attributesFile
+# must not hide files from the searches below.
+git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git "$@"; }
+
+step() { printf '\n==> %s\n' "$1"; }
+# The environment is synced once below; later commands must not change it.
+run() { uv run --no-sync "$@"; }
+
+step 'Environment (exactly uv.lock)'
+uv sync --locked --quiet
+printf '%s, %s, %s, %s, %s\n' "$(uv --version)" "$(run python --version)" \
+  "$(run ruff --version)" "$(run mypy --version)" "$(run pytest --version)"
+
+step 'Format (ruff format). Fix: uv run ruff format'
+run ruff format --diff
+
+step 'Lint (ruff check, rules in pyproject.toml). Safe fixes: uv run ruff check --fix'
+run ruff check
+
+step 'No switched-off checks'
+# Comments that switch off ruff, mypy, other type checkers, the formatter or coverage; casts that
+# overrule the type checker; skipped, expected-to-fail, uncollected or deselected tests; silenced
+# warnings; Hypothesis settings that run fewer examples; pytest hooks and plugins, also bound by
+# assignment. ruff's banned-api (pyproject.toml) catches the same APIs under an alias.
+# tests/conftest.py is a gate file and is exempt: it holds the Hypothesis profiles and the hooks
+# that fail skipped and dropped tests. It is the only conftest.py: a second one would fail mypy
+# (duplicate module) or, outside tests/, never be type-checked.
+switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|fmt:|isort:|pragma[:[:space:]]*no)|no_type_check|(^|[^[:alnum:]_.])cast\(|typing\.cast\(|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|collect_ignore|__test__'
+# git grep reads the working tree, skips deleted and ignored files, and has one regex engine
+# everywhere. -i: the tools accept `# NOQA` and `# PRAGMA NO COVER`. -a: a .gitattributes that
+# marks code as binary must not hide it. Exit 1 means no match; any other non-zero exit is an
+# error, not a pass.
+rc=0
+git grep -naiE --untracked -e "$switch_off" -- '*.py' ':!tests/conftest.py' || rc=$?
+case $rc in
+  0) echo 'The lines above switch off a check. Remove them and fix the cause.' >&2; exit 1 ;;
+  1) ;;
+  *) echo "git grep failed (exit $rc)." >&2; exit 1 ;;
+esac
+# mypy checks src/ and tests/, coverage measures only the package, and pytest collects only
+# tests/test_*.py. Python anywhere else would be linted but never type-checked, measured or run.
+# A .pyi stub beside a module makes mypy read the stub instead of the code; the package ships
+# py.typed, so it needs none.
+misplaced=$(git ls-files --cached --others --exclude-standard -- '*.py' '*.pyi' |
+  grep -vE '^src/{{module}}/.*\.py$|^tests/(.*/)?test_[^/]*\.py$|^tests/conftest\.py$' || true)
+if [ -n "$misplaced" ]; then
+  printf '%s\n' "$misplaced"
+  echo 'Move the files above: code goes in src/{{module}}/, tests and their fixtures in' \
+    'tests/test_*.py. No .pyi stubs.' >&2
+  exit 1
+fi
+# ruff uses the nearest config file, and mypy and pytest prefer their own files over
+# pyproject.toml. Any of these would quietly replace the settings there.
+overrides=$(find . \( -path ./.venv -o -path ./.git \) -prune -o \( \
+  -name ruff.toml -o -name .ruff.toml -o -name mypy.ini -o -name .mypy.ini \
+  -o -name pytest.toml -o -name .pytest.toml -o -name pytest.ini -o -name .pytest.ini \
+  -o -name tox.ini -o -name setup.cfg -o -name .coveragerc \
+  -o -name sitecustomize.py -o -name usercustomize.py \
+  -o \( -name pyproject.toml ! -path ./pyproject.toml \) \) -print)
+if [ -n "$overrides" ]; then
+  printf '%s\n' "$overrides"
+  echo 'Remove the files above: they override the settings in pyproject.toml.' >&2
+  exit 1
+fi
+
+step 'Types (mypy --strict, settings in pyproject.toml)'
+run mypy
+
+step 'Tests (warnings are errors, skipped tests fail) and branch coverage'
+# erase: a .coverage file from an earlier run must not stand in for this one.
+run coverage erase
+run coverage run -m pytest --hypothesis-profile=check
+run coverage report
+
+printf '\nAll checks passed.\n'

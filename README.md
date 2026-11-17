@@ -27,6 +27,7 @@ all run it.
 | `scaffold-rust` | Rust: Clippy, rustfmt, cargo-nextest, cargo-deny, proptest. |
 | `scaffold-go` | Go: golangci-lint with gofumpt, race-detector tests, rapid. |
 | `scaffold-typescript` | TypeScript on Node with pnpm: tsc, oxlint, oxfmt, vitest, fast-check, knip. |
+| `scaffold-python` | Python with uv: ruff, mypy, pytest, Hypothesis, branch coverage. |
 
 ## Install
 

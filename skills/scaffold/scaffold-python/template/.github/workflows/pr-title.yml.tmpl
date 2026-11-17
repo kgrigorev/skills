@@ -1,0 +1,25 @@
+name: pr-title
+
+# Checks the PR title on its own, so editing a title reruns this job only, not the whole check.
+# Squash merges make the title the commit message on main.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  title:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: PR title is a conventional commit of at most 72 characters
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([a-z0-9-]+\))?!?: [^ ].*$'
+          if ! printf '%s' "$TITLE" | grep -Eq "$pattern" || [ "${#TITLE}" -gt 72 ]; then
+            echo "Bad PR title: $TITLE" >&2
+            echo 'Use "type(scope): what changed", at most 72 characters, for example "feat(parser): read quoted lists".' >&2
+            exit 1
+          fi

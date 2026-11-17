@@ -1,0 +1,58 @@
+# Coding standards
+
+The reviewer applies these to every Python change. `scripts/check` already enforces formatting,
+lint rules, docstrings, type annotations, warnings, coverage and the banned comments, so they are
+not repeated here.
+
+The reader is {{reader}}. Every rule serves that reader.
+
+## Plain Python
+
+Use functions, `@dataclass(frozen=True, slots=True)`, `enum.Enum`, `match`, `pathlib.Path`,
+built-in generics such as `list[str]`, and `X | None`, plus the approved extras below.
+Metaclasses, descriptors, decorators that change a signature, `__getattr__` tricks,
+monkeypatching, `global` and `async` need the owner's approval first. Once approved, they go into
+the list.
+
+Approved extras:
+
+- None.
+
+## Comments
+
+A reader can follow a module from top to bottom by its docstrings and comments alone.
+
+- Every module and public function has a docstring that says what it is for and why.
+- Explain a Python construct briefly the first time a module uses it, if the reader may not know
+  it. For example a comprehension, a generator or `match`. One short sentence, sometimes with the
+  equivalent in a language the reader knows.
+- No filler, no praise of the code, no restating the code in words.
+
+## Types and errors
+
+- Model data with dataclasses, enums and `TypedDict`, not with `dict[str, object]` passed around.
+- Expected failures are values, or specific exception types named in the docstring (`Raises:`).
+  `raise ValueError("negative n")` with the message inline is fine. Never catch `Exception`.
+- `json.loads` and similar APIs return `Any`, which mypy cannot check. Turn such a value into a
+  typed one where it enters the program: check it with `isinstance` and build a dataclass.
+- Platform-specific code goes behind one small function or Protocol that tests can replace. Then
+  every branch is type-checked and covered on Linux, where CI runs.
+
+## Functions and names
+
+- Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
+  nesting.
+- Names say what a value is: `environment`, `argument`. Single letters only in tiny lambdas and
+  comprehensions.
+- Use the same name for the same concept everywhere: in code, tests and docs.
+
+## Dependencies
+
+A new entry in `dependencies` in `pyproject.toml` needs the owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Tests are plain functions, one behaviour each, with names that describe the behaviour.
+- Use a Hypothesis property test when a rule holds for all inputs.
+- Every test asserts something. Coverage cannot see a test without an assertion; the reviewer can.
