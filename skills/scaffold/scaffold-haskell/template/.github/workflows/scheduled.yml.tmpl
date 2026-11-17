@@ -1,0 +1,35 @@
+name: scheduled
+
+# Checks whose result changes over time. They never block a merge, so scripts/check stays
+# deterministic. Look at a red run and fix the cause in a normal PR.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # mise refuses a config file it has not been told to trust.
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
+jobs:
+  explore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-haskell
+
+      # scripts/check uses one fixed seed. Here QuickCheck tries new random inputs each week.
+      # A failure prints the seed; rerun with --seed=N to reproduce it.
+      - name: Properties with a random seed and more cases
+        run: |
+          cabal test all --test-show-details=direct --test-options="--ignore-dot-hspec \
+            --fail-on=pending,focused,empty,empty-description --seed=$RANDOM --qc-max-success=2000"
+
+      - name: Newer dependency versions (report only)
+        run: |
+          cabal update
+          cabal outdated

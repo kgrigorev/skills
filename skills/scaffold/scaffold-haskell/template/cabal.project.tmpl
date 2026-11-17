@@ -2,16 +2,18 @@ packages: .
 tests: True
 
 -- The GHC version for this project. cabal, HLS, scripts/check and CI all use it.
--- Install it with: ghcup install ghc {{ghc_version}}
+-- It must be ghcup's build. Install it with: mise exec -- ghcup install ghc {{ghc_version}}
 with-compiler: ghc-{{ghc_version}}
 
--- Pin the Hackage snapshot so every checkout resolves the same dependency versions.
+-- The Hackage snapshot that dependency versions come from. cabal.project.freeze records the
+-- exact versions picked from it. To bump: change the date, run scripts/freeze, commit both.
 index-state: {{index_state}}
 
 -- Build {{package}} without optimisation: faster to compile, same behaviour.
 -- Dependencies keep their default optimisation.
 optimization: False
 
--- Any warning fails the build, for this package only. Do not remove: it is a quality gate.
+-- Any warning fails the build, for this package only. Do not remove: it is a quality gate,
+-- and scripts/check fails without this line.
 package {{package}}
   ghc-options: -Werror

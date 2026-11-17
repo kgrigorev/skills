@@ -10,7 +10,9 @@
 
 # Partial, unsafe or debugging functions. Return Maybe or Either instead.
 - functions:
-  - {name: [head, tail, init, last, "!!", foldl1, foldr1, maximum, minimum], within: [], message: "Partial: fails on some inputs. Pattern match instead."}
+  - {name: [head, tail, init, last, "!!", "!", foldl1, foldr1, maximum, minimum, genericIndex, cycle], within: [], message: "Partial: fails on some inputs. Pattern match instead, or use a total function such as !?."}
+  - {name: [toEnum, succ, pred], within: [], message: "Partial: fails outside the type's range. Use a case expression or a lookup that returns Maybe."}
+  - {name: foldl, within: [], message: "Lazy: builds up thunks. Use foldl' (exported by Prelude)."}
   - {name: fromJust, within: [], message: "Partial. Pattern match, or use fromMaybe or maybe."}
   - {name: read, within: [], message: "Partial. Use readMaybe from Text.Read."}
   - {name: [error, errorWithoutStackTrace, undefined], within: [], message: "Return a Maybe or an Either instead."}
@@ -21,6 +23,9 @@
 
 - modules:
   - {name: [Debug.Trace, System.IO.Unsafe, Unsafe.Coerce], within: [], message: "Not allowed."}
+  # Dynamic typing: the compiler can no longer check the types. scripts/check also rejects every
+  # module with an Unsafe part in its name and every unsafe* name.
+  - {name: Data.Dynamic, within: [], message: "Not allowed. Use a sum type."}
   - {name: [Data.Map, Data.Map.Lazy], within: [], message: "Use Data.Map.Strict."}
   - {name: Control.Arrow, within: [], message: "Hard to read. Write a lambda or a helper function."}
 

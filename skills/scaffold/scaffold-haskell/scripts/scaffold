@@ -5,13 +5,14 @@
 #   synopsis: one line for the .cabal file, for example "A tool that renames photos".
 #   reader:   who reads the code, completing "The reader is ...", for example
 #             "a Go developer new to Haskell". AGENTS.md and CODING_STANDARDS.md use it.
-# Run `cabal update` first: the script reads the newest hspec version from the local index.
 #
-# Template rules: every file under template/ ends in ".tmpl", which is dropped, so the files stay
-# inert inside this skill. {{name}} placeholders are replaced in paths and text.
-# The script never overwrites a file. It formats the Haskell files, runs `git init` when needed and
-# points git at the project's hooks. It does not commit.
+# Needs mise, git, and GHC from ghcup (see ghc_version below). The script installs the tools that
+# mise.toml pins, runs `cabal update`, renders the template, formats the Haskell and cabal files,
+# writes cabal.project.freeze, runs `git init` when needed and points git at the project's hooks.
+# It never overwrites a file and does not commit.
 set -eu
+# shellcheck source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
 
 if [ "$#" -ne 4 ]; then
   echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
@@ -23,118 +24,91 @@ synopsis=$3
 reader=$4
 template=$(cd "$(dirname "$0")/../template" && pwd)
 
-fail() {
-  echo "scaffold: $1" >&2
-  exit 1
-}
+# The GHC version of new projects. Pick the newest release that ghcup lists and HLS supports.
+ghc_version=9.14.1
 
-# Some installers skip hidden files. Without them the project has no CI, hooks or HLint rules.
-for hidden in .gitignore.tmpl .github/workflows/ci.yml.tmpl; do
-  [ -f "$template/$hidden" ] ||
-    fail "template/$hidden is missing. Reinstall the skill with its hidden files."
-done
-
-# --- Inputs -------------------------------------------------------------------------------------
-
-printf '%s' "$package" | grep -Eqx '[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*' ||
-  fail "package \"$package\": use lower-case words joined by \"-\", each starting with a letter."
-# Checks that a text input is one non-empty line that the templates can hold.
-# Usage: one_line <input name> <value>
-one_line() {
-  case $2 in
-  '' | *'"'* | *'\'* | *'{{'*) fail "$1: give one line without double quotes, backslashes or \"{{\"." ;;
-  esac
-  [ "$(printf '%s\n' "$2" | wc -l)" -eq 1 ] || fail "$1: give one line."
-}
-one_line synopsis "$synopsis"
-one_line reader "$reader"
+check_inputs "$package" "$synopsis" "$reader"
+require_hidden "$template"
+require_tools mise git
 
 # my-tool -> MyTool
 module=$(printf '%s' "$package" | awk -F- '{
   for (i = 1; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2)
 }')
 
-# --- Toolchain versions -------------------------------------------------------------------------
+# --- Toolchain ----------------------------------------------------------------------------------
 
-missing=''
-for tool in ghc cabal ormolu hlint git; do
-  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-done
-[ -z "$missing" ] || fail "missing tools:$missing"
+# The project accepts only ghcup's GHC: another build of the same version has another ABI.
+# Installing GHC takes 1 to 2 GB, so the user decides when it happens.
+ghcup_bin="${GHCUP_INSTALL_BASE_PREFIX:-$HOME}/.ghcup/bin"
+ghcup_version=$(sed -n 's/^ghcup = "\(.*\)"$/\1/p' "$template/mise.toml.tmpl")
+[ -x "$ghcup_bin/ghc-$ghc_version" ] && [ -x "$ghcup_bin/ghc-pkg-$ghc_version" ] ||
+  fail "GHC $ghc_version from ghcup is not in $ghcup_bin. Install it (1 to 2 GB):
+  mise exec ghcup@$ghcup_version -- ghcup install ghc $ghc_version"
 
-# The project pins the ghc on PATH. cabal.project calls it by its versioned name.
-ghc_version=$(ghc --numeric-version)
-command -v "ghc-pkg-$ghc_version" >/dev/null 2>&1 ||
-  fail "ghc-pkg-$ghc_version is not on PATH. Run: ghcup install ghc $ghc_version"
+# Run the pinned tools before the project exists: from a temporary copy of mise.toml and
+# mise.lock, trusted for this run only.
+tools=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-tools.XXXXXX") || fail 'cannot create a temporary folder'
+trap 'rm -f "$scaffold_sed"; rm -rf "$tools"' EXIT
+cp "$template/mise.toml.tmpl" "$tools/mise.toml"
+cp "$template/mise.lock.tmpl" "$tools/mise.lock"
+MISE_TRUSTED_CONFIG_PATHS="$tools${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
+# The user's global mise config stays out, as in scripts/check: its tools and [env] would apply
+# here too, and mise would install them.
+MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml
+export MISE_TRUSTED_CONFIG_PATHS MISE_GLOBAL_CONFIG_FILE
+pinned() { (cd "$tools" && mise exec -- "$@"); }
+(cd "$tools" && mise install --quiet) || fail 'mise could not install the pinned tools.'
+
+# index-state is today, so the local index must be at least that new.
+pinned cabal update || fail 'cabal update failed. It needs the network.'
 
 major_minor() { printf '%s' "$1" | cut -d. -f1-2; }
+# The newest version of a package in the local index.
+latest() {
+  pinned cabal list --simple-output "$1" 2>/dev/null | awk -v p="$1" '$1 == p { v = $2 } END { print v }'
+}
 
-cabal_version=$(major_minor "$(cabal --numeric-version)")
-ormolu_version=$(ormolu --version | head -n 1 | awk '{ print $2 }')
-hlint_version=$(hlint --numeric-version)
-base_bound=$(major_minor "$("ghc-pkg-$ghc_version" field base version --simple-output)")
-text_bound=$(major_minor "$("ghc-pkg-$ghc_version" field text version --simple-output)")
-hspec_latest=$(cabal list --simple-output hspec 2>/dev/null | awk '$1 == "hspec" { v = $2 } END { print v }')
-[ -n "$hspec_latest" ] || fail 'cannot find hspec in the cabal index. Run `cabal update` first.'
+base_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field base version --simple-output)")
+text_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field text version --simple-output)")
+hspec_latest=$(latest hspec)
+quickcheck_latest=$(latest QuickCheck)
+[ -n "$hspec_latest" ] && [ -n "$quickcheck_latest" ] ||
+  fail 'cannot find hspec or QuickCheck in the cabal index.'
 hspec_bound=$(major_minor "$hspec_latest")
+quickcheck_bound=$(major_minor "$quickcheck_latest")
 index_state=$(date -u +%Y-%m-%dT00:00:00Z)
 
 # --- Render -------------------------------------------------------------------------------------
 
-# Escapes a value for the right-hand side of a sed s/// command.
-sed_value() { printf '%s' "$1" | sed 's/[\/&]/\\&/g'; }
+set_var package "$package"
+set_var module "$module"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+set_var ghc_version "$ghc_version"
+set_var base_bound "$base_bound"
+set_var text_bound "$text_bound"
+set_var hspec_bound "$hspec_bound"
+set_var quickcheck_bound "$quickcheck_bound"
+set_var index_state "$index_state"
 
-render() {
-  sed -e "s/{{package}}/$(sed_value "$package")/g" \
-    -e "s/{{module}}/$(sed_value "$module")/g" \
-    -e "s/{{synopsis}}/$(sed_value "$synopsis")/g" \
-    -e "s/{{reader}}/$(sed_value "$reader")/g" \
-    -e "s/{{ghc_version}}/$ghc_version/g" \
-    -e "s/{{cabal_version}}/$cabal_version/g" \
-    -e "s/{{ormolu_version}}/$ormolu_version/g" \
-    -e "s/{{hlint_version}}/$hlint_version/g" \
-    -e "s/{{base_bound}}/$base_bound/g" \
-    -e "s/{{text_bound}}/$text_bound/g" \
-    -e "s/{{hspec_bound}}/$hspec_bound/g" \
-    -e "s/{{index_state}}/$index_state/g"
-}
-
-# src/{{module}}.hs.tmpl -> src/MyTool.hs
-destination() {
-  printf '%s\n' "$1" | sed 's/\.tmpl$//' | render
-}
-
-sources=$(cd "$template" && find . -type f -name '*.tmpl' | sed 's#^\./##' | sort)
-
-# Check every destination before writing anything, so a refusal leaves the folder unchanged.
-for source in $sources; do
-  path=$target/$(destination "$source")
-  [ ! -e "$path" ] || fail "$path exists. Nothing was written."
-done
-
-mkdir -p "$target"
-for source in $sources; do
-  path=$target/$(destination "$source")
-  mkdir -p "$(dirname "$path")"
-  render <"$template/$source" >"$path"
-done
-
+render_template "$template" "$target"
 cd "$target"
-# Set by path, because some installers drop the executable bits of the template files.
-chmod +x scripts/* .githooks/* .claude/hooks/*
-if grep -rnE '\{\{[a-z_]+\}\}' --exclude-dir=.git .; then
-  fail 'the lines above still hold a placeholder. Fix the template.'
-fi
+finish_project
+# Trust this project's mise.toml, so scripts/check and the git hook can run its tools.
+mise trust --quiet "$PWD/mise.toml"
 
-# Ormolu sorts imports, and the order depends on the module name.
+# cabal-gild sorts build-depends and Ormolu sorts imports. The order depends on the names.
+mise exec -- cabal-gild "$package.cabal"
 # shellcheck disable=SC2046 # file names have no spaces
-ormolu --mode inplace $(find app src test -name '*.hs')
-
-[ -e .git ] || git init --quiet --initial-branch=main
-git config core.hooksPath .githooks
+mise exec -- ormolu --mode inplace $(find app src test -name '*.hs')
+# Lock the dependency versions. scripts/check compares against this file.
+mise exec -- cabal freeze -v0 || fail 'cabal freeze failed: the dependency bounds do not solve.'
 
 printf 'Created %s (module %s) in %s\n' "$package" "$module" "$(pwd)"
-printf 'ghc %s, cabal %s, ormolu %s, hlint %s, base ^>=%s, text ^>=%s, hspec ^>=%s, index-state %s\n' \
-  "$ghc_version" "$cabal_version" "$ormolu_version" "$hlint_version" \
-  "$base_bound" "$text_bound" "$hspec_bound" "$index_state"
-for source in $sources; do destination "$source"; done
+printf 'ghc %s (ghcup), %s\n' "$ghc_version" \
+  "$(sed -n 's/^\([a-z":/-]*\) = .*"\([0-9.]*\)".*/\1 \2/p' mise.toml | tr -d '"' | paste -sd, - | sed 's/,/, /g')"
+printf 'base ^>=%s, text ^>=%s, hspec ^>=%s, QuickCheck ^>=%s, index-state %s\n' \
+  "$base_bound" "$text_bound" "$hspec_bound" "$quickcheck_bound" "$index_state"
+list_files
+echo cabal.project.freeze

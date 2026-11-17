@@ -51,3 +51,7 @@ A new entry in `build-depends` in `{{package}}.cabal` needs the owner's approval
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
 - Test names describe behaviour.
+- When a rule holds for every input, write it as a QuickCheck property with `prop`, for example
+  "formatting twice gives the same text". Keep example tests for the cases a reader should see.
+- `scripts/check` runs properties with one fixed seed, so a run never fails by chance. A weekly CI
+  job tries random seeds; a failure there prints the seed to reproduce it.

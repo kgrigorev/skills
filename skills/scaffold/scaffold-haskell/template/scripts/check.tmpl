@@ -4,39 +4,187 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# Use the tool versions pinned in mise.toml, also from shells where mise is not activated, such
+# as an agent's command tool, a git hook or an editor. mise reads only this project's mise.toml:
+# not the user's global config, not a config in a parent folder (such as ~/.config/mise), not
+# mise.<env>.toml. The "Pinned tools" step below fails on any other config file mise still loads.
+if [ -z "${SCRIPTS_CHECK_UNDER_MISE:-}" ]; then
+  if ! command -v mise >/dev/null 2>&1; then
+    echo 'mise is not on PATH. Install it: see Setup in README.md.' >&2
+    exit 1
+  fi
+  MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml
+  MISE_CEILING_PATHS=$(dirname "$PWD")
+  export MISE_GLOBAL_CONFIG_FILE MISE_CEILING_PATHS
+  unset MISE_ENV MISE_PROFILE
+  SCRIPTS_CHECK_UNDER_MISE=1 exec mise exec -- scripts/check "$@"
+fi
+
 step() { printf '\n==> %s\n' "$1"; }
 
-hs_files=$(find app src test -name '*.hs')
+# Every Haskell and cabal file git tracks or would add, wherever it lives, so a new component
+# folder cannot slip past the format, lint and switch-off steps.
+tracked() {
+  git ls-files --cached --others --exclude-standard -- "$@" |
+    while IFS= read -r f; do if [ -f "$f" ]; then echo "$f"; fi; done
+}
+hs_files=$(tracked '*.hs')
+cabal_files=$(tracked '*.cabal')
+project_files=$(tracked 'cabal.project*')
 
-# cabal.project names the compiler. CI pins the other tools in .github/workflows/ci.yml.
-# A version mismatch explains local-vs-CI differences.
-ghc=$(sed -n 's/^with-compiler: *//p' cabal.project)
-if ! command -v "$ghc" >/dev/null 2>&1; then
-  echo "$ghc is not on PATH. Install it with: ghcup install ghc ${ghc#ghc-}," >&2
-  echo "and put ~/.ghcup/bin on PATH (see README.md)." >&2
+step 'Pinned tools (mise.toml, cabal.project)'
+# Only this project's mise.toml may configure mise. Another config file (mise.local.toml,
+# .mise.toml, .config/mise.toml, .tool-versions, a parent folder's) could put other tools first.
+here=$(pwd -P)
+configs=$(mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p')
+for config in $configs; do # paths have no spaces: the check runs from the project folder
+  if [ "$(cd "$(dirname "$config")" && pwd -P)/$(basename "$config")" != "$here/mise.toml" ]; then
+    echo "mise also reads $config. Remove it: only mise.toml configures this project." >&2
+    exit 1
+  fi
+done
+if [ -z "$configs" ]; then
+  echo 'mise reads no mise.toml here. Run: mise trust' >&2
   exit 1
 fi
-printf 'ghc %s, cabal %s, %s, hlint %s\n' "$("$ghc" --numeric-version)" \
-  "$(cabal --numeric-version)" "$(ormolu --version | head -n 1)" "$(hlint --numeric-version)"
+# Each tool must be the copy mise installed. When mise's copy is missing, the name finds
+# whatever else is on PATH, such as an unpinned Homebrew HLint.
+for tool in cabal ghcup ormolu hlint cabal-gild; do
+  pinned=$(mise which "$tool") || exit 1
+  if [ "$(command -v "$tool")" != "$pinned" ]; then
+    echo "$tool is $(command -v "$tool"), not mise's $pinned. Run: mise install --force $tool" >&2
+    exit 1
+  fi
+done
+# cabal.project names the compiler. It must be ghcup's build, the one HLS and CI use: another
+# build of the same version has another ABI and silently rebuilds the cabal store.
+ghc=$(sed -n 's/^with-compiler: *//p' cabal.project)
+ghcup_bin="${GHCUP_INSTALL_BASE_PREFIX:-$HOME}/.ghcup/bin"
+if [ "$(command -v "$ghc" || true)" != "$ghcup_bin/$ghc" ]; then
+  echo "$ghc must come from $ghcup_bin. Install it: mise exec -- ghcup install ghc ${ghc#ghc-}" >&2
+  exit 1
+fi
+printf 'ghc %s (%s), cabal %s, %s, hlint %s, cabal-gild %s\n' "$("$ghc" --numeric-version)" \
+  "$ghcup_bin" "$(cabal --numeric-version)" "$(ormolu --version | head -n 1)" \
+  "$(hlint --numeric-version)" "$(cabal-gild --version)"
 
-step 'Format (Ormolu). Fix: ormolu --mode inplace $(find app src test -name "*.hs")'
+step 'Haskell sources are plain .hs files git can see'
+# GHC also compiles .lhs, .hsc, .hs-boot, .hsig and Alex, Happy or c2hs sources. Ormolu, HLint
+# and the switch-off step read only .hs, so the others are not allowed. A git-ignored .hs file
+# would pass here and be missing in CI.
+others=$(git ls-files --cached --others -- '*.lhs' '*.hsc' '*.hs-boot' '*.lhs-boot' '*.hsig' \
+  '*.lhsig' '*.x' '*.y' '*.ly' '*.chs' '*.gc' '*.cpphs' ':!:dist-newstyle/')
+ignored=$(git ls-files --others --ignored --exclude-standard -- '*.hs' ':!:dist-newstyle/')
+if [ -n "$others$ignored" ]; then
+  printf '%s\n' "$others" "$ignored" | grep . >&2
+  echo 'Write these as .hs files that git tracks, or remove them.' >&2
+  exit 1
+fi
+
+step 'Format (Ormolu, cabal-gild). Fix: scripts/format'
 # shellcheck disable=SC2086 # file names have no spaces
 ormolu --mode check $hs_files
+for f in $cabal_files; do cabal-gild --mode check "$f"; done
 
 step 'Lint (HLint, rules in .hlint.yaml)'
-hlint app src test
+# shellcheck disable=SC2086 # file names have no spaces
+hlint $hs_files
 
 step 'No switched-off checks'
-# Pragmas and comments that switch off HLint, Ormolu or GHC checks, and flags that
-# turn warnings off. test/Main.hs keeps its one hspec-discover line.
-switch_off='\{-#? *(hlint|ormolu|ann|options)|-Wno-|-fno-warn|-Wwarn'
-if grep -niE "$switch_off" $hs_files {{package}}.cabal cabal.project |
-  grep -vxF 'test/Main.hs:1:{-# OPTIONS_GHC -F -pgmF hspec-discover #-}'; then
-  echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
+# Pragmas and comments that switch off HLint, Ormolu or GHC checks, also when they span lines,
+# and flags (bare or quoted) that turn warnings off or defer errors to run time. A file that is
+# exactly the hspec-discover driver keeps its OPTIONS_GHC line. In .hs files, modules with an
+# Unsafe part in their name and unsafe* names are not allowed either, wherever they come from.
+# shellcheck disable=SC2086 # file names have no spaces
+if ! perl -e '
+  my ($bad, %seen) = (0);
+  sub report {
+    my ($f, $t, $at) = @_;
+    my $start = rindex($t, "\n", $at - 1) + 1;
+    my $n = 1 + (substr($t, 0, $start) =~ tr/\n//);
+    my ($line) = substr($t, $start) =~ /^([^\n]*)/;
+    print STDERR "$f:$n: $line\n" unless $seen{"$f:$n"}++;
+    $bad = 1;
+  }
+  for my $f (@ARGV) {
+    open(my $h, "<", $f) or die "$f: $!"; local $/; my $t = <$h>; close $h;
+    next if $t eq "{-# OPTIONS_GHC -F -pgmF hspec-discover #-}\n";
+    while ($t =~ /\{-\#?\s*(?:hlint|ormolu|ann|options)|-wno-|-fno-warn|-wwarn|-wnot\b|-fdefer-|(?<![^\s:"])-w(?=[\s"]|$)/gim) {
+      report($f, $t, $-[0]) }
+    next unless $f =~ /\.hs$/;
+    (my $code = $t) =~ s/\{-.*?-\}/$& =~ tr{\n}{}cdr/gse;
+    $code =~ s/(?<![-!#\$%&*+.\/<=>?\@\\^|~:])--+(?![!#\$%&*+.\/<=>?\@\\^|~:])[^\n]*//g;
+    while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?(?:"[^"\n]*"\s+)?(?:[\w.]*\.)?Unsafe\b|(?<![\w\x27])unsafe[A-Z]/gm) {
+      report($f, $code, $-[0]) }
+  }
+  exit $bad' $hs_files $cabal_files $project_files; then
+  echo 'The lines above switch off a check or use an unsafe escape hatch. Remove them.' >&2
   exit 1
 fi
 if [ -e cabal.project.local ]; then
   echo 'Remove cabal.project.local: cabal reads it and it can undo -Werror.' >&2
+  exit 1
+fi
+# shellcheck disable=SC2086 # file names have no spaces
+if grep -nE '^[[:space:]]*import[[:space:]]*:' $project_files /dev/null; then
+  echo 'cabal.project may not import other files: the checks above do not read them.' >&2
+  exit 1
+fi
+
+step 'Warning settings ({{package}}.cabal, cabal.project)'
+# The warnings that every component must build with. cabal.project turns them into errors.
+warnings='-Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns
+  -Wmissing-deriving-strategies -Wmissing-export-lists -Wmissing-home-modules
+  -Wmissing-import-lists -Wpartial-fields -Wprepositive-qualified-module -Wredundant-constraints
+  -Wunused-packages -haddock -Winvalid-haddock'
+for f in $cabal_files; do
+  # cabal-gild has formatted the file: stanzas start in column 1, fields are indented by 2.
+  WARNINGS=$warnings awk '
+    function done_stanza() {
+      if (component && !imported) {
+        printf "%s:%d: \"%s\" must start with \"import: common\".\n", FILENAME, at, header; bad = 1
+      }
+    }
+    /^[[:space:]]*--/ { next }
+    /^[^[:space:]]/ {
+      done_stanza()
+      header = $0; at = FNR; first = 1; imported = 0; field = ""
+      component = $0 !~ /:/ && $1 ~ /^(library|executable|test-suite|benchmark|foreign-library)$/
+      common = $0 == "common common"
+      next
+    }
+    /^  [^[:space:]]/ {
+      if (first) { imported = $0 == "  import: common"; first = 0 }
+      field = $1
+      if (common && field == "ghc-options:") for (i = 2; i <= NF; i++) flags[$i] = 1
+      next
+    }
+    /^   / { if (common && field == "ghc-options:") for (i = 1; i <= NF; i++) flags[$i] = 1 }
+    END {
+      done_stanza()
+      n = split(ENVIRON["WARNINGS"], want, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) if (want[i] != "" && !(want[i] in flags)) {
+        printf "%s: \"common common\" lost ghc-options %s.\n", FILENAME, want[i]; bad = 1
+      }
+      exit bad
+    }' "$f"
+  name=$(sed -n 's/^name: *//p' "$f")
+  if ! awk -v name="$name" 'last == "package " name && $0 == "  ghc-options: -Werror" { ok = 1 }
+    { last = $0 } END { exit !ok }' cabal.project; then
+    echo "cabal.project lost \"package $name\" with \"  ghc-options: -Werror\". Put it back." >&2
+    exit 1
+  fi
+done
+
+step 'Dependency versions match cabal.project.freeze. Fix: scripts/freeze'
+# Solve again into a temporary project that imports cabal.project, so this step never reads or
+# rewrites the committed freeze file. It reads only the local Hackage index.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+printf 'import: %s/cabal.project\n' "$PWD" >"$tmp/check.project"
+if ! cabal freeze -v0 --project-dir="$PWD" --project-file="$tmp/check.project" ||
+  ! diff cabal.project.freeze "$tmp/check.project.freeze"; then
+  echo 'cabal.project.freeze is out of date, or the bounds no longer solve. Run scripts/freeze.' >&2
   exit 1
 fi
 
@@ -44,7 +192,24 @@ step 'Build (warnings are errors)'
 cabal build all
 
 step 'Test'
-cabal test all --test-show-details=direct \
-  --test-options='--ignore-dot-hspec --fail-on=pending,focused,empty,empty-description'
+# hspec also reads options from HSPEC_* variables and .hspec files; either can skip tests.
+# The fixed seed makes QuickCheck try the same inputs on every run. The weekly scheduled CI job
+# tries random seeds.
+for name in $(env | sed -n 's/^\(HSPEC_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$name"; done
+{
+  cabal test all --test-show-details=direct \
+    --test-options='--ignore-dot-hspec --fail-on=pending,focused,empty,empty-description --seed=1' ||
+    echo failed >"$tmp/test-failed"
+} 2>&1 | tee "$tmp/test.log"
+if [ -e "$tmp/test-failed" ]; then exit 1; fi
+# Each test suite must print hspec's summary. A suite whose Main skips the hspec-discover driver
+# would run nothing and still pass.
+# shellcheck disable=SC2086 # file names have no spaces
+suites=$(cat $cabal_files | grep -c '^test-suite ' || true)
+summaries=$(grep -cE '^[0-9]+ examples?, 0 failures' "$tmp/test.log" || true)
+if [ "$suites" -ne "$summaries" ]; then
+  echo "$suites test suites, but $summaries hspec summaries. Every suite must use hspec-discover." >&2
+  exit 1
+fi
 
 printf '\nAll checks passed.\n'

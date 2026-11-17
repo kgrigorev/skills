@@ -1,8 +1,14 @@
--- | The {{package}} library.
-module {{module}} (banner) where
+-- | The {{package}} library: all the logic of the program lives here.
+module {{module}} (banner, tidyName) where
 
 import Data.Text (Text)
+import Data.Text qualified as Text
 
 -- | The line the program prints when it starts.
 banner :: Text
 banner = "{{package}}: {{synopsis}}"
+
+-- | Drops the spaces around a name and keeps one space between its words,
+-- so @"  Ada   Lovelace "@ becomes @"Ada Lovelace"@.
+tidyName :: Text -> Text
+tidyName name = Text.unwords (Text.words name)

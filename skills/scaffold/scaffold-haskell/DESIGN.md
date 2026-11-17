@@ -3,24 +3,110 @@
 Every other gate states its reason in a comment in its own file.
 
 - `.claude/settings.json` (JSON has no comments):
-  - `sandbox.filesystem.allowWrite` lists cabal's cache and state folders, so `scripts/check`
-    runs inside the sandbox without a bypass.
+  - `sandbox.filesystem.allowWrite` lists the cache and state folders of cabal and mise, so
+    `scripts/check` runs inside the sandbox without a bypass. `~/.ghcup` and `~/.config/cabal`
+    are left out on purpose. Installing GHC is an owner step. The cabal user config can add
+    compiler options (`program-default-options`), so agents must not write it. The README's
+    `cabal update` creates it once during setup.
   - `sandbox.excludedCommands` holds `gh *`, because the macOS TLS check fails inside the
     sandbox. It only matches a plain `gh ...` call, without `cd`, a heredoc or a redirect.
   - `attribution` is empty, so commits and PRs describe the change only.
 - `.githooks/pre-push` runs on push, not on commit, so small local commits stay fast.
-- GHC comes from ghcup, not Homebrew. ghcup keeps several versions side by side, and CI installs
-  GHC with ghcup too. Ormolu and HLint stay on Homebrew, since ghcup does not ship them.
 - `.gitignore` lists `.idea/`. The Stop hook treats any untracked file as uncommitted work.
-- `scripts/check` passes `--ignore-dot-hspec`, because a `.hspec` file can turn every test into a
-  dry run.
+
+## Tools
+
+- mise pins cabal, ghcup, Ormolu, cabal-gild and HLint, and `mise.lock` holds their checksums.
+  Before, Homebrew installed them locally without a version pin and CI pinned them separately,
+  so the two drifted. `locked = true` makes mise install only what the lock records.
+- GHC is not in mise: mise has no working GHC entry. `with-compiler` in `cabal.project` pins it,
+  because cabal and HLS already obey that line, and ghcup installs it.
+- `scripts/check` accepts only ghcup's GHC. Homebrew's GHC of the same version has another ABI
+  hash, so switching between the two silently rebuilds the cabal store, and HLS builds expect
+  ghcup's GHC. `GHCUP_USE_XDG_DIRS` is not supported: the check then fails with the install hint.
+- ghcup reads its download list live. A released GHC tarball and its checksum do not change, so
+  this is accepted. Pinning the list to one commit is possible but not done.
+- HLint 3.10 is the newest release. Its asset named `x86_64-osx` holds an arm64 binary (checked
+  with `lipo -info`), so `mise.toml` points Apple Silicon at it. The lock covers only linux-x64
+  and macos-arm64; other platforms fail in `mise install`. When a new HLint ships a correctly
+  named arm64 asset, drop the `asset_pattern` override and run `mise lock` again.
+- `scripts/check` runs itself again under `mise exec --`. Agent command tools, git hooks,
+  editors and the Stop hook run without mise's shell hook, and in such a shell `cabal`, `ormolu`
+  and `hlint` may find unpinned Homebrew copies. The other scripts call `mise exec --` too.
+- `scripts/check` makes mise read only the project's `mise.toml`: it points
+  `MISE_GLOBAL_CONFIG_FILE` at a path that cannot exist, sets `MISE_CEILING_PATHS` to the parent
+  folder and unsets `MISE_ENV`. Then it fails when `mise config ls` lists any other file, so a
+  committed `mise.local.toml` or `.tool-versions` cannot put other tools first, also in CI, which
+  trusts the whole workspace. The user's global tools and `[env]` stay out of the checks. A
+  project under the home folder would otherwise read `~/.config/mise/config.toml` as a project
+  config.
+- `scripts/check` compares each tool on PATH with `mise which`. A mise install without its
+  binary (seen with HLint) otherwise falls through to a Homebrew copy with other rules, and
+  `SCRIPTS_CHECK_UNDER_MISE=1` set by a caller would skip mise. Either now fails.
+- `min_version` in `mise.toml` is a floor for mise itself. Only CI pins mise exactly.
+
+## Gates
+
+- `cabal.project.freeze` pins every dependency version, so a version change shows in review and
+  CI can key its cache on it. The gate solves again into a temporary project that imports
+  `cabal.project` and compares. It never writes the committed file.
+- The format, lint and switch-off steps take their file lists from git, so a new component
+  folder, such as `bench/`, is covered. GHC also compiles `.lhs`, `.hsc`, `.hs-boot`, `.hsig`,
+  Alex, Happy and c2hs sources, which Ormolu and HLint do not read, so `scripts/check` rejects
+  them, and git-ignored `.hs` files outside `dist-newstyle/`, which pass locally and are missing
+  in CI.
+- The switch-off step reads each file whole (perl), because HLint and GHC accept a pragma or an
+  `HLINT ignore` comment split over several lines. It also rejects modules with an `Unsafe` part
+  in their name and every `unsafe*` name: HLint bans only exact names, and base re-exports
+  unsafe functions from many modules (`GHC.IO`, `GHC.Exts`, `Control.Monad.ST.Unsafe`). Comments
+  are stripped before that search, strings are not.
+- The warning list lives twice: in the `common common` stanza, where GHC and HLS read it, and in
+  `scripts/check`, which fails when the stanza loses a flag or a component does not start with
+  `import: common`. A new component would otherwise build without `-Wall`. The `-Werror` stanza
+  in `cabal.project` must name the package from the `.cabal` file, and `cabal.project` may not
+  `import:` other files, which no step reads. Passing the flags on the command line
+  (`--ghc-options`) would need no list, but cabal then rebuilds the package every time someone
+  switches between `cabal build` and `scripts/check`.
+- The test step counts hspec summaries ("N examples, 0 failures") and expects one per
+  `test-suite`. A `Main` that replaces the hspec-discover driver would run nothing and pass.
+- `scripts/check` clears every `HSPEC_*` variable and passes `--ignore-dot-hspec`, because either
+  can skip tests or turn every test into a dry run.
+- QuickCheck runs with a fixed seed, so the gate never fails by chance. The weekly
+  `scheduled.yml` job tries random seeds and lists newer dependencies. It never blocks a merge
+  and opens no issue: the owner looks at red runs.
+- The `.cabal` file keeps an explicit module list, without cabal-gild's module discovery. Each
+  module is a choice between `exposed-modules` and `other-modules`, and the reader sees it.
+- The freeze file could differ between macOS and Linux (OS-specific dependencies or flags). Today
+  they agree. If they ever differ, generate the file in CI only.
+- Not closed:
+  - The user's `~/.config/cabal/config` and `GHCRTS` can still change how cabal and the tests
+    run.
+  - The gate files themselves (`.hlint.yaml`, `scripts/check`, `mise.toml`, `cabal.project`, the
+    common stanza). An `ignore:` line in `.hlint.yaml` turns a ban off. Only the owner's review
+    of every change guards them. CODEOWNERS adds nothing in a one-owner repository, because
+    GitHub does not let the author approve their own PR.
+  - Test content: a test without an assertion (`it "x" True`), `when False`,
+    `modifyMaxSuccess (const 1)` or deleted tests pass. Only review catches them.
+  - Unused exported code (no weeder: it needs HIE files and a release per GHC version),
+    exceptions caught as `SomeException` (HLint cannot match types) and partial arithmetic such
+    as `div` by zero.
+  - `scripts/freeze` needs a local Hackage index at least as new as `index-state`; it runs
+    `cabal update` first for that reason.
 
 ## Keeping the template current
 
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
-- CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-haskell.yml`. When you
-  scaffold with newer tools, bump the versions at the top of that file to match.
+- To bump a tool: change `template/mise.toml.tmpl`, copy it to a scratch folder as `mise.toml`,
+  run `mise lock --platform linux-x64,macos-arm64` there and copy the result to
+  `template/mise.lock.tmpl`. To bump GHC: change `ghc_version` in `scripts/scaffold` once HLS
+  supports it.
+- CI in `kgrigorev/skills` (`.github/workflows/scaffold-haskell.yml`) scaffolds a sample project
+  every week, checks that `mise.lock` is current, lints the workflows and scripts, and runs the
+  sample's `scripts/check`.
+- Shared files (the hooks, the PR template, `pr-title.yml`, `CLAUDE.md` and the end of
+  `AGENTS.md`) come from `skills/scaffold/_shared`. Change them there and run
+  `scripts/sync-scaffold-shared`.
 - Project-specific material (domain terms, reference documents) stays out of the template.
 - The template works with any set of agent skills. It names no skill and holds no convention that
   comes from one, such as a glossary file or a folder of decision records. A project adds those

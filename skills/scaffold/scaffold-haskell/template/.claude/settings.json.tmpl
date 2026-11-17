@@ -6,7 +6,13 @@
   },
   "sandbox": {
     "filesystem": {
-      "allowWrite": ["~/.cache/cabal", "~/.local/state/cabal"]
+      "allowWrite": [
+        "~/.cache/cabal",
+        "~/.local/state/cabal",
+        "~/.local/share/mise",
+        "~/.local/state/mise",
+        "~/.cache/mise"
+      ]
     },
     "excludedCommands": ["gh *"]
   },

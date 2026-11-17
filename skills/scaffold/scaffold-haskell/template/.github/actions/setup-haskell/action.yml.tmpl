@@ -1,0 +1,61 @@
+name: setup-haskell
+description: Pinned tools from mise.lock, ghcup's GHC from cabal.project, cached index and store.
+
+# ci.yml and scheduled.yml both use this action, so they set up the same tools the same way.
+runs:
+  using: composite
+  steps:
+    # The runner image sets GHCUP_INSTALL_BASE_PREFIX=/usr/local and preinstalls a GHC. Use our
+    # own prefix, so the GHC in use and its cache never depend on the image.
+    - shell: bash
+      run: echo "GHCUP_INSTALL_BASE_PREFIX=$RUNNER_TEMP/ghcup" >> "$GITHUB_ENV"
+
+    # Installs cabal, ghcup, Ormolu, cabal-gild and HLint from mise.lock, checksums included.
+    - uses: jdx/mise-action@v5
+      with:
+        version: 2026.11.8
+
+    # A block (run: |) keeps YAML from reading the ": " in the sed pattern as a key.
+    - id: ghc
+      shell: bash
+      run: |
+        echo "version=$(sed -n 's/^with-compiler: *ghc-//p' cabal.project)" >> "$GITHUB_OUTPUT"
+
+    # A GHC install is about 1 GB and takes minutes. Cache it per GHC and ghcup version.
+    - id: ghc-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ env.GHCUP_INSTALL_BASE_PREFIX }}/.ghcup
+        key: ghcup-${{ runner.os }}-${{ steps.ghc.outputs.version }}-${{ hashFiles('mise.lock') }}
+
+    - if: steps.ghc-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ghcup install ghc "${{ steps.ghc.outputs.version }}"
+
+    - id: paths
+      shell: bash
+      run: |
+        echo "index=$(cabal path --remote-repo-cache)" >> "$GITHUB_OUTPUT"
+        echo "store=$(cabal path --store-dir)" >> "$GITHUB_OUTPUT"
+
+    # The Hackage index is about 20 s to download. cabal.project pins index-state, so a cached
+    # index resolves the same versions. Download it only when cabal.project changes.
+    - id: index
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.paths.outputs.index }}
+        key: hackage-index-${{ hashFiles('cabal.project') }}
+
+    - if: steps.index.outputs.cache-hit != 'true'
+      shell: bash
+      run: cabal update
+
+    # The cabal store holds the built dependencies. The freeze file names every dependency
+    # version, so it is the right cache key.
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ${{ steps.paths.outputs.store }}
+          dist-newstyle
+        key: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-

@@ -5,23 +5,32 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 
 ## Checks
 
-`scripts/check` runs every gate: Ormolu, HLint, a search for switched-off checks, a build with
+`scripts/check` runs every gate: the pinned tools, Ormolu and cabal-gild, HLint, a search for
+switched-off checks and unsafe code, the warning settings, the dependency lock, a build with
 warnings as errors, and the tests. The git hook and CI run it too.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
 - When a check stays red after two honest attempts, stop and report what you tried.
 - Fix the cause of a red check. Gate files change only with the owner's explicit approval:
-  `scripts/check`, `.githooks/`, `.github/`, `.hlint.yaml`, `.claude/`, the warning and extension
-  settings in `{{package}}.cabal` and `cabal.project`, and existing tests.
+  `scripts/`, `.githooks/`, `.github/`, `.hlint.yaml`, `.claude/`, `mise.toml`, `mise.lock`, the
+  warning and extension settings in `{{package}}.cabal` and `cabal.project`, and existing tests.
+- `cabal.project.freeze` changes only through `scripts/freeze`, after the owner approved the
+  dependency change.
+
+Run cabal, Ormolu, HLint and ghcup only through `mise exec --` or the scripts. In a plain shell
+these names can find other, unpinned copies, for example from Homebrew.
 
 ```sh
-cabal test --test-options='--match "banner"'               # one test by name
-ormolu --mode inplace $(find app src test -name '*.hs')    # format
+mise exec -- cabal test --test-options='--match "tidyName"'   # one test by name
+scripts/format                                                # format .hs and .cabal files
+scripts/freeze                                                # re-lock dependency versions
 ```
 
-Sandboxed agents: `cabal` writes to `~/.cache/cabal` and `~/.local/state/cabal`, and `cabal update`
-and `gh` need the network. Without these, `scripts/check` fails for reasons outside the code.
+Sandboxed agents: cabal writes to `~/.cache/cabal` and `~/.local/state/cabal`, and mise to
+`~/.local/share/mise`, `~/.local/state/mise` and `~/.cache/mise`. `cabal update`, a first
+`mise install` and `gh` need the network. Without these, `scripts/check` fails for reasons outside
+the code.
 
 ## Haskell
 
@@ -36,11 +45,17 @@ bans by name, so names like `read`, `last` and `error` are taken: call your own 
 
 - Logic goes in the library under `src/`. `app/Main.hs` only calls it.
 - `test/` is an hspec suite. Every `*Spec.hs` module that exports `spec` runs automatically.
-- List every new module in `{{package}}.cabal` (`exposed-modules` or `other-modules`).
-- `cabal.project` pins `index-state`. Bump it on purpose when you need newer Hackage packages.
+  Every test suite uses this hspec-discover driver, so `scripts/check` can pass its options,
+  and `scripts/check` fails when a suite prints no hspec summary.
+- List every new module in `{{package}}.cabal` (`exposed-modules` or `other-modules`). Sources
+  are `.hs` files; every new component starts with `import: common`.
+- Configure mise only in `mise.toml`. `scripts/check` fails on `mise.local.toml` and other
+  mise config files.
+- `cabal.project` pins `index-state`. Bump it on purpose when you need newer Hackage packages,
+  then run `scripts/freeze`.
 - `with-compiler` in `cabal.project` names the GHC version. `scripts/check` and CI read it there.
   To change GHC, update it together with `tested-with` and the `base` bound in
-  `{{package}}.cabal`.
+  `{{package}}.cabal`, then run `scripts/freeze`.
 
 ## Writing
 

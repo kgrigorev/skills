@@ -1,0 +1,11 @@
+#!/bin/sh
+# Formats the Haskell sources and the .cabal files the way scripts/check expects.
+# It runs the tools pinned in mise.toml, so a Homebrew copy of Ormolu cannot format differently.
+set -eu
+cd "$(dirname "$0")/.."
+hs_files=$(git ls-files --cached --others --exclude-standard -- '*.hs')
+# shellcheck disable=SC2086 # file names have no spaces
+mise exec -- ormolu --mode inplace $hs_files
+for f in $(git ls-files --cached --others --exclude-standard -- '*.cabal'); do
+  mise exec -- cabal-gild "$f" # formats the file in place
+done
