@@ -29,22 +29,44 @@ Each body names the PR below it in one line: in the format the repo's PR doc set
 
 ## Merge a stack
 
-Merge bottom-up with a merge commit, one PR at a time. The PR above already holds the lower
-commits, so once they land on `main` its diff shrinks to its own commits with no rewrite. A
-squash leaves GitHub to rebase the PR above, which can conflict. When the bottom PR merges and
-its branch is deleted, GitHub moves the next PR's base to `main`.
+Merge bottom-up, one PR at a time, each layer the same way, the top one included. With merge
+commits allowed (`gh repo view --json mergeCommitAllowed`), use one per layer. The PR above
+already holds the lower commits, so once they land on `main` its diff shrinks to its own commits
+with no rewrite. Keep the PR body as the merge commit's body:
 
-`gh pr merge <number> --merge` merges one layer. When GitHub refuses it (403 for a PR in a
-GitHub-managed stack), use the async endpoint with the PR's head commit
+```sh
+gh pr view <number> --json body -q .body |
+  gh pr merge <number> --merge --delete-branch --body-file -
+```
+
+Deleting the branch is what moves the next PR's base to `main`. Before the next merge, check
+that `gh pr view <next> --json baseRefName` says `main`.
+
+Without merge commits, squash each layer. The PR above still holds the old lower commits, so its
+diff against `main` shows them again. Rebase it before it merges: `gh stack rebase`, or
+`git rebase --onto origin/main <old lower branch> <branch>`. Then push as in "Build a stack".
+
+A PR in a GitHub-managed stack (built with `gh stack`) merges only through the async endpoint:
+GitHub's other merge APIs, which `gh pr merge` uses, do not support stacked PRs. One call merges
+the PR and every open PR below it, so call it on the bottom PR, with its head commit
 (`gh pr view <number> --json headRefOid`):
 
 ```sh
-gh api -X PUT repos/<owner>/<repo>/pulls/<number>/merge-async \
-  -f merge_method=merge -f merge_action=direct_merge -f sha=<head>
+gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async \
+  -f merge_method=merge -f sha=<head>
 ```
 
-Done when `gh pr view <number> --json state` says `MERGED`; the response's status is `pending`,
-`merged`, `enqueued` or `failed`.
+Use `squash` without merge commits. On a branch with a merge queue, leave out `merge_method`:
+the call then adds the PR to the queue, which sets the method. The response's `status`:
+
+- `merged`: done.
+- `pending`: poll `gh api repos/{owner}/{repo}/pulls/<number>/merge-async/<details.uuid>`.
+- `enqueued`: the queue has it; it is not merged yet.
+- `failed`: report `details.message` and stop.
+
+Done when `gh pr view <number> --json state` says `MERGED`. For any other refusal (failing
+checks, a missing review, a ruleset), report GitHub's message. Do not retry through another
+endpoint.
 
 ## Review a stack
 

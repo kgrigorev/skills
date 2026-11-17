@@ -47,10 +47,14 @@ After new commits, check that the title and body still match the diff. Fix them 
 
 ## Merge a PR
 
-The repo's own merge rules come first: its PR doc, `AGENTS.md` or contributing guide. Without
-them, squash a PR based on `main` that no other PR builds on. A stacked PR (its base is another
-branch, or another open PR targets its branch) merges with a merge commit: read
-[`STACKS.md`](STACKS.md) first.
+Merge only when the owner asks, with the checks green and the reviews in. The repo's own merge
+rules come first: its PR doc, `AGENTS.md` or contributing guide, and the methods its settings
+allow (`gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`).
+
+Without rules, squash a PR that was never part of a stack. A stacked PR (its base is another
+branch, or another open PR targets its branch) merges by [`STACKS.md`](STACKS.md), and so does
+the rest of its stack once the lower layers land. When GitHub refuses a merge, report its
+message.
 
 ## Stacks
 
