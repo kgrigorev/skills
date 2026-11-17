@@ -1,0 +1,70 @@
+name: scaffold-scala
+
+# Renders the scaffold-scala template into a sample project and runs the project's
+# scripts/check. A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-scala/**
+      - .github/workflows/scaffold-scala.yml
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-scala/**
+      - .github/workflows/scaffold-scala.yml
+  # Every version is pinned in the template, but downloads from Maven Central and GitHub can
+  # still break. A weekly run catches that without a change here.
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-scala-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The same mise version as in template/.github/workflows/ci.yml.tmpl. Change both together.
+  MISE_VERSION: "2026.11.9"
+  ACTIONLINT_VERSION: "1.7.12"
+
+jobs:
+  scaffold-scala:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Actions are pinned by commit, as in the template, because a tag can be moved.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Installs mise only: the repository has no mise.toml. The scaffold installs the JDK and
+      # Scala CLI from the sample project's own mise.toml.
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          version: ${{ env.MISE_VERSION }}
+
+      # Coursier downloads the compiler, libraries, test runner and scalafmt. Their versions are
+      # pinned in these template files.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/scalacli
+          key: scaffold-scala-${{ runner.os }}-${{ hashFiles('skills/scaffold/scaffold-scala/template/project.scala.tmpl', 'skills/scaffold/scaffold-scala/template/.scalafmt.conf.tmpl', 'skills/scaffold/scaffold-scala/template/mise.toml.tmpl') }}
+          restore-keys: scaffold-scala-${{ runner.os }}-
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold/scaffold-scala/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to Scala 3"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # workflow template would give every new project a red CI.
+      - name: Lint the sample project's workflows
+        run: |
+          mise exec "actionlint@$ACTIONLINT_VERSION" -- actionlint "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"

@@ -1,0 +1,50 @@
+// Build settings for {{package}}. Scala CLI reads every `//> using` line in this file, and
+// scripts/check rejects `//> using` lines anywhere else. scripts/check also keeps its own copy of
+// the compiler options below and fails when the two differ, so a removed check cannot pass.
+// Agents: change these lines only with the owner's approval.
+
+// Scala 3.9 is the long-term-support line. Keep to exact versions: scripts/check rejects others.
+//> using scala 3.9.0
+// The JDK comes from mise.toml, so Scala CLI, Metals and CI all use the same pinned one.
+//> using jvm system
+
+// Warnings are errors. -Wall turns on the -W checks: unused imports, private and local code,
+// discarded values, non-Unit statements, toString in interpolation and more. It does not check
+// initialisation order or catch-all handlers.
+// -deprecation and -feature give each such warning its location. strictEquality rejects ==
+// between types that can never be equal. -source:future rejects syntax that Scala is dropping,
+// such as `import x._` and `implicit val`.
+//> using options -Werror -Wall -deprecation -feature -language:strictEquality -source:future
+
+// WartRemover bans, checked with types: mutable state (var and mutable collections), null,
+// return, while, casts, throw, and calls that throw on ordinary input (Option.get, List.head,
+// Try.get, xs(i), xs.updated(i, x), ???). Also Array.toString, "text" + value, and String methods
+// that use the machine's default locale or charset. The plugin is built for each exact Scala version: bump it with `using scala`.
+//> using plugin org.wartremover:::wartremover:3.6.3
+//> using options -P:wartremover:traverser:org.wartremover.warts.Var
+//> using options -P:wartremover:traverser:org.wartremover.warts.MutableDataStructures
+//> using options -P:wartremover:traverser:org.wartremover.warts.Null
+//> using options -P:wartremover:traverser:org.wartremover.warts.Return
+//> using options -P:wartremover:traverser:org.wartremover.warts.While
+//> using options -P:wartremover:traverser:org.wartremover.warts.AsInstanceOf
+//> using options -P:wartremover:traverser:org.wartremover.warts.IsInstanceOf
+//> using options -P:wartremover:traverser:org.wartremover.warts.OptionPartial
+//> using options -P:wartremover:traverser:org.wartremover.warts.TryPartial
+//> using options -P:wartremover:traverser:org.wartremover.warts.EitherProjectionPartial
+//> using options -P:wartremover:traverser:org.wartremover.warts.IterableOps
+//> using options -P:wartremover:traverser:org.wartremover.warts.TripleQuestionMark
+//> using options -P:wartremover:traverser:org.wartremover.warts.ArrayToString
+//> using options -P:wartremover:traverser:org.wartremover.warts.StringPlusAny
+//> using options -P:wartremover:traverser:org.wartremover.warts.PlatformDefault
+//> using options -P:wartremover:traverser:org.wartremover.warts.Throw
+//> using options -P:wartremover:traverser:org.wartremover.warts.SeqApply
+//> using options -P:wartremover:traverser:org.wartremover.warts.SeqUpdated
+
+// Scala 3 lazy vals still use sun.misc.Unsafe, and JDK 25 prints a warning when a program first
+// touches one. The warning is about the Scala library, not this code.
+//> using javaOpt --sun-misc-unsafe-memory-access=allow
+
+// Test framework.
+//> using test.dep org.scalameta::munit:1.3.6
+// Property tests: munit integration for ScalaCheck.
+//> using test.dep org.scalameta::munit-scalacheck:1.3.1

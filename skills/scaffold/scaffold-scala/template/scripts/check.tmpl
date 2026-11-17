@@ -1,0 +1,227 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+step() { printf '\n==> %s\n' "$1"; }
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+# mise.toml holds only these line shapes, so the lock check below reads every tool pin. Another
+# TOML form, such as `java = { version = "..." }` or `tools.java = "..."`, would escape it.
+mise_shapes='^$|^#.*$|^min_version = "[0-9.]+"$|^\[settings\]$|^lockfile = true$|^\[tools\]$|^[a-z0-9-]+ = "[^"]+"$'
+if grep -nvE "$mise_shapes" mise.toml; then
+  fail 'mise.toml allows only comments, min_version, [settings] with lockfile = true, and [tools] with name = "version" lines.'
+fi
+
+# mise.lock must hold the exact tool versions in mise.toml. Otherwise CI, which installs from
+# mise.lock, would run other tools than this machine. This runs before mise, which could
+# install the new version and hide the difference.
+lock_drift=$(awk '
+  FNR == 1 { file++ }
+  file == 1 && /^\[/ { in_tools = ($0 == "[tools]"); next }
+  file == 1 && in_tools && /^[a-z0-9-]+ *= *"/ { split($0, part, "\""); want[$1] = part[2]; next }
+  file == 2 && /^\[\[tools\./ { tool = $0; gsub(/^\[\[tools\.|\]\]$/, "", tool); next }
+  file == 2 && /^version = "/ { split($0, part, "\""); have[tool] = part[2] }
+  END { for (name in want) if (have[name] != want[name]) print name }
+' mise.toml mise.lock)
+if [ -n "$lock_drift" ]; then
+  printf '%s\n' "$lock_drift" >&2
+  fail 'mise.lock does not match mise.toml for the tools above. Run: mise lock, and commit mise.lock.'
+fi
+
+# The JDK and Scala CLI versions live in mise.toml. Agent shells and git hooks do not activate
+# mise, so the script runs itself again through `mise exec`, which puts those exact versions first
+# on PATH and sets JAVA_HOME. --locked takes download URLs only from mise.lock. The absolute
+# path keeps this working after the `cd` above.
+if [ -z "${CHECK_UNDER_MISE:-}" ]; then
+  if ! command -v mise >/dev/null 2>&1; then
+    fail 'mise is not on PATH. Install it as README.md says, then run: mise install'
+  fi
+  CHECK_UNDER_MISE=1 exec mise exec --locked -- "$PWD/scripts/check" "$@"
+fi
+
+# munit fails any test marked .only when CI=true, so a focused test cannot hide the others.
+export CI=true
+# munit lets tests tagged Flaky fail when this is set.
+unset MUNIT_FLAKY_OK
+
+# mise.local.toml, .tool-versions or a MISE_<TOOL>_VERSION variable can still change what
+# `mise exec` picks, and mise falls back to the machine's java when a version is not in mise.lock.
+# So compare the tools that run now with mise.toml. The JDK pin must be a temurin-X.Y.Z+B one.
+pinned() { sed -n "s/^$1 = \"\(.*\)\"\$/\1/p" mise.toml; }
+scala_cli_version=$(scala-cli version --cli-version)
+java_version=$(java -version 2>&1)
+java_build=$(pinned java | sed -E 's/^temurin-([0-9.]+[+][0-9]+).*/Temurin-\1/')
+[ "$scala_cli_version" = "$(pinned scala-cli)" ] ||
+  fail "scala-cli $scala_cli_version runs, but mise.toml pins $(pinned scala-cli). Remove the override (mise.local.toml, .tool-versions, MISE_SCALA_CLI_VERSION)."
+case $java_version in
+*"$java_build "*) ;;
+*) fail "This java is not $(pinned java) from mise.toml: $(command -v java). Remove the override (mise.local.toml, .tool-versions, MISE_JAVA_VERSION)." ;;
+esac
+# Scala CLI takes the JDK from JAVA_HOME, other tools from PATH: both must be the pinned one.
+[ "$(command -v java)" = "${JAVA_HOME:-}/bin/java" ] ||
+  fail "JAVA_HOME (${JAVA_HOME:-unset}) is not the JDK on PATH ($(command -v java))."
+
+# A version mismatch explains local-vs-CI differences.
+printf 'scala-cli %s, %s, Scala %s, scalafmt %s\n' "$scala_cli_version" \
+  "$(printf '%s\n' "$java_version" | head -n 1)" "$(sed -n 's,^//> using scala ,,p' project.scala)" \
+  "$(sed -n 's/^version *= *//p' .scalafmt.conf)"
+
+# grep exits 1 when nothing matches and 2 when it cannot read a file. Only 1 may pass, or a file
+# that grep cannot open would pass every scan below.
+scan() {
+  status=0
+  grep -nE "$@" || status=$?
+  [ "$status" -le 1 ] || fail 'grep could not read the files above.'
+  [ "$status" -eq 0 ]
+}
+
+step 'Sources only in src/ and project.scala'
+# Scala CLI compiles only project.scala and src/ (see the last step). A source file anywhere else
+# would be skipped by the build and by the checks below, so it fails here instead.
+stray=$(find . -path './.*' -prune -o -type f \( -name '*.scala' -o -name '*.sc' -o -name '*.java' \) \
+  -print | grep -vE '^\./(project\.scala|src/.*\.scala)$' || true)
+if [ -n "$stray" ]; then
+  printf '%s\n' "$stray" >&2
+  fail 'Move the files above under src/main/scala or src/test/scala as .scala files.'
+fi
+# Scala CLI follows symlinks, but the scans below read only plain files, so a link could bring in
+# an unscanned `//> using` line. The scans split the file list on spaces, so names stay simple.
+odd=$(find project.scala src \( ! -type f ! -type d -o -name '*[!A-Za-z0-9_.-]*' \) -print) ||
+  fail 'Cannot list project.scala and src/.'
+if [ -n "$odd" ]; then
+  printf '%s\n' "$odd" >&2
+  fail 'Replace the symlinks above with plain files, and use only letters, digits, _ . - in names.'
+fi
+scala_files=$(find src -type f -name '*.scala')
+[ -n "$scala_files" ] || fail 'No .scala files under src/.'
+
+step 'Format rules fixed in .scalafmt.conf'
+# scalafmt settings such as project.excludePaths or a lower maxColumn would skip or loosen the
+# format check. The settings must be exactly these. Change them here and in .scalafmt.conf together.
+expected_fmt='version = 3.11.5
+runner.dialect = scala3
+maxColumn = 100
+rewrite.scala3.convertToNewSyntax = true
+rewrite.scala3.removeOptionalBraces = yes
+rewrite.rules = [RedundantBraces, RedundantParens, SortModifiers, Imports]
+rewrite.imports.sort = ascii
+rewrite.imports.groups = [["java\\..*", "javax\\..*"], ["scala\\..*"]]
+docstrings.style = Asterisk'
+if [ "$(grep -vE '^[[:space:]]*(#|$)' .scalafmt.conf)" != "$expected_fmt" ]; then
+  printf 'Expected these settings, besides comments:\n%s\n' "$expected_fmt" >&2
+  fail 'Restore .scalafmt.conf.'
+fi
+
+step 'Format (scalafmt, rules in .scalafmt.conf). Fix: mise exec -- scala-cli fmt project.scala src'
+scala-cli fmt --check project.scala src
+
+step 'Build settings only in project.scala, in their fixed shapes'
+# Scala CLI reads `//> using` lines from every source file, so one line in a source file could
+# add -Wconf or a dependency that review misses.
+# shellcheck disable=SC2086 # the step above keeps spaces out of file names
+if scan '^[[:space:]]*//>' $scala_files; then
+  fail 'Move the lines above to project.scala. Build settings live only there.'
+fi
+# project.scala holds only comments and these directive shapes. Each dependency or plugin is one
+# exact version on its own line: "latest", ranges, toolkits and extra repositories resolve to
+# different code over time.
+version='[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?'
+coord="[A-Za-z0-9_.-]+:{1,3}[A-Za-z0-9_.-]+:$version"
+shapes="^$|^//( .*)?$|^//> using scala $version$|^//> using jvm system$|^//> using options [^ ].*$|^//> using javaOpt [^ ].*$|^//> using (plugin|dep|test\\.dep) $coord$"
+if grep -nvE "$shapes" project.scala; then
+  fail 'project.scala allows only comments and: scala X.Y.Z, jvm system, options, javaOpt, and one plugin, dep or test.dep with an exact version per line.'
+fi
+# The compiler options must be exactly this set. Removing one would switch a check off, and adding
+# one (such as -Wconf, -nowarn or another -source) could weaken it. To change the set, change
+# project.scala and this list together, with the owner's approval.
+expected_options='-Werror -Wall -deprecation -feature -language:strictEquality -source:future
+-P:wartremover:traverser:org.wartremover.warts.Var
+-P:wartremover:traverser:org.wartremover.warts.MutableDataStructures
+-P:wartremover:traverser:org.wartremover.warts.Null
+-P:wartremover:traverser:org.wartremover.warts.Return
+-P:wartremover:traverser:org.wartremover.warts.While
+-P:wartremover:traverser:org.wartremover.warts.AsInstanceOf
+-P:wartremover:traverser:org.wartremover.warts.IsInstanceOf
+-P:wartremover:traverser:org.wartremover.warts.OptionPartial
+-P:wartremover:traverser:org.wartremover.warts.TryPartial
+-P:wartremover:traverser:org.wartremover.warts.EitherProjectionPartial
+-P:wartremover:traverser:org.wartremover.warts.IterableOps
+-P:wartremover:traverser:org.wartremover.warts.TripleQuestionMark
+-P:wartremover:traverser:org.wartremover.warts.ArrayToString
+-P:wartremover:traverser:org.wartremover.warts.StringPlusAny
+-P:wartremover:traverser:org.wartremover.warts.PlatformDefault
+-P:wartremover:traverser:org.wartremover.warts.Throw
+-P:wartremover:traverser:org.wartremover.warts.SeqApply
+-P:wartremover:traverser:org.wartremover.warts.SeqUpdated
+--sun-misc-unsafe-memory-access=allow'
+expected=$(printf '%s\n' "$expected_options" | tr ' ' '\n' | sort)
+actual=$(sed -nE 's,^//> using (options|javaOpt) ,,p' project.scala | tr ' ' '\n' | sort)
+if [ "$expected" != "$actual" ]; then
+  printf 'Options that differ (< expected by scripts/check, > in project.scala):\n' >&2
+  diff_in=$(mktemp)
+  printf '%s\n' "$expected" >"$diff_in"
+  printf '%s\n' "$actual" | diff "$diff_in" - >&2 || true
+  rm -f "$diff_in"
+  fail 'Restore the compiler options in project.scala.'
+fi
+
+step 'No switched-off checks'
+# Annotations, imports, givens and test helpers that silence the compiler, WartRemover, scalafmt
+# or munit, or that let a test pass without checking anything. The annotations are also caught
+# when written in full (@annotation.nowarn), in backticks (@`nowarn`) or imported under another
+# name ({nowarn as quiet}).
+w='[^A-Za-z0-9_]'
+# Universal equality: a CanEqual given for a top type, or an alias that hides one.
+top='(_root_\.)?(scala\.|java\.lang\.)?(Any|AnyRef|AnyVal|Matchable|Object)'
+switch_off="[@.{,] *\`?(nowarn|unchecked|unused)\`?($w|$)|SuppressWarnings|uncheckedVariance|uncheckedStable"
+switch_off="$switch_off|import .*language($w|$)|scalafmt: *\\{|format: *(off|on)"
+switch_off="$switch_off|CanEqual\\[([^]]*$w)?$top($w|$)|(^|$w)type .*= *$top($w|$)|canEqualAny"
+# munit: skipped, focused, flaky or expected-to-fail tests, tags (munit.Fail turns a failure into
+# a pass), and overrides that drop or rewrite the test list.
+switch_off="$switch_off|\\. *\`?(only|ignore|pending|flaky|fail)\`?($w|$)|(^|$w)(Ignore|Flaky)($w|$)"
+switch_off="$switch_off|IgnoreSuite|munitIgnore|munitFlakyOK|isCI|assume\\(|TestOptions|withTags"
+switch_off="$switch_off|\\.tag *\\(|(^|$w)Tag *\\(|munit(Tests|TestTransforms|SuiteTransforms|ValueTransforms)($w|$)"
+switch_off="$switch_off|(^|$w)def +(test|property)($w|$)"
+# ScalaCheck: fewer runs, or Properties objects that munit never runs.
+switch_off="$switch_off|scalaCheckTestParameters|withMinSuccessfulTests|org\\.scalacheck\\.Properties|extends +Properties"
+# shellcheck disable=SC2086 # the step above keeps spaces out of file names
+if scan "$switch_off" .scalafmt.conf $scala_files; then
+  fail 'The lines above switch off a check. Remove them and fix the cause.'
+fi
+
+step 'Build and test (warnings and WartRemover findings are errors, set in project.scala)'
+# --server=false: with the Bloop compile server, Scala CLI exits 0 and even runs the tests when
+# -Werror turns a warning into an error (VirtusLab/scala-cli#3735). Without it each run compiles
+# from scratch, so the result never depends on server state.
+# --suppress-outdated-dependency-warning: that hint asks Maven Central, so it changes by the day.
+# --require-tests with munit as the only framework: a run that finds no test suite fails.
+# Each suite ends with "Test run <suite> finished: F failed, I ignored, T total". A skipped test, or
+# a suite with no tests (munit counts it as ignored), fails here, though munit exits 0.
+test_log=$(mktemp)
+test_status=$(mktemp)
+trap 'rm -f "$test_log" "$test_status"' EXIT
+{
+  if scala-cli test project.scala src --server=false --suppress-outdated-dependency-warning \
+    --test-framework munit.Framework --require-tests 2>&1; then
+    echo 0 >"$test_status"
+  else
+    echo 1 >"$test_status"
+  fi
+} | tee "$test_log"
+[ "$(cat "$test_status")" = 0 ] || exit 1
+esc=$(printf '\033')
+skipped=$(sed "s/$esc\\[[0-9;]*m//g" "$test_log" | awk '
+  /^Test run .* finished: / { runs++; if ($0 !~ / 0 ignored, / || $0 ~ / 0 total/) print }
+  END { if (runs == 0) print "No test summary found." }
+')
+if [ -n "$skipped" ]; then
+  printf '%s\n' "$skipped" >&2
+  fail 'Every suite must run at least one test and ignore none.'
+fi
+
+printf '\nAll checks passed.\n'

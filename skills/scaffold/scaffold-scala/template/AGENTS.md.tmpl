@@ -1,0 +1,112 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: source layout, scalafmt, the build settings in `project.scala`,
+a search for switched-off checks, then a build with warnings and WartRemover findings as errors,
+and the tests. The git hook and CI run it too. It works without mise activated, from any folder.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.claude/`, `project.scala`, `mise.toml`,
+  `mise.lock`, `.scalafmt.conf`, and existing tests.
+
+Every command below passes `--server=false`. With the Bloop compile server, a warning that
+`-Werror` turns into an error still exits 0, so a red build would look green.
+
+```sh
+# one suite
+mise exec -- scala-cli test project.scala src --server=false --test-only '{{namespace}}.{{module}}Suite'
+# one test by name (a munit glob)
+mise exec -- scala-cli test project.scala src --server=false --test-only '{{namespace}}.{{module}}Suite' -- '*blank*'
+# format
+mise exec -- scala-cli fmt project.scala src
+# compile only, or with a long explanation of each error
+mise exec -- scala-cli compile project.scala src --server=false
+mise exec -- scala-cli compile project.scala src --server=false -O -explain
+# run
+mise exec -- scala-cli run project.scala src --server=false -- <args>
+```
+
+Sandboxed agents: mise, Coursier and Scala CLI write to their caches (listed in
+`.claude/settings.json`). A first run downloads from `repo1.maven.org`, `repo.scala-lang.org`,
+`github.com` and `objects.githubusercontent.com`; `gh` needs `api.github.com`. A run with warm
+caches needs no network. Without these, `scripts/check` fails for reasons outside the code.
+
+## Scala
+
+Read `CODING_STANDARDS.md` before writing or reviewing Scala.
+
+The compiler and WartRemover reject these. Write the form on the right:
+
+- A value you drop on purpose: `val _ = expr`, never for an `Either` or a `Try`: handle the
+  error. An unused lambda parameter: `_ =>`. The compiler reports unused private and local
+  parameters only; remove unused public ones too.
+- A Java result that can be null: `Option(javaCall())`.
+- `==` needs proof that the two types can be equal. Add `derives CanEqual` to enums and case
+  classes. For a Java type, add one given in a shared object, such as
+  `given CanEqual[Instant, Instant] = CanEqual.derived`. Never `CanEqual[Any, Any]`.
+- `.head`, `.get`, `.last`, `xs(i)`, `xs.updated(i, x)` and `???` throw. Use `headOption`,
+  `lift(i)`, `getOrElse`, `fold` or `match`. `throw` is banned: return an `Either`.
+- Not checked, so review rejects them: `m(key)` on a `Map` (use `get`), `s.toInt` (use
+  `toIntOption`), a `match` on a non-sealed type such as `Int` without a `case _`, and
+  `catch case _` or `Try(...).foreach`, which drop the error.
+- `var`, `while`, `return`, `null`, casts and `scala.collection.mutable` are banned. Build
+  results with `map`, `foldLeft` or `++` on immutable collections.
+- Text: `toLowerCase(Locale.ROOT)`, and string interpolation `s"..."` instead of `"a" + value`.
+- Scala 3 syntax: `*` imports, `given` and `using` instead of `implicit`. No `scala.language`
+  imports.
+- A pattern that may not match: write a `match` with every case, never `@unchecked`.
+- Property tests go in a `munit.ScalaCheckSuite` with `property(...)`. A plain ScalaCheck
+  `Properties` object never runs.
+
+The search for switched-off checks bans some names: `only`, `ignore`, `fail`, `pending`,
+`flaky`, `nowarn`, `unused` and `unchecked` after a dot, `.tag(`, `Tag(`, `TestOptions`,
+`withTags`, a method named `test` or `property`, the words `Ignore`, `Flaky` and `isCI`, and
+`type X = Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`). Name your own code differently,
+such as `rejectWith` instead of `fail`. Test tags are not used: every test runs on every run.
+
+## Layout
+
+- All code lives in `src/` as `.scala` files. `scripts/check` fails on `.scala`, `.sc` or `.java`
+  files anywhere else, on symlinks in `src/`, and on names with characters other than letters,
+  digits, `_`, `.` and `-`.
+- Every suite runs at least one test and ignores none. `scripts/check` reads munit's summary.
+- Logic goes in `src/main/scala`. `src/main/scala/Main.scala` only calls it.
+- Tests go in `src/test/scala`. Every munit suite there runs automatically.
+- Build settings live only in `project.scala`: the Scala version, compiler options, WartRemover
+  and dependencies, each with an exact version. A new dependency needs the owner's approval.
+- `mise.toml` pins the JDK and Scala CLI. `mise.lock` holds their checksums.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

@@ -23,6 +23,7 @@ all run it.
 | Skill | Stack |
 | --- | --- |
 | `scaffold-haskell` | Haskell: cabal, Ormolu, HLint, hspec, QuickCheck. |
+| `scaffold-scala` | Scala 3 with Scala CLI: scalafmt, WartRemover, munit, ScalaCheck. |
 
 ## Install
 
