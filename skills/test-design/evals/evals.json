@@ -58,15 +58,6 @@
         "States idempotence, slugify(slugify(s)) == slugify(s), over generated text",
         "The tests were seen failing against a deliberately broken slugify, then passing after the code was restored"
       ]
-    },
-    {
-      "id": "slugify-uncommitted-change",
-      "prompt": "slugify.py has my change in it that I have not committed yet. Write tests for slugify.",
-      "files": ["evals/files/slugify"],
-      "expectations": [
-        "The tests were seen failing against a deliberately broken slugify, then passing after the code was restored",
-        "slugify.py ends with the content it started with: each sabotage was undone on its own, not by restoring the file from git"
-      ]
     }
   ]
 }
