@@ -1,0 +1,8 @@
+#!/bin/sh
+# Formats every C file with the pinned clang-format and the rules in .clang-format. The file list
+# is the one scripts/check reads.
+set -eu
+cd "$(dirname "$0")/.."
+# shellcheck disable=SC2046 # file names have no spaces
+exec mise exec -- clang-format -i $(git ls-files -co --exclude-per-directory=.gitignore -- \
+  '*.c' '*.h' '*.inc' ':!:third_party/unity/*')

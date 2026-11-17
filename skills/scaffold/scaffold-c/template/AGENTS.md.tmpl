@@ -1,0 +1,92 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: pinned tool versions, clang-format, a search for switched-off
+checks (in the source and after macro expansion), a build with clang-tidy and warnings as errors,
+a check of the build's own compile commands that every project file gets the gates, and the tests
+with AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer. The git hook and CI run it
+too. It works from any folder and any shell: it starts itself under `mise exec`, and the tools see
+none of the caller's environment variables.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `cmake/gates.cmake`, `CMakePresets.json`, `.clang-tidy`, `.clang-format`,
+  `mise.toml`, `mise.lock`, `third_party/`, `.githooks/`, `.github/`, `.claude/`, and existing
+  tests.
+
+```sh
+mise exec -- cmake --build --preset dev                  # build after scripts/check ran once
+mise exec -- ctest --preset dev -R {{c_name}}_test       # one test executable by name
+scripts/format                                           # format every C file
+build/dev/{{c_name}}_property -max_total_time=60 -rss_limit_mb=0   # search longer, random seed
+build/dev/{{c_name}}_property <crash-file>               # replay a failing input
+```
+
+Sandboxed agents: mise writes to `~/.local/share/mise`, `~/.local/state/mise` and its cache
+(`~/Library/Caches/mise` on macOS, `~/.cache/mise` on Linux). The first `mise install` on a machine
+and `gh` need the network. Without these, `scripts/check` fails for reasons outside the code.
+
+## C
+
+Read `CODING_STANDARDS.md` before writing or reviewing C.
+
+- C23, no compiler extensions. Use `nullptr`, `bool`, `[[nodiscard]]` and `static_assert`.
+- Every public name starts with `{{c_name}}_` and is declared in a header under `include/`.
+  Everything else in a `.c` file is `static`.
+- No variable-length arrays. Every implicit narrowing or sign change is an error: check the range,
+  then convert explicitly.
+- Check the result of every library call that can fail (`fclose`, `fwrite`, `snprintf`, ...).
+  Use the result of every `{{c_name}}_` function, or drop it on purpose with `(void)`.
+- Braces on every branch (clang-format adds them). No `#pragma` except `#pragma once`.
+- Use only headers from the C library, the OS or a declared dependency. The check rejects headers
+  that come from the compiler's own folder.
+
+## Layout
+
+- Logic goes in the library: `include/{{c_name}}.h` and `src/`. `app/main.c` only calls it.
+- `test/` holds Unity example tests and libFuzzer property tests. Tests are `static` functions that
+  `main` runs with `RUN_TEST`. A test that `main` never runs fails the build as an unused function.
+- Register tests in `CMakeLists.txt` with `add_unity_test(name file libs...)` or
+  `add_property_test(name file libs...)`. The check rejects a plain `add_test`.
+- Every new `.c` file goes into a target in `CMakeLists.txt`, after
+  `include(cmake/gates.cmake)`, that the default build makes. Include only `.h` and `.inc` files
+  that git tracks. New dependencies need the owner's approval.
+- A Unity test passes only when it exits 0 and ends with Unity's summary of passed tests:
+  `return UNITY_END();` ends `main`.
+- A property test runs a fixed seed and run count in `scripts/check`. CI searches longer with a
+  random seed every week (`.github/workflows/weekly.yml`). A failing input becomes an example test.
+- `clangd` reads `build/dev/compile_commands.json`. Run `scripts/check` once to create it.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

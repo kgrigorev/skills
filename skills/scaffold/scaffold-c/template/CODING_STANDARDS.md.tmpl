@@ -1,0 +1,50 @@
+# Coding standards
+
+The reviewer applies these to every C change. `scripts/check` already enforces formatting,
+warnings, clang-tidy, sanitizers and the banned suppressions, so they are not repeated here.
+
+The reader is {{reader}}. Every rule serves that reader.
+
+## Memory and ownership
+
+- The comment of every function that allocates, frees or keeps a pointer says who owns the memory
+  and who frees it.
+- A buffer travels with its capacity: `char *out, size_t capacity`. Never assume a size.
+- `size_t` for sizes and indexes.
+- No mutable global state. Pass what a function needs.
+- Recursion only with a bounded depth, stated in the comment.
+
+## Errors
+
+- Expected failures are return values: a status `enum` plus an out-parameter. On failure the
+  out-parameter stays unchanged.
+- `abort()` is for broken invariants only, never for bad input.
+
+## Comments
+
+A reader can follow a file from top to bottom by its comments alone.
+
+- Every file starts with a `///` comment that says what it is for.
+- Every public function has a `///` comment in its header: what it does, its inputs, its result and
+  who owns the memory.
+- Explain a C construct briefly the first time a file uses it, if the reader may not know it. For
+  example a compound literal or `restrict`. One short sentence.
+- No filler, no praise of the code, no restating the code in words.
+
+## Functions, modules and names
+
+- Functions are short, do one thing and read top to bottom. Pull out a named `static` helper
+  instead of nesting.
+- One module is one `.h` under `include/` plus one `.c` under `src/`.
+- Names say what a value is: `capacity`, `length`. Single letters only for loop indexes.
+- Use the same name for the same concept everywhere: in code, tests and docs.
+
+## Dependencies
+
+A new library, vendored or found by CMake, needs the owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Test names describe behaviour.
+- A contract that holds for every input, such as a round trip or a bound, gets a property test.

@@ -1,0 +1,7 @@
+# Formatting rules. scripts/check fails on any C file that clang-format would change.
+# Fix with scripts/format. Agents: change this file only with the owner's approval.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+# Braces around every if/else/for/while body, so a second line never falls outside the branch.
+InsertBraces: true

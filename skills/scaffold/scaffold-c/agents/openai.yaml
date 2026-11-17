@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold C"
+  short_description: "New C project with agent rules and quality gates"

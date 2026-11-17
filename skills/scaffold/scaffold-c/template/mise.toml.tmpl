@@ -1,0 +1,19 @@
+# Pins every tool scripts/check runs. CI installs the same versions from this file and mise.lock.
+# Agents: change it only with the owner's approval.
+# The compiler, clang-tidy, clang-format and clangd come from one LLVM release, so their diagnostics
+# agree. conda-forge ships that release for macOS and Linux, with its own Linux sysroot and
+# sanitizer runtimes. mise.lock pins every package by URL and checksum.
+# To bump a tool: change the version here, run `mise lock`, then `mise install`.
+min_version = "2026.11.8"
+
+[tools]
+"conda:clang" = "23.1.5"
+"conda:clang-tools" = "23.1.5"
+"conda:clang-format" = "23.1.5"
+cmake = "4.5.0"
+ninja = "1.13.2"
+
+[settings]
+lockfile = true
+# Install only what mise.lock lists. Without it, a version change here quietly rewrites the lock.
+locked = true

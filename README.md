@@ -29,6 +29,7 @@ all run it.
 | `scaffold-typescript` | TypeScript on Node with pnpm: tsc, oxlint, oxfmt, vitest, fast-check, knip. |
 | `scaffold-python` | Python with uv: ruff, mypy, pytest, Hypothesis, branch coverage. |
 | `scaffold-cpp` | C++ with CMake and pinned LLVM: clang-tidy, sanitizers, GoogleTest, rapidcheck. |
+| `scaffold-c` | C23 with CMake and pinned LLVM: clang-tidy, sanitizers, Unity, libFuzzer. |
 
 ## Install
 

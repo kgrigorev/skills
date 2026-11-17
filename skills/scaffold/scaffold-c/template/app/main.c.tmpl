@@ -1,0 +1,13 @@
+/// The {{package}} program. Keep it thin: the work happens in the library.
+#include "{{c_name}}.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    char banner[128];
+    if ({{c_name}}_banner(banner, sizeof banner) >= sizeof banner) {
+        return EXIT_FAILURE;
+    }
+    return puts(banner) == EOF ? EXIT_FAILURE : EXIT_SUCCESS;
+}

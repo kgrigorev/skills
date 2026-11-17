@@ -1,0 +1,29 @@
+/// Example tests for the {{package}} library.
+#include "{{c_name}}.h"
+
+#include <string.h>
+#include <unity.h>
+
+// Unity calls these around every test.
+void setUp(void) {}
+void tearDown(void) {}
+
+// Tests are static: one that main never runs is an unused function, which fails the build.
+static void banner_names_the_program(void) {
+    char banner[128];
+    TEST_ASSERT_LESS_THAN_size_t(sizeof banner, {{c_name}}_banner(banner, sizeof banner));
+    TEST_ASSERT_EQUAL_STRING_LEN("{{package}}", banner, strlen("{{package}}"));
+}
+
+static void banner_is_cut_to_fit_and_terminated(void) {
+    char banner[4];
+    TEST_ASSERT_GREATER_OR_EQUAL_size_t(sizeof banner, {{c_name}}_banner(banner, sizeof banner));
+    TEST_ASSERT_EQUAL_size_t(sizeof banner - 1, strlen(banner));
+}
+
+int main(void) {
+    UNITY_BEGIN();
+    RUN_TEST(banner_names_the_program);
+    RUN_TEST(banner_is_cut_to_fit_and_terminated);
+    return UNITY_END();
+}

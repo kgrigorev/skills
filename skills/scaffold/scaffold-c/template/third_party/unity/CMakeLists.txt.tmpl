@@ -1,0 +1,6 @@
+# Unity 2.7.0 (https://github.com/ThrowTheSwitch/Unity, MIT, see LICENSE.txt): src/unity.c,
+# unity.h and unity_internals.h, unchanged. Kept in the repository so builds need no network.
+# It is built without the project's gates, and SYSTEM keeps its headers out of warnings and
+# clang-tidy. Agents: change this folder only with the owner's approval.
+add_library(unity STATIC unity.c)
+target_include_directories(unity SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
