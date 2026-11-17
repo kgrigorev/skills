@@ -1,0 +1,62 @@
+# Coding standards
+
+The reviewer applies these to every Rust change. `scripts/check` already enforces formatting,
+warnings, the Clippy lints in `Cargo.toml`, doc comments on public items and the dependency
+rules, so they are not repeated here.
+
+The reader is {{reader}}. Every rule serves that reader.
+
+## Plain Rust
+
+Use structs, enums, `match`, `Option`, `Result`, iterators and the standard traits, plus the
+approved extras below. These need the owner's approval first: `macro_rules!` and procedural
+macros, `async`, trait objects and new generic traits, explicit lifetimes beyond what the
+compiler infers, `Rc`, `RefCell` and other interior mutability. `unsafe` is forbidden by the
+checks. Once approved, an extra goes into the list.
+
+Approved extras:
+
+- None.
+
+Deriving or implementing standard traits is fine, for example `Debug` or `Display`.
+
+## Comments
+
+A reader can follow a module from top to bottom by its comments alone.
+
+- Every module starts with a `//!` comment that says what the module is for.
+- Every item has a `///` comment that says what it is for and why.
+- Explain a Rust construct briefly the first time a module uses it, if the reader may not know
+  it. For example `?`, `impl Trait`, a lifetime or `iter().map()`. One short sentence, sometimes
+  with the equivalent in a language the reader knows.
+- No filler, no praise of the code, no restating the code in words.
+
+## Errors
+
+- Expected failures are values: return `Result<T, E>` with the module's error enum. The enum
+  implements `Display` and `std::error::Error`.
+- A panic is for a bug only, never for bad input.
+- `main` reports the error and exits non-zero: `fn main() -> ExitCode` or `-> Result<...>`.
+
+## Ownership
+
+- Take `&str` and `&[T]` as arguments, return owned values.
+- No `.clone()` just to quiet the borrow checker. Restructure the code instead.
+
+## Functions and names
+
+- Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
+  nesting.
+- Names say what a value is: `config`, `line_count`. Single letters only in tiny closures.
+- Use the same name for the same concept everywhere: in code, tests and docs.
+
+## Dependencies
+
+A new entry or feature in `[dependencies]` or `[dev-dependencies]` in `Cargo.toml` needs the
+owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Test names describe behaviour, without a `test_` prefix.
+- A rule that holds for all inputs becomes a proptest property.

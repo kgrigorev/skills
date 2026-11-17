@@ -1,0 +1,17 @@
+# Tool versions for {{package}}. scripts/check and CI run exactly these.
+# Agents: change this file only with the owner's approval.
+# To bump a tool: change its version, run `mise install`, commit mise.lock with it.
+min_version = "{{mise_version}}"
+
+[settings]
+# Read the Rust version from rust-toolchain.toml instead of repeating it here. Without this,
+# a `rust` entry in someone's global mise config would override the project's pin.
+idiomatic_version_file_enable_tools = ["rust"]
+# Record each tool's download URL and checksum per platform in mise.lock.
+lockfile = true
+
+[tools]
+# Release binaries, not `cargo install`: no compile step, and mise.lock holds the checksums.
+"github:nextest-rs/nextest" = { version = "{{nextest_version}}", version_prefix = "cargo-nextest-" }
+"aqua:EmbarkStudios/cargo-deny" = "{{deny_version}}"
+"github:Boshen/cargo-shear" = "{{shear_version}}"

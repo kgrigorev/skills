@@ -1,0 +1,8 @@
+# The Rust version for this project. rustup, mise, editors, scripts/check and CI all read it.
+# rustfmt and Clippy come with it, so their versions are pinned too.
+# To bump: change channel and rust-version in Cargo.toml together, run `mise install`,
+# then scripts/check. Agents: change this file only with the owner's approval.
+[toolchain]
+channel = "{{rust_version}}"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

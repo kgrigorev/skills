@@ -1,0 +1,65 @@
+name: scaffold-rust
+
+# Renders the scaffold-rust template into a sample project and runs the project's
+# scripts/check. A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-rust/**
+      - .github/workflows/scaffold-rust.yml
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-rust/**
+      - .github/workflows/scaffold-rust.yml
+  # The scaffold takes the newest proptest from crates.io, and the pinned Clippy can meet new
+  # crate versions. A weekly run catches a template that breaks without a change here.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The scaffold reads these instead of asking mise for the newest versions. Keep them equal to
+  # the versions you scaffold with, so CI tests the project you would get.
+  MISE_VERSION: "2026.11.8"
+  RUST_VERSION: "1.100.0"
+  NEXTEST_VERSION: "0.9.152"
+  DENY_VERSION: "0.21.0"
+  SHEAR_VERSION: "1.14.1"
+  ACTIONLINT_VERSION: "1.7.12"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scaffold-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs mise only. The scaffold installs the project's tools from its mise.toml.
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold/scaffold-rust/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to Rust"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # workflow template would give every new project a red CI.
+      - name: Lint the sample project's workflows
+        run: |
+          mise exec "actionlint@$ACTIONLINT_VERSION" -- actionlint "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"

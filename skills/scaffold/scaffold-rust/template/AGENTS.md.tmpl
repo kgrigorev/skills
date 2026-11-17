@@ -1,0 +1,87 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: a check of the settings files, a search for switched-off
+checks, rustfmt, Clippy, the dependency rules, a build with warnings as errors, and the tests,
+which must all run. The git hook and CI run it too. It runs under `mise exec` on its own, so it
+needs no prefix.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.claude/`, `rust-toolchain.toml`, `mise.toml`,
+  `mise.lock`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.config/nextest.toml`, the `[lints]`
+  table and `rust-version` in `Cargo.toml`, and existing tests.
+- `scripts/check` rejects other settings: a table in `Cargo.toml` other than `[package]`, the
+  dependency tables, `[features]` and `[lints]` (so no `[profile]`, `[workspace]`, `[[test]]`
+  or path dependency), a `build.rs`, another mise or rustfmt config file, and `.cargo/config.toml`.
+
+```sh
+mise exec -- cargo nextest run banner                         # tests whose name contains "banner"
+mise exec -- cargo test --doc word_count                      # one doc example
+mise exec -- cargo fmt                                        # format
+mise exec -- cargo clippy --fix --allow-dirty --all-targets   # apply Clippy's safe fixes
+```
+
+Sandboxed agents: cargo writes to `~/.cargo`, rustup to `~/.rustup`, and mise to
+`~/.local/share/mise`, `~/.local/state/mise` and its cache (`~/Library/Caches/mise` on macOS,
+`~/.cache/mise` on Linux). The first run needs the network (crates.io, static.rust-lang.org,
+GitHub release downloads), and `gh` always does. Without these, `scripts/check` fails for reasons
+outside the code.
+
+## Rust
+
+Read `CODING_STANDARDS.md` before writing or reviewing Rust.
+
+The checks enforce the `[lints]` list in `Cargo.toml`: no `unsafe`; no `unwrap`, `expect`,
+`panic!`, `unreachable!`, `todo!`, `dbg!` or `process::exit` outside tests; a doc comment on every
+public item and on each crate. `#[allow]` and `#[expect]` are rejected, even with a reason: fix the
+cause, or ask the owner for an exception in `Cargo.toml`. Also rejected: `#[doc(hidden)]`,
+`_ = f();`, proptest settings in the code, and doc examples marked `ignore`, `no_run` or
+`should_panic`. Every `#[test]` function must run: a cfg that hides one turns the check red.
+Prefix commands with `mise exec --` when `cargo nextest` is not found.
+
+## Layout
+
+- Logic goes in the library: `src/lib.rs` and modules `src/<name>.rs`. `src/main.rs` only calls
+  it.
+- Tests of private functions go in a `#[cfg(test)] mod tests` at the end of their module. Tests of
+  the public API go in `tests/`, one file per area.
+- Commit `Cargo.lock`, and any `proptest-regressions/` file a failing property writes.
+- `rust-toolchain.toml` names the Rust version. Bump it together with `rust-version` in
+  `Cargo.toml`.
+- After changing `mise.toml`, run `mise install` and commit `mise.lock`.
+- One crate until the owner approves a workspace.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

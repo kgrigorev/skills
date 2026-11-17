@@ -1,0 +1,41 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh), then run in the repository:
+
+```sh
+brew install mise gh                              # or another installer from mise.jdx.dev
+echo 'eval "$(mise activate zsh)"' >> ~/.zshrc    # optional: the tools on PATH in your shell
+mise trust && mise install                        # Rust, cargo-nextest, cargo-deny, cargo-shear
+mise exec -- rustup component add rust-analyzer   # editor support for the pinned Rust
+git config core.hooksPath .githooks
+gh extension install github/gh-stack              # optional: stacked PRs
+```
+
+mise installs the tools at the versions in `mise.toml`, with the checksums in `mise.lock`. It
+installs Rust through rustup, at the version in `rust-toolchain.toml`. rustfmt and Clippy come
+with that Rust. CI installs the same versions from the same files. The git hook runs the checks
+before each push. `gh stack` is optional: it helps to open and update stacked PRs.
+
+Without mise, rustup still reads `rust-toolchain.toml`. Install cargo-nextest, cargo-deny and
+cargo-shear at the versions in `mise.toml` yourself, for example with `cargo binstall`.
+
+## Commands
+
+```sh
+scripts/check                       # every quality gate: format, lint, dependencies, build, test
+mise exec -- cargo run
+mise exec -- cargo nextest run      # the tests, without the doc examples
+mise exec -- cargo test --doc       # the doc examples
+mise exec -- cargo fmt
+mise exec -- cargo build --release
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too.
+`.github/workflows/scheduled.yml` runs two more checks each week that never block a merge: the
+RustSec security advisories, and the property tests with random inputs.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

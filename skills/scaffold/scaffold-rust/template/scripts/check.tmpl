@@ -1,0 +1,269 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+# mise.toml pins the tools and makes mise read the Rust version from rust-toolchain.toml.
+# Run under `mise exec`, so the pinned versions apply in every shell, also one where mise is
+# not activated, such as an agent's. MISE_ENV would load an extra config file, so drop it.
+if [ -z "${CHECK_UNDER_MISE:-}" ]; then
+  if ! command -v mise >/dev/null 2>&1; then
+    echo 'mise is not on PATH. Install it as README.md says.' >&2
+    exit 1
+  fi
+  unset MISE_ENV
+  # mise also reads .mise.toml, .config/mise.toml, .tool-versions and other files. One of them
+  # can set variables or put a fake cargo-clippy first on PATH, so only mise.toml and
+  # rust-toolchain.toml may configure mise in this project. Checked before mise runs any tool.
+  # On its own line, so a failure (such as an untrusted mise.toml) stops the check.
+  configs=$(mise config ls --json)
+  extra=$(printf '%s\n' "$configs" | sed -n 's/^ *"path": "\(.*\)",\{0,1\}$/\1/p' |
+    awk -v root="$(pwd -P)" 'index($0, root "/") == 1 &&
+      $0 != root "/mise.toml" && $0 != root "/rust-toolchain.toml"')
+  if [ -n "$extra" ]; then
+    printf '%s\n' "$extra" >&2
+    echo 'Remove the mise config files above. Tool settings go in mise.toml.' >&2
+    exit 1
+  fi
+  CHECK_UNDER_MISE=1 exec mise exec -- scripts/check "$@"
+fi
+
+# The same commit must give the same result on every machine. Cargo, rustc, Clippy, proptest
+# and nextest read many variables that change flags, wrap the compiler, alias commands, change
+# profiles or test inputs. Drop them all. Keep only where files go, proxies and terminal output.
+for name in $(env | sed -n 's/^\([A-Za-z0-9_]*\)=.*/\1/p' |
+  grep -E '^(CARGO_|RUSTC|RUSTDOC|RUSTFLAGS|CLIPPY_|PROPTEST_|NEXTEST_)' |
+  grep -vE '^(CARGO_HOME|CARGO_TARGET_DIR|CARGO_TERM_[A-Z_]+|CARGO_HTTP_[A-Z_]+|CARGO_NET_[A-Z_]+)$'); do
+  unset "$name"
+done
+# Empty compiler flags. Set, they also win over rustflags in any .cargo/config.toml.
+export CARGO_ENCODED_RUSTFLAGS='' CARGO_ENCODED_RUSTDOCFLAGS=''
+# Every lint warning in this package is an error. Set here and not in RUSTFLAGS: cargo then
+# reuses the builds of a plain `cargo build` or `cargo clippy` instead of starting over.
+export CARGO_BUILD_WARNINGS=deny
+# Property tests start from a fixed seed, so every run tries the same cases.
+export PROPTEST_RNG_SEED=1
+
+step() { printf '\n==> %s\n' "$1"; }
+# Usage: reject <message>. Prints the lines read from stdin and the message, and fails, when
+# stdin is not empty.
+reject() {
+  hits=$(cat)
+  [ -n "$hits" ] || return 0
+  printf '%s\n%s\n' "$hits" "$1" >&2
+  exit 1
+}
+
+# A version mismatch explains local-vs-CI differences.
+channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+if [ "$(rustc --version | awk '{ print $2 }')" != "$channel" ]; then
+  echo "rustc is not $channel, the version in rust-toolchain.toml. Is RUSTUP_TOOLCHAIN set?" >&2
+  echo 'See which toolchain runs: mise exec -- rustup show active-toolchain' >&2
+  exit 1
+fi
+printf '%s, %s, %s,\n%s, %s, cargo-shear %s, mise %s\n' "$(rustc --version)" \
+  "$(cargo-fmt fmt --version)" "$(cargo-clippy clippy --version)" \
+  "$(cargo-nextest nextest --version | head -n 1)" "$(cargo-deny deny --version)" \
+  "$(cargo-shear shear --version | sed -n 's/^Version: //p')" "$(mise --version | awk '{ print $1 }')"
+
+step 'Settings files (only the settings the checks expect)'
+# Files that can change flags, aliases, the build or the Rust version. build.rs can set a cfg
+# that switches tests off.
+for file in .cargo/config.toml .cargo/config rust-toolchain .clippy.toml build.rs; do
+  if [ -e "$file" ]; then
+    echo "Remove $file: it can override the settings the checks rely on." >&2
+    exit 1
+  fi
+done
+# rustfmt reads the rustfmt.toml nearest to each file, then the folders above the project, then
+# the user's config folder. The empty rustfmt.toml at the root stops that search, so formatting
+# is rustfmt's defaults on every machine. A nested one would switch formatting off for a folder.
+find . \( -path ./target -o -path ./.git \) -prune -o \
+  \( -name rustfmt.toml -o -name .rustfmt.toml \) ! -path ./rustfmt.toml -print |
+  reject 'Remove these rustfmt files. Formatting is rustfmt defaults.'
+[ -f rustfmt.toml ] || reject 'Restore the empty rustfmt.toml at the root.' <<EOF
+rustfmt.toml is missing.
+EOF
+grep -nv '^[[:space:]]*\(#.*\)\{0,1\}$' rustfmt.toml /dev/null |
+  reject 'rustfmt.toml holds comments only. Formatting is rustfmt defaults.'
+
+# The tables and keys each TOML file below may hold. Everything else is rejected, such as a
+# [profile] that turns off overflow checks, a build script, a [[test]] target that never runs,
+# or a nextest wrapper script. The files must use plain TOML: no escapes, no multi-line strings
+# and no quoted keys, so a key always reads as itself.
+# Usage: toml_shape <file> <allowed>, where <allowed> has one line per table: the header and an
+# ERE for its keys. Prints each line that does not fit.
+toml_shape() {
+  allowed=$2 perl -ne '
+    BEGIN {
+      for (split /\n/, $ENV{allowed}) { my ($h, $k) = split / +/; $keys{$h} = $k }
+      $table = ""; $depth = 0;
+    }
+    sub bad { print "  $ARGV line $.: $_[0]: $line\n" }
+    chomp; $line = $_;
+    ($code = $line) =~ s/"[^"]*"|\x27[^\x27]*\x27/S/g;
+    $code =~ s/#.*//;
+    if ($line =~ /\\|"""|\x27\x27\x27/) { bad("escape or multi-line string") }
+    elsif ($depth > 0) { }
+    elsif ($code =~ /^\s*$/) { next }
+    elsif ($code =~ /^\s*\[/) {
+      ($table = $code) =~ s/^\s+|\s+$//g;
+      bad("table not allowed") unless defined $keys{$table};
+      next;
+    }
+    elsif ($code !~ /^\s*([A-Za-z0-9_-]+)\s*[.=]/) { bad("not a plain key") }
+    elsif (!defined $keys{$table}) { bad("key outside a table") if $table eq "" }
+    elsif ($1 !~ /^(?:$keys{$table})$/) { bad("key not allowed in " . ($table || "the top level")) }
+    $depth += () = $code =~ /[[{]/g;
+    $depth -= () = $code =~ /[]}]/g;
+  ' "$1"
+}
+package_keys='name|version|edition|rust-version|description|publish|license|authors|readme'
+package_keys="$package_keys|repository|homepage|keywords|categories"
+lint_keys='[a-z0-9_]+'
+toml_shape Cargo.toml "[package] $package_keys
+[dependencies] [A-Za-z0-9_-]+
+[dev-dependencies] [A-Za-z0-9_-]+
+[features] [A-Za-z0-9_-]+
+[lints.rust] $lint_keys
+[lints.clippy] $lint_keys
+[lints.rustdoc] $lint_keys" |
+  reject 'Cargo.toml holds only package metadata, dependencies, [features] and [lints].
+Remove the lines above, or ask the owner.'
+grep -nE "=[[:space:]]*['\"]allow['\"]" Cargo.toml |
+  reject 'A lint may not be switched off in Cargo.toml. Fix the cause.'
+nextest_keys='slow-timeout|leak-timeout|test-threads|threads-required|fail-fast'
+nextest_keys="$nextest_keys|status-level|final-status-level|failure-output|success-output"
+toml_shape .config/nextest.toml "[profile.default] $nextest_keys
+[profile.explore] $nextest_keys" |
+  reject '.config/nextest.toml holds only timeouts and output settings. Retries, filters and
+scripts would hide tests.'
+
+# Cargo also reads .cargo/config.toml in every folder above this one and in CARGO_HOME.
+# Settings there that change the compiler, the test environment, the build profile or the test
+# runner would make this machine's result differ from CI's. Aliases, linkers and network
+# settings are fine: the direct plugin calls and the empty rustflags above make them harmless.
+# Quotes are dropped before the match, so a quoted key matches too.
+cargo_config_off='^[[:space:]]*(\[+[[:space:]]*(env|profile|unstable)[].[:space:]]|(env|profile|unstable)[[:space:]]*[.=])|(^|[[:space:]{,.])(rustc|rustc-wrapper|rustc-workspace-wrapper|rustdoc|target|runner)[[:space:]]*=|\\[uU]'
+# Prints each matching line of a cargo config file with its line number and its [section].
+config_hits() {
+  pattern=$cargo_config_off awk '
+    /^[[:space:]]*\[/ {
+      section = $0
+      sub(/^[[:space:]]*/, "", section)
+      sub(/[[:space:]]*(#.*)?$/, "", section)
+    }
+    {
+      line = $0
+      gsub(/["\047]/, "", line)
+    }
+    line ~ ENVIRON["pattern"] {
+      printf "  line %d, section %s: %s\n", NR, (section == "" ? "(top level)" : section), $0
+    }' "$1"
+}
+reject_config() {
+  [ -f "$1" ] || return 0
+  hits=$(config_hits "$1")
+  [ -n "$hits" ] || return 0
+  {
+    echo "Fix $1. Cargo reads it for this project too, and these settings change how cargo"
+    echo 'builds or runs tests, so the result here would differ from CI:'
+    printf '%s\n' "$hits"
+    echo "Delete these sections or keys from $1, or move them into the .cargo/config.toml of"
+    echo 'the projects that need them. Rejected there: [env], [profile], [unstable], runner,'
+    echo 'rustc, rustdoc, the rustc wrappers, build.target and \u escapes. Aliases and linkers'
+    echo 'are fine.'
+  } >&2
+  exit 1
+}
+reject_config "${CARGO_HOME:-$HOME/.cargo}/config.toml"
+reject_config "${CARGO_HOME:-$HOME/.cargo}/config"
+dir=$(pwd -P)
+while [ "$dir" != / ]; do
+  dir=$(dirname "$dir")
+  reject_config "$dir/.cargo/config.toml"
+  reject_config "$dir/.cargo/config"
+done
+
+step 'No switched-off checks in the code'
+# Each file is read whole, so an attribute split over lines matches too.
+# - #[allow] and #[expect], also inside #[cfg_attr]: they switch a lint off.
+# - An attribute that a macro builds from its input, such as #[$level(...)].
+# - #[rustfmt::skip], and doc examples marked ignore, no_run or should_panic.
+# - #[path] and include!, which pull in code from outside the scanned .rs files.
+# - #[doc(hidden)], which hides a public item from the missing_docs lint.
+# - proptest settings in the code, such as with_cases(0). The weekly job sets the cases.
+# - `_ = f();`, which throws away a Result.
+rust_off=$(cat <<'EOF'
+\#\s*!?\s*\[\s*(?:cfg_attr\b[^\]]*?\b)?(?:r\#)?(?:allow|expect)\s*\(
+|\#\s*!?\s*\[[^\]]*\$
+|rustfmt(?:::|_)skip
+|```[^`\n]*\b(?:ignore|no_run|should_panic)\b
+|\#\s*!?\s*\[\s*path\s*=
+|\binclude\s*!
+|\bdoc\s*\(\s*hidden\b
+|\b(?:proptest_config|ProptestConfig|TestRunner|test_runner)\b
+|^[ \t]*_\s*=(?![=>])
+EOF
+)
+find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -print |
+  pattern=$rust_off perl -ne '
+    BEGIN { $re = $ENV{pattern}; $re =~ s/\n//g }
+    chomp; $file = $_;
+    open my $in, "<", $file or die "$file: $!\n";
+    local $/; $text = <$in>;
+    while ($text =~ /$re/mg) {
+      $line = 1 + (substr($text, 0, $-[0]) =~ tr/\n//);
+      ($hit) = substr($text, $-[0]) =~ /^([^\n]*)/;
+      print "$file:$line: $hit\n";
+    }' |
+  reject 'The lines above switch off a check. Remove them and fix the cause.'
+
+# Download every crate Cargo.lock names, for every platform, checked against its checksum.
+# Nothing is downloaded when they are already there. The steps below then run --frozen:
+# no network, and Cargo.lock cannot change.
+step 'Crates (Cargo.lock must match Cargo.toml. Fix: cargo update --workspace)'
+cargo fetch --locked --quiet
+
+# The cargo plugins are called directly (cargo-clippy, not cargo clippy), so an alias in a
+# config file outside this project cannot replace them.
+step 'Format (rustfmt defaults). Fix: cargo fmt'
+cargo-fmt fmt --all --check
+
+step 'Lint (Clippy, levels in Cargo.toml [lints] and clippy.toml)'
+cargo-clippy clippy --frozen --workspace --all-targets --all-features
+
+step 'Dependencies (cargo-deny: rules in deny.toml; cargo-shear: unused dependencies)'
+# One package: a path dependency or a workspace member is a second crate outside the lints.
+cargo metadata --frozen --format-version 1 --all-features |
+  grep -o '"path+file://[^"#]*' | sort -u | sed 's|^"path+file://||' |
+  grep -vx "$(pwd -P)" |
+  reject 'These local crates are outside the lints. Move the code into this crate.'
+cargo-deny deny --frozen check bans licenses sources
+cargo-shear shear --frozen --deny-warnings
+
+step 'Build (warnings are errors, docs included)'
+cargo build --frozen --workspace --all-targets --all-features
+cargo doc --frozen --workspace --no-deps --all-features --document-private-items
+
+step 'Test (ignored tests run too)'
+cargo-nextest nextest run --frozen --workspace --all-features --run-ignored all --no-tests fail
+# Every #[test] function in the code must run. One that nextest does not list is switched off,
+# for example by a cfg that is never true or a test target that cargo skips. Comments are
+# dropped first. A test that a macro writes is not matched, so it is not checked.
+listed=$(cargo-nextest nextest list --frozen --workspace --all-features --run-ignored all \
+  --message-format oneline 2>/dev/null | sed 's/.*[ :]//')
+find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -print |
+  listed=$listed perl -ne '
+    BEGIN { $listed{$_}++ for split /\n/, $ENV{listed} }
+    chomp; $file = $_;
+    open my $in, "<", $file or die "$file: $!\n";
+    local $/; ($text = <$in>) =~ s{//[^\n]*}{}g;
+    while ($text =~ /#\s*\[\s*test\s*\]\s*(?:#\s*\[[^\]]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)/g) {
+      print "$file: $1\n" if --$listed{$1} < 0;
+    }' |
+  reject 'These tests never run. Find the cfg or Cargo.toml setting that hides them.'
+cargo test --frozen --workspace --all-features --doc
+
+printf '\nAll checks passed.\n'

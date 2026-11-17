@@ -1,0 +1,4 @@
+# Comments only. rustfmt reads the rustfmt.toml nearest to each file, then the folders above
+# the project, then the user's config folder. This file stops that search here, so formatting
+# is rustfmt's defaults on every machine. Edition 2024 in Cargo.toml sets the style edition.
+# scripts/check rejects any setting here and any other rustfmt.toml in the project.

@@ -1,0 +1,90 @@
+#!/bin/sh
+# Renders the Rust project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  a crate name, lower case, words joined by "-", for example "my-tool".
+#             Rust code names the crate with "_" instead: my_tool.
+#   synopsis: one line for Cargo.toml, for example "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to Rust". AGENTS.md and CODING_STANDARDS.md use it.
+# Needs mise and git. mise installs Rust and the cargo plugins.
+# The tool versions are the newest that mise offers, skipping releases younger than a day.
+# Set RUST_VERSION, NEXTEST_VERSION, DENY_VERSION or SHEAR_VERSION to pin one instead.
+#
+# The script never overwrites a file. It installs the tools, adds proptest with `cargo add`,
+# formats the code, runs `git init` when needed and points git at the project's hooks.
+# It does not commit.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+# shellcheck source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+require_hidden "$template"
+check_inputs "$package" "$synopsis" "$reader"
+require_tools mise git
+
+# my-tool -> my_tool, the name Rust code uses for the crate.
+crate=$(printf '%s' "$package" | tr - _)
+
+# --- Toolchain versions -------------------------------------------------------------------------
+
+# Usage: version <name> <value>
+version() {
+  printf '%s' "$2" | grep -Eqx '[0-9]+(\.[0-9]+)+' ||
+    fail "cannot find the $1 version (got \"$2\"). Check the network and \`mise latest $1\`."
+  printf '%s' "$2"
+}
+# A release younger than a day may still get a quick fix, or miss from the mise registries.
+latest() { mise latest --minimum-release-age 1d "$1"; }
+rust_version=$(version rust "${RUST_VERSION:-$(latest rust)}")
+rust_minor=${rust_version%.*}
+nextest_version=$(version cargo-nextest \
+  "${NEXTEST_VERSION:-$(latest 'github:nextest-rs/nextest[version_prefix=cargo-nextest-]')}")
+deny_version=$(version cargo-deny "${DENY_VERSION:-$(latest aqua:EmbarkStudios/cargo-deny)}")
+shear_version=$(version cargo-shear "${SHEAR_VERSION:-$(latest github:Boshen/cargo-shear)}")
+mise_version=$(version mise "$(mise --version | awk '{ print $1 }')")
+
+# --- Render -------------------------------------------------------------------------------------
+
+set_var package "$package"
+set_var crate "$crate"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+set_var rust_version "$rust_version"
+set_var rust_minor "$rust_minor"
+set_var nextest_version "$nextest_version"
+set_var deny_version "$deny_version"
+set_var shear_version "$shear_version"
+set_var mise_version "$mise_version"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# Installs Rust and the cargo plugins, and writes mise.lock with their checksums.
+mise trust --quiet
+mise install --quiet
+# cargo add picks the newest proptest that supports rust-version, and writes Cargo.lock.
+# Without default features, proptest leaves out process forking and timeouts, which need more
+# crates.
+mise exec -- cargo add --quiet --dev --no-default-features --features std proptest
+# rustfmt sorts imports, and the order depends on the crate name.
+mise exec -- cargo fmt
+proptest_version=$(sed -n '/^name = "proptest"$/{n;s/^version = "\(.*\)"$/\1/p;}' Cargo.lock)
+
+printf 'Created %s (crate %s) in %s\n' "$package" "$crate" "$(pwd)"
+printf 'rust %s, cargo-nextest %s, cargo-deny %s, cargo-shear %s, proptest %s, mise %s\n' \
+  "$rust_version" "$nextest_version" "$deny_version" "$shear_version" "$proptest_version" \
+  "$mise_version"
+{
+  list_files
+  printf '%s\n' Cargo.lock mise.lock
+} | sort
