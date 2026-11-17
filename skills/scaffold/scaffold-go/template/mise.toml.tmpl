@@ -1,0 +1,21 @@
+# Tool versions for {{package}}. scripts/check, CI and editors use exactly these.
+# Agents: change this file only with the owner's approval.
+# To bump: edit a version, run `mise lock`, and commit mise.lock with it. Bump Go and
+# golangci-lint together: golangci-lint must be built with Go X.Y or newer, where X.Y is the
+# `go` line of go.mod (`golangci-lint version` shows the Go it was built with).
+# scripts/check compares the running tools with the lines below, so keep each on its own line.
+[tools]
+go = "{{go_version}}"
+# The official release binary (aqua backend). mise.lock holds its checksum per platform.
+golangci-lint = "{{golangci_lint_version}}"
+
+[env]
+# Never let a go.mod line switch to another Go than the one above, or download one.
+GOTOOLCHAIN = "local"
+# scripts/check ignores settings saved with `go env -w`, and module and C compiler settings
+# from the shell (GOPROXY, GOPRIVATE, CC, CGO_CFLAGS, ...). Put such settings here instead,
+# so every machine and CI use them.
+
+[settings]
+# Record each tool's download checksum in mise.lock, so every machine gets the same bytes.
+lockfile = true

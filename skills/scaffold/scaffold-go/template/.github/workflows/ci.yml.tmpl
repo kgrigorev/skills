@@ -1,0 +1,49 @@
+name: ci
+
+# Runs scripts/check, the same gates as the git hook and the agent hook.
+# The PR title is checked in pr-title.yml.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs Go and golangci-lint from mise.toml and caches them. MISE_LOCKED makes mise
+      # install only what mise.lock records, with its URL and checksum. The mise version itself
+      # is pinned too.
+      - uses: jdx/mise-action@v5
+        env:
+          MISE_LOCKED: "1"
+        with:
+          version: "{{mise_version}}"
+
+      # Downloaded modules, compiled packages and lint results. All are keyed by content, so a
+      # restored cache gives the same result as a cold run, only faster. scripts/check never
+      # reads cached test results.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          # A cache entry is never updated once saved, so each commit saves a new one and
+          # starts from the newest earlier one: the build and lint caches stay current.
+          key: go-${{ runner.os }}-${{ hashFiles('mise.lock', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('mise.lock', 'go.sum') }}-
+            go-${{ runner.os }}-
+
+      - run: scripts/check

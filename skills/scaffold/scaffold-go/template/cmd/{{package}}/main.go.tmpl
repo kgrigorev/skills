@@ -1,0 +1,13 @@
+// Command {{package}} prints its banner. Keep it thin: the work happens in package {{gopackage}}.
+package main
+
+import (
+	"fmt"
+
+	"{{module}}"
+)
+
+// main prints the banner. It only calls the library, so tests can reach all the logic.
+func main() {
+	fmt.Println({{gopackage}}.Banner())
+}

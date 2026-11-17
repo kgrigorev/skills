@@ -1,0 +1,37 @@
+// Tests for package {{gopackage}}. They sit in package {{gopackage}}_test, so they use
+// only the exported API, like any caller.
+package {{gopackage}}_test
+
+import (
+	"strings"
+	"testing"
+
+	"pgregory.net/rapid"
+
+	"{{module}}"
+)
+
+// TestBannerStartsWithName checks one known input: the banner names the program.
+func TestBannerStartsWithName(t *testing.T) {
+	t.Parallel()
+
+	got := {{gopackage}}.Banner()
+	if !strings.HasPrefix(got, {{gopackage}}.Name+": ") {
+		t.Errorf("Banner() = %q, want prefix %q", got, {{gopackage}}.Name+": ")
+	}
+}
+
+// TestGreetContainsName checks a property for many generated names:
+// the greeting always contains the name it was given.
+// rapid generates the names and, on failure, shrinks them to a small example.
+func TestGreetContainsName(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(t *rapid.T) {
+		name := rapid.StringN(1, 40, -1).Draw(t, "name")
+
+		if got := {{gopackage}}.Greet(name); !strings.Contains(got, name) {
+			t.Fatalf("Greet(%q) = %q, want it to contain the name", name, got)
+		}
+	})
+}

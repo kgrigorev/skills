@@ -1,0 +1,108 @@
+#!/bin/sh
+# Renders the Go project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  lower case, words joined by "-", for example "my-tool". The Go package name drops
+#             the dashes: "mytool".
+#   synopsis: one line for README.md and the stub's banner, for example "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Python developer new to Go". AGENTS.md and CODING_STANDARDS.md use it.
+# The module path is github.com/<owner>/<repo> when the target already has a GitHub "origin"
+# remote, else example.com/<package>, which the owner renames before anyone imports it.
+#
+# The script never overwrites a file. It installs the pinned Go and golangci-lint with mise, writes
+# mise.lock and go.sum, formats the Go files, runs `git init` when needed and points git at the
+# project's hooks. It needs the network: proxy.golang.org, sum.golang.org, dl.google.com and
+# github.com. It does not commit.
+set -eu
+
+# The template is tested with exactly these versions. golangci-lint's config keys and linter list
+# depend on its version, and it must be built with Go X.Y or newer, where X.Y is go_language. So
+# bump Go and golangci-lint together, as a pair, and only after a scratch project passes
+# scripts/check.
+go_version=1.27.4
+go_language=1.27.0
+golangci_lint_version=2.15.0
+rapid_version=v1.3.0
+mise_version=2026.11.8
+govulncheck_version=v1.9.0
+gopls_version=v0.24.0
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+
+# shellcheck source-path=SCRIPTDIR source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+require_hidden "$template"
+check_inputs "$package" "$synopsis" "$reader"
+require_tools mise git
+
+# my-tool -> mytool. It names the root package, so it must be a valid Go package name.
+gopackage=$(printf '%s' "$package" | tr -d -)
+for word in break case chan const continue default defer else fallthrough for func go goto if \
+  import interface map package range return select struct switch type var main; do
+  [ "$gopackage" != "$word" ] ||
+    fail "package \"$package\": the Go package name \"$gopackage\" is a Go keyword or \"main\". Pick another name."
+done
+
+# github.com/<owner>/<repo> from the target's own origin remote, else example.com/<package>.
+# Only a .git folder inside the target counts, never a repository around it. The fallback has a
+# dot on purpose: gofumpt treats a path without a dot in its first part as the standard library,
+# and then gofumpt and gci disagree on the import order.
+module=example.com/$package
+if [ -e "$target/.git" ]; then
+  origin=$(git -C "$target" remote get-url origin 2>/dev/null || true)
+  from_origin=$(printf '%s' "$origin" |
+    sed -nE 's#^(https://|ssh://git@|git@)github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$#github.com/\2/\3#p' |
+    sed 's#\.git$##')
+  [ -z "$from_origin" ] || module=$from_origin
+fi
+
+# --- Render -------------------------------------------------------------------------------------
+
+set_var package "$package"
+set_var gopackage "$gopackage"
+set_var module "$module"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+set_var go_version "$go_version"
+set_var go_language "$go_language"
+set_var golangci_lint_version "$golangci_lint_version"
+set_var rapid_version "$rapid_version"
+set_var mise_version "$mise_version"
+set_var govulncheck_version "$govulncheck_version"
+set_var gopls_version "$gopls_version"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# --- Tools and modules --------------------------------------------------------------------------
+
+# The same settings as scripts/check, so the files written here match what the check expects.
+export GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod=mod GOTELEMETRY=off
+unset GOOS GOARCH GO386 GOAMD64 GOARM GOARM64 GOEXPERIMENT GODEBUG GOFIPS140 CGO_ENABLED
+
+mise trust --quiet mise.toml
+# Checksums for every platform the project runs on, so CI on Linux verifies its downloads too.
+mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64 go golangci-lint
+mise install go golangci-lint
+# Downloads rapid and writes go.sum.
+mise exec go golangci-lint -- go mod tidy
+# gci orders imports by module path, so format after the path is known.
+mise exec go golangci-lint -- golangci-lint fmt --config .golangci.yml
+
+printf 'Created %s (module %s, Go package %s) in %s\n' "$package" "$module" "$gopackage" "$(pwd)"
+printf 'go %s (go.mod: go %s), golangci-lint %s, rapid %s, mise %s (CI)\n' \
+  "$go_version" "$go_language" "$golangci_lint_version" "$rapid_version" "$mise_version"
+{
+  list_files
+  printf '%s\n' go.sum mise.lock
+} | sort

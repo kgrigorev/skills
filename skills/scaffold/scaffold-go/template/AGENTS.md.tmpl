@@ -1,0 +1,98 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: gofumpt and import order, tidy `go.mod` and `go.sum`,
+golangci-lint (which includes `go vet`), a search for files no check sees and for switched-off
+checks, the build, and the tests with the race detector. The git hook and CI run it too.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.golangci.yml`, `mise.toml`, `mise.lock`,
+  `.claude/`, the `go` line of `go.mod`, and existing tests. Never add another mise config
+  file (`mise.local.toml`, `.tool-versions`, `.config/mise/`): `scripts/check` rejects them.
+
+```sh
+go test -race -count=1 -run '^TestGreetContainsName$' .   # one test
+RAPID_SEED=1 go test -count=1 -run '^TestName$' .          # the inputs scripts/check uses
+golangci-lint fmt                                          # format
+golangci-lint run --fix                                    # lint autofixes; review the diff
+```
+
+`mise.toml` pins Go and golangci-lint. `scripts/check` runs under them by itself. In a shell
+without mise, run the other commands as `mise exec -- <command>`.
+
+Sandboxed agents: Go, golangci-lint and mise write to their caches (listed in
+`.claude/settings.json`). A cold cache needs the network: `proxy.golang.org`, `sum.golang.org`,
+and for `mise install` `dl.google.com` and `github.com`. `gh` needs the network too. Without
+these, `scripts/check` fails for reasons outside the code.
+
+## Go
+
+Read `CODING_STANDARDS.md` before writing or reviewing Go.
+
+The checks enforce: gofumpt formatting and import order, a doc comment on every declaration
+(exported or not), handled errors (also `_ = f()` and `x.(T)`), wrapped errors from other
+packages, no printing, logging, `os.Exit` or `panic` outside `cmd/`, no `reflect` outside
+tests and no `unsafe` or cgo without the owner's approval, no package-level variables or
+`init`, at least one test run in every package outside `cmd/`, and no data races. `//nolint`,
+other inline switches and a `Code generated` header do not switch a linter off: fix the cause.
+A `TestMain` must call `m.Run()`.
+
+Property tests use a fixed seed in `scripts/check`, so a run is repeatable. A plain `go test`
+draws a random seed, so set `RAPID_SEED=1` and `-count=1` to rerun what the check ran. The
+weekly `explore` workflow tries new seeds. When it fails, reproduce with the seed it prints.
+
+Files hidden by a build tag or a platform file name (`_windows.go`) are rejected, because no
+check would see them. That includes `//go:build race` and `!race`, since lint runs without the
+race detector and the tests with it. A platform file needs the owner's approval: it goes into
+`allowed_hidden` in `scripts/check`, with a CI job on its platform. Go files that `./...`
+skips (folders named `testdata` or starting with `_` or `.`, nested modules) are rejected too,
+except test fixtures under `testdata/` that no package imports.
+
+`scripts/check` ignores settings saved with `go env -w`, and `GOPROXY`, `GOPRIVATE`, `CC` and
+similar settings from the shell. Such settings go in the `[env]` table of `mise.toml`, with the
+owner's approval.
+
+## Layout
+
+- Logic goes in the root package `{{gopackage}}`. `cmd/{{package}}/main.go` only calls it.
+- New packages go under `internal/`, unless the owner wants them public.
+- The module path is `{{module}}`. Change it with `mise exec -- go mod edit -module <path>`,
+  and update the imports and this line, before anyone imports the module.
+- To change Go, update `mise.toml` (`go = "X.Y.Z"`) and the `go` line of `go.mod` (`go X.Y.0`)
+  together, then run `mise lock`. Bump golangci-lint in the same change: it must be built with
+  Go X.Y or newer, where X.Y is the `go` line.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

@@ -1,0 +1,40 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh) (or see <https://mise.jdx.dev> on Linux), then run in the
+repository:
+
+```sh
+brew install mise gh
+mise trust && mise install    # Go and golangci-lint, versions from mise.toml
+git config core.hooksPath .githooks
+go install golang.org/x/tools/gopls@{{gopls_version}}   # optional: editor support
+gh extension install github/gh-stack                    # optional: stacked PRs
+```
+
+mise installs the exact Go and golangci-lint versions in `mise.toml`, checked against the
+checksums in `mise.lock`. To get `go` on your `PATH`, activate mise in your shell
+(<https://mise.jdx.dev/getting-started.html>), or prefix commands with `mise exec --`.
+`scripts/check` finds the pinned tools by itself. On Linux, the race detector also needs a C
+compiler (gcc). The git hook runs the checks before each push.
+
+In your editor, leave gopls on plain gofmt. `golangci-lint fmt` is the formatter of record, and
+two gofumpt versions can disagree.
+
+## Commands
+
+```sh
+scripts/check                       # every quality gate: format, modules, lint, build, test
+go build ./...
+go test -race ./...
+go run ./cmd/{{package}}
+golangci-lint fmt                   # format
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too. The weekly
+`explore` workflow runs the tests in random order with new property inputs, and govulncheck.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

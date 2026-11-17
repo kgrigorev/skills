@@ -1,0 +1,44 @@
+# Checks whose result can change without a commit. They never block a PR: GitHub emails the
+# owner when a scheduled run fails. Reproduce a test failure with the seed it prints.
+name: explore
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  random-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: "{{mise_version}}"
+      # New test order and new property inputs on every run, and many more of them.
+      # A failure prints -test.shuffle and -rapid.seed; pass them back to reproduce it.
+      - run: mise exec -- go test -race -shuffle=on -count=1 ./...
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          GOFLAGS: -mod=readonly
+          RAPID_CHECKS: "10000"
+
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: "{{mise_version}}"
+      # The vulnerability database changes without a commit, so this check cannot gate a PR.
+      # It reports only vulnerabilities in code the program actually calls.
+      - run: mise exec -- go run golang.org/x/vuln/cmd/govulncheck@{{govulncheck_version}} ./...
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"

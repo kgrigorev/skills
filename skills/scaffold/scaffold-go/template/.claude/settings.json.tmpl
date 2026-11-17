@@ -1,0 +1,39 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": [
+        "~/go/pkg",
+        "~/Library/Caches/go-build",
+        "~/Library/Caches/golangci-lint",
+        "~/Library/Caches/mise",
+        "~/.cache/go-build",
+        "~/.cache/golangci-lint",
+        "~/.cache/mise",
+        "~/.local/state/mise",
+        "~/.local/share/mise",
+        "~/Library/Application Support/go/telemetry",
+        "~/.config/go/telemetry"
+      ]
+    },
+    "excludedCommands": ["gh *"]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-on-stop.sh\"",
+            "timeout": 600,
+            "statusMessage": "Running scripts/check"
+          }
+        ]
+      }
+    ]
+  }
+}
