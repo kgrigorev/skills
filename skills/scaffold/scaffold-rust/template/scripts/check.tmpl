@@ -252,8 +252,9 @@ cargo-nextest nextest run --frozen --workspace --all-features --run-ignored all 
 # Every #[test] function in the code must run. One that nextest does not list is switched off,
 # for example by a cfg that is never true or a test target that cargo skips. Comments are
 # dropped first. A test that a macro writes is not matched, so it is not checked.
+# --color never: CI sets CARGO_TERM_COLOR=always, and colour codes would hide the names.
 listed=$(cargo-nextest nextest list --frozen --workspace --all-features --run-ignored all \
-  --message-format oneline 2>/dev/null | sed 's/.*[ :]//')
+  --color never --message-format oneline 2>/dev/null | sed 's/.*[ :]//')
 find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -print |
   listed=$listed perl -ne '
     BEGIN { $listed{$_}++ for split /\n/, $ENV{listed} }

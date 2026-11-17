@@ -194,11 +194,12 @@ cabal build all
 step 'Test'
 # hspec also reads options from HSPEC_* variables and .hspec files; either can skip tests.
 # The fixed seed makes QuickCheck try the same inputs on every run. The weekly scheduled CI job
-# tries random seeds.
+# tries random seeds. --no-color keeps the summary line plain for the count below; hspec colours
+# its output on GitHub Actions.
 for name in $(env | sed -n 's/^\(HSPEC_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$name"; done
 {
   cabal test all --test-show-details=direct \
-    --test-options='--ignore-dot-hspec --fail-on=pending,focused,empty,empty-description --seed=1' ||
+    --test-options='--ignore-dot-hspec --no-color --fail-on=pending,focused,empty,empty-description --seed=1' ||
     echo failed >"$tmp/test-failed"
 } 2>&1 | tee "$tmp/test.log"
 if [ -e "$tmp/test-failed" ]; then exit 1; fi
