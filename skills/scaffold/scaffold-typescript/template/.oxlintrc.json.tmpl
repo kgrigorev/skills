@@ -17,6 +17,12 @@
   "rules": {
     // tsc reports unused names (noUnusedLocals, noUnusedParameters); one report is enough.
     "eslint/no-unused-vars": "off",
+    // tsc reports a path without a return (noImplicitReturns) and, unlike this rule, knows that a
+    // switch over every member of a union needs no default.
+    "typescript/consistent-return": "off",
+    // A retry loop, paging through results or ordered writes must await inside the loop. The rule
+    // cannot tell those from a missed Promise.all, and scripts/check rejects disable comments.
+    "eslint/no-await-in-loop": "off",
 
     // `any` turns the checker off. These stop it at the source and wherever it spreads.
     "typescript/no-explicit-any": "error",

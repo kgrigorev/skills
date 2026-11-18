@@ -54,8 +54,9 @@ printf 'tsc %s, oxlint %s, oxfmt %s\n' "$(pnpm exec tsc --version | awk '{ print
 step 'Only .ts sources, and only the gate configs'
 # Every gate below is set up for .ts files. A .js, .mts, .cts, .tsx or .TS file, or a .d.ts of
 # our own (skipLibCheck skips it), would escape the type check, the lint rules or the grep.
-others=$(git ls-files -co --exclude-standard -- ':(icase)*.[cm][jt]s' ':(icase)*.[jt]s' \
-  ':(icase)*.[jt]sx' | grep -v '\.ts$' || true)
+# core.quotePath=false: git would print "src/donn\303\251es.ts" in quotes, which does not end in .ts.
+others=$(git -c core.quotePath=false ls-files -co --exclude-standard -- ':(icase)*.[cm][jt]s' \
+  ':(icase)*.[jt]s' ':(icase)*.[jt]sx' | grep -v '\.ts$' || true)
 others="$others$(git ls-files -co --exclude-standard -- '*.d.ts')"
 [ -z "$others" ] || fail "Only .ts sources are checked here. Convert or remove: $others"
 # oxlint, oxfmt and knip skip ignored files, but tsc follows an import into one. A committed file
@@ -86,11 +87,14 @@ search() {
   [ "$status" -le 1 ] || fail "git grep failed with status $status."
   [ "$status" -eq 0 ]
 }
-# Comments that switch off the linter, the type checker, the formatter, coverage or knip, and
-# vitest options that let a test pass without running. vitest.config.ts is left out: it is a gate
-# file and names those options to reject them.
-switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|@(public|beta|alias)([^[:alnum:]_]|$)|\.(skipIf|runIf|fails)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])retry[[:space:]]*:'
-if search "$switch_off" '*.ts' ':!vitest.config.ts'; then
+# Comments that switch off the linter, the type checker, the formatter, coverage or knip.
+switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|@(public|beta|alias)([^[:alnum:]_]|$)'
+# vitest options that let a test pass without running, searched in tests/ only: `retry: 3` in an
+# HTTP client or a `summary.fails` count is fine in src/. The reporter in vitest.config.ts fails
+# the run on any of them wherever they come from; this names the line first.
+vitest_options='\.(skipIf|runIf|fails)[[:space:]]*[(.]|(^|[^[:alnum:]_])retry[[:space:]]*:'
+if search "$switch_off" '*.ts' ':!vitest.config.ts' ||
+  search "$vitest_options" 'tests/*.ts'; then
   fail 'The lines above switch off a check. Remove them and fix the cause.'
 fi
 # Tests must give the same result on every run. The fast-check seed and run count are set in
@@ -98,7 +102,9 @@ fi
 if search 'configureGlobal|(^|[^[:alnum:]_])seed[[:space:]]*:|numRuns' '*.ts' ':!tests/setup.ts' ':!vitest.config.ts'; then
   fail 'The lines above change the fast-check seed or run count. tests/setup.ts sets them.'
 fi
-nondeterministic='Date\.now|new Date\(\)|Math[[:space:]]*(\.[[:space:]]*random|\[)|performance\.now|hrtime|randomUUID|randomBytes|randomInt|getRandomValues'
+# Date["now"] and Math["random"] count, a Date[] type does not. The names are whole words, so a
+# `randomIntegers` arbitrary passes.
+nondeterministic='(^|[^[:alnum:]_$])(Date[[:space:]]*(\.[[:space:]]*now|\[[^]])|Math[[:space:]]*(\.[[:space:]]*random|\[))|new Date\(\)|performance\.now|(^|[^[:alnum:]_$])(hrtime|randomUUID|randomBytes|randomInt|getRandomValues)([^[:alnum:]_$]|$)'
 if search "$nondeterministic" 'tests/*.ts' ':!tests/setup.ts'; then
   fail 'The lines above make a test depend on the clock or on random values. Pass fixed values.'
 fi

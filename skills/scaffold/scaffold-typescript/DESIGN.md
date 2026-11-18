@@ -82,6 +82,10 @@ Every other gate states its reason in a comment in its own file.
   (`--treat-config-hints-as-errors`). Review covers test-only exports (`CODING_STANDARDS.md`).
 - **A `catch` that only holds a comment.** `eslint/no-empty` accepts it, and it at least names
   why the error is dropped. Review judges the reason.
+- **`eslint/no-await-in-loop` and `typescript/consistent-return`.** Both rejected good code in
+  the green controls: a retry loop must await inside the loop, and an exhaustive `switch` over
+  a union needs no `default`. With disable comments rejected, an agent could only contort the
+  code. tsc's `noImplicitReturns` covers a missing return.
 - **A browser variant.** A browser app needs bundler resolution, the DOM types, `.tsx`, Vite and
   the React lint rules. That is a separate template.
 
