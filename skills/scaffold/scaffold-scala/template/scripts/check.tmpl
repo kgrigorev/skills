@@ -10,6 +10,10 @@ fail() {
   exit 1
 }
 
+# The tool checks are steps like the others, so a failure there names where it stopped. This
+# header is printed once, before the re-run through mise below, which repeats these two checks.
+[ -n "${CHECK_UNDER_MISE:-}" ] || step 'Tool pins in mise.toml and mise.lock'
+
 # mise.toml holds only these line shapes, so the lock check below reads every tool pin. Another
 # TOML form, such as `java = { version = "..." }` or `tools.java = "..."`, would escape it.
 mise_shapes='^$|^#.*$|^min_version = "[0-9.]+"$|^\[settings\]$|^lockfile = true$|^\[tools\]$|^[a-z0-9-]+ = "[^"]+"$'
@@ -49,6 +53,8 @@ export CI=true
 # munit lets tests tagged Flaky fail when this is set.
 unset MUNIT_FLAKY_OK
 
+step 'Tools that run match mise.toml'
+# Printed in the re-run, or when CHECK_UNDER_MISE was set from outside and the re-run skipped.
 # mise.local.toml, .tool-versions or a MISE_<TOOL>_VERSION variable can still change what
 # `mise exec` picks, and mise falls back to the machine's java when a version is not in mise.lock.
 # So compare the tools that run now with mise.toml. The JDK pin must be a temurin-X.Y.Z+B one.
@@ -176,21 +182,46 @@ step 'No switched-off checks'
 # when written in full (@annotation.nowarn), in backticks (@`nowarn`) or imported under another
 # name ({nowarn as quiet}).
 w='[^A-Za-z0-9_]'
+# scalafmt reads its switches from comments, so this pattern reads every line.
+format_off='scalafmt: *\{|format: *(off|on)'
 # Universal equality: a CanEqual given for a top type, or an alias that hides one.
 top='(_root_\.)?(scala\.|java\.lang\.)?(Any|AnyRef|AnyVal|Matchable|Object)'
 switch_off="[@.{,] *\`?(nowarn|unchecked|unused)\`?($w|$)|SuppressWarnings|uncheckedVariance|uncheckedStable"
-switch_off="$switch_off|import .*language($w|$)|scalafmt: *\\{|format: *(off|on)"
+switch_off="$switch_off|import .*language($w|$)|assume\\("
 switch_off="$switch_off|CanEqual\\[([^]]*$w)?$top($w|$)|(^|$w)type .*= *$top($w|$)|canEqualAny"
-# munit: skipped, focused, flaky or expected-to-fail tests, tags (munit.Fail turns a failure into
-# a pass), and overrides that drop or rewrite the test list.
-switch_off="$switch_off|\\. *\`?(only|ignore|pending|flaky|fail)\`?($w|$)|(^|$w)(Ignore|Flaky)($w|$)"
-switch_off="$switch_off|IgnoreSuite|munitIgnore|munitFlakyOK|isCI|assume\\(|TestOptions|withTags"
-switch_off="$switch_off|\\.tag *\\(|(^|$w)Tag *\\(|munit(Tests|TestTransforms|SuiteTransforms|ValueTransforms)($w|$)"
-switch_off="$switch_off|(^|$w)def +(test|property)($w|$)"
+# munit: skipped, focused, flaky or expected-to-fail tests, and overrides that drop or rewrite the
+# test list. Tags: munit.Fail turns a failure into a pass, and a Tag can carry any name. Every tag
+# lives in package munit, so the tag names are banned after `munit.`, in munit imports (also
+# `munit.*`) and under a renamed or reopened package munit. Plain names such as `Ignore` or `Fail`
+# stay free for the project's own code.
+tags='Tag|Ignore|Only|Flaky|Fail|Pending|Slow'
+test_off="\\. *\`?(only|ignore|pending|flaky|fail)\`?($w|$)|munit\\. *\`?($tags)\`?($w|$)"
+test_off="$test_off|(import|export) .*munit.*[.{, ]\`?(\\*|_|given|$tags)\`?($w|$)|munit +as($w|$)|(^|$w)package +munit($w|$)"
+test_off="$test_off|IgnoreSuite|munitIgnore|munitFlakyOK|isCI|TestOptions|withTags|\\.tag *\\("
+test_off="$test_off|munitTests($w|$)|munit[A-Za-z]*Transforms?($w|$)|(Test|Suite|Value)Transform($w|$)"
+test_off="$test_off|(^|$w)def +(test|property)($w|$)"
 # ScalaCheck: fewer runs, or Properties objects that munit never runs.
-switch_off="$switch_off|scalaCheckTestParameters|withMinSuccessfulTests|org\\.scalacheck\\.Properties|extends +Properties"
+test_off="$test_off|scalaCheckTestParameters|withMinSuccessfulTests|org\\.scalacheck\\.Properties|extends +Properties"
+# Scala CLI puts a file in the test scope when a folder on its path is named test or its name ends
+# in .test.scala. Only there can code see munit and ScalaCheck, so the munit and ScalaCheck words
+# are banned only there, and a domain name such as `def property` or `Tag(...)` in main code
+# passes. Any path with "test" in it counts, to be safe.
 # shellcheck disable=SC2086 # the step above keeps spaces out of file names
-if scan "$switch_off" .scalafmt.conf $scala_files; then
+test_files=$(printf '%s\n' $scala_files | grep -i test || true)
+# A line that holds only a comment switches nothing off, and comments use these words in plain
+# English ("Ignore blank lines"). A line with code before or after a comment is still read.
+comment_only='^[^:]*:[0-9]+:[[:space:]]*(//|/\*([^*]|\*+[^*/])*\*+/[[:space:]]*$)'
+code_scan() {
+  status=0
+  found=$(grep -nHE "$@") || status=$?
+  [ "$status" -le 1 ] || fail 'grep could not read the files above.'
+  found=$(printf '%s\n' "$found" | grep -vE "$comment_only" || true)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+# shellcheck disable=SC2086 # the step above keeps spaces out of file names
+if scan "$format_off" .scalafmt.conf $scala_files || code_scan "$switch_off" $scala_files ||
+  { [ -n "$test_files" ] && code_scan "$test_off" $test_files; }; then
   fail 'The lines above switch off a check. Remove them and fix the cause.'
 fi
 

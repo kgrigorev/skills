@@ -66,7 +66,15 @@ Every other gate states its reason in a comment in its own file.
   cannot read a file (exit 2), which would otherwise pass as "no match".
 - **The check reads munit's summary line for each suite.** munit exits 0 for ignored tests and
   for a suite with no tests (it reports that suite as ignored). Tags are banned outright:
-  `munit.Fail` turns a failing test into a pass, and a tag can be built from any string.
+  `munit.Fail` turns a failing test into a pass, and a tag can be built from any string. Every
+  tag is reached through package munit, so the ban is on `munit.<Tag>`, munit imports of a tag or
+  of `*`, `munit as`, and `package munit`; plain `Ignore` or `Fail` stay free for domain code.
+- **The munit and ScalaCheck words are searched for only in test-scope files, and comment-only
+  lines are skipped.** Main code cannot see munit, so `def property`, `Tag(...)` or `.only` there
+  is a domain name. Scala CLI puts a file in the test scope by a `test` folder or a `.test.scala`
+  name; the check counts any path with `test` in it. A line that is only a comment changes
+  nothing, and comments say "Ignore blank lines". Lines with code next to a comment are still
+  read, and the scalafmt switches (`format: off`, `scalafmt: {`) are found in comments too.
 - **`.github/workflows/deps.yml` is online and never blocks a PR.** Newer versions change by
   the day, so they stay out of `scripts/check`.
 - **Actions are pinned by commit SHA**, because a tag can move. Runners are a fixed image
@@ -93,10 +101,12 @@ Every other gate states its reason in a comment in its own file.
 - A warm run needs no network. Coursier re-checks `scala3-library_3/maven-metadata.xml` when its
   cache entry expires, but a failed check is not fatal.
 - No vulnerability scan: GitHub's dependency graph and OSV-Scanner do not read `project.scala`.
-- The switch-off search bans some names (`only`, `ignore`, `fail`, `pending`, `flaky`,
-  `nowarn`, `unused`, `unchecked` after a dot; `Ignore`, `Flaky`, `isCI`, `Tag(`, `.tag(`,
-  `TestOptions`, `withTags`, `def test`, `def property`, `type X = Any`). It also matches
-  `@annotation.nowarn`, ``@`nowarn` `` and `{nowarn as quiet}`. Projects rename their own code.
+- The switch-off search bans some names: `nowarn`, `unused`, `unchecked` after a dot and
+  `type X = Any` everywhere; in test files also `only`, `ignore`, `fail`, `pending`, `flaky` after
+  a dot, `munit.<Tag>`, `isCI`, `.tag(`, `TestOptions`, `withTags`, `def test`, `def property`
+  and munit transforms. It also matches `@annotation.nowarn`, ``@`nowarn` `` and
+  `{nowarn as quiet}`. Projects rename their own code. A test that compares with a domain value
+  named like a munit word after a dot (`Status.fail`) must use another name.
 - Universal equality is closed for the top types (`Any`, `AnyRef`, `AnyVal`, `Matchable`,
   `Object`) and aliases to them. A given such as `CanEqual[Product, Product]` still widens `==`;
   review catches it.

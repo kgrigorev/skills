@@ -65,11 +65,13 @@ The compiler and WartRemover reject these. Write the form on the right:
 - Property tests go in a `munit.ScalaCheckSuite` with `property(...)`. A plain ScalaCheck
   `Properties` object never runs.
 
-The search for switched-off checks bans some names: `only`, `ignore`, `fail`, `pending`,
-`flaky`, `nowarn`, `unused` and `unchecked` after a dot, `.tag(`, `Tag(`, `TestOptions`,
-`withTags`, a method named `test` or `property`, the words `Ignore`, `Flaky` and `isCI`, and
-`type X = Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`). Name your own code differently,
-such as `rejectWith` instead of `fail`. Test tags are not used: every test runs on every run.
+The search for switched-off checks bans some names in code: `nowarn`, `unused` and
+`unchecked` after a dot, and `type X = Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`). In
+test files (a path with `test` in it) it also bans `only`, `ignore`, `fail`, `pending` and `flaky`
+after a dot, `.tag(`, `TestOptions`, `withTags`, `isCI`, a method named `test` or `property`, and
+munit's tags (`munit.Fail`, `import munit.*`). Name your own code differently, such as
+`rejectWith` instead of `fail`. Lines that hold only a comment are not searched. Test tags are
+not used: every test runs on every run.
 
 ## Layout
 
