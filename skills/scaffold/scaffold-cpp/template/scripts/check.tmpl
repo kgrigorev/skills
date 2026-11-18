@@ -11,6 +11,10 @@ root=$(pwd -P)
 # mise lock --platform macos-arm64,linux-x64,linux-arm64
 # mise.toml holds only [tools] and `lockfile = true`: an [env] section could put another
 # clang-tidy first on PATH, and other settings change how mise installs.
+step() { printf '\n==> %s\n' "$1"; }
+# The script runs twice (see `exec mise exec` below). The header prints once, so a failure here
+# names its step like every other gate.
+if [ -z "${SCRIPTS_CHECK_IN_MISE:-}" ]; then step 'Tools pinned by mise.toml and mise.lock'; fi
 unlocked=$(awk '
   FNR == 1 { file++ }
   file == 1 && /^[[:space:]]*(#|$)/ { next }
@@ -59,8 +63,6 @@ fi
 # filter, disabled tests, repeats), and compilers read the flag variables.
 for name in $(env | sed -n 's/^\(GTEST_[A-Z_]*\)=.*/\1/p'); do unset "$name"; done
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
-
-step() { printf '\n==> %s\n' "$1"; }
 
 # Each tool must be the one mise.toml pins, not one that comes earlier on PATH.
 for entry in cmake:cmake cmake:ctest ninja:ninja conda:clangxx:clang++ \
@@ -131,18 +133,23 @@ step 'No switched-off checks'
 # Comments, pragmas, attributes, flags and test settings that switch off a check or a test.
 # Flags that reach the compiler are checked again after the configure step.
 switch_off='NOLINT|clang-format (off|on)|pragma +(clang|GCC)|_Pragma|clang::suppress'
-switch_off="$switch_off|-Wno-|(^|[[:space:]\"])-w([[:space:]\"]|$)|--no-warnings"
-switch_off="$switch_off|-fno-sanitize=|no_sanitize|-fsanitize-(ignorelist|blacklist)"
-switch_off="$switch_off|__(a|ub|l|m|t)san_default_(options|suppressions)"
+switch_off="$switch_off|no_sanitize|__(a|ub|l|m|t)san_default_(options|suppressions)"
 switch_off="$switch_off|COMPILE_WARNING_AS_ERROR|GTEST_SKIP|DISABLED|WILL_FAIL"
 switch_off="$switch_off|SKIP_RETURN_CODE|SKIP_REGULAR_EXPRESSION|TEST_FILTER|gtest_filter"
+# In CMake files only: compiler flags. In C++ they appear only in pragmas (caught above) or in
+# strings, and a command-line parser in C++ may well compare an argument with "-w".
+cmake_only='-Wno-|(^|[[:space:]"])-w([[:space:]")]|$)|--no-warnings'
+cmake_only="$cmake_only|-fno-sanitize=|-fsanitize-(ignorelist|blacklist)"
 # In C++ only: macros that tell the checked build apart from others, so code under them is
 # never compiled, linted or tested here. clang-tidy defines __clang_analyzer__. Also
-# RC_SUCCEED, which ends a property before its assertions.
+# RC_SUCCEED, which ends a property before its assertions. A line that is only a // comment is
+# skipped: a comment may explain NDEBUG, and the macro does nothing there.
 cpp_only='__clang_analyzer__|__has_feature|__SANITIZE_|NDEBUG|_LIBCPP_HARDENING|_GLIBCXX_ASSERTIONS'
 cpp_only="$cpp_only|RC_SUCCEED"
 # shellcheck disable=SC2086
-if grep -nE "$switch_off" $cpp_files $cmake_files || grep -nE "$cpp_only" $cpp_files; then
+# -e: the pattern starts with "-", which grep would read as an option.
+if grep -nE "$switch_off" $cpp_files $cmake_files || grep -nE -e "$cmake_only" $cmake_files ||
+  grep -nHE "$cpp_only" $cpp_files | grep -vE '^[^:]*:[0-9]+:[[:space:]]*//'; then
   echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
   exit 1
 fi
