@@ -88,11 +88,21 @@ Every other gate states its reason in a comment in its own file.
   advisory check needs a database that changes daily, so `scheduled.yml` runs it.
 - nextest runs the tests: a hung test fails after 60 s, each test runs in its own process, and
   an empty run fails. It cannot run doc examples, so `cargo test --doc` follows.
-- Every `#[test]` function name in the code must be in `cargo nextest list`. This catches any
-  cfg that is never true (`not(all())`, `miri`, a cfg only a build script sets) without a list
-  of bad cfgs, and any test target cargo skips. It compares names, not counts, so a test written
-  as `#[core::prelude::v1::test]` cannot make up for a hidden one. A test that a macro writes is
-  not matched and not checked; macros need the owner's approval.
+- Every test in the code must be in `cargo nextest list`, in each test binary that compiles its
+  file and at the same module path. This catches any cfg that is never true (`not(all())`,
+  `miri`, a cfg only a build script sets) without a list of bad cfgs, any test target cargo
+  skips, and a module file behind such a cfg. The files of each binary come from the dep-info
+  file the compiler writes next to it, so a test in `tests/common/mod.rs` counts once per test
+  file that uses it. The first version compared names only and read the code with regexes: a
+  block comment after `#[test]`, a `]` in a string attribute, `#[cfg_attr(miri, test)]`, or a
+  `macro_rules!` that wrote a passing test with the hidden test's name each turned it green.
+  Now a small Perl reader drops comments and strings first, a test attribute is `test`, any path
+  ending in `test`, a name that `use ... test as` gives it, or one of these in a `cfg_attr`.
+- Tests that a macro writes are rejected, because the check cannot follow them: a test attribute
+  inside a macro other than `proptest!` or inside a block, one that is not on a plain `fn name`,
+  and a `#` that starts no attribute (a macro could join `#` and `[test]` from its input and drop
+  the test's body). `macro_rules!` needs the owner's approval anyway; table tests can loop over
+  cases in one test or use proptest.
 - `--run-ignored all` runs `#[ignore]` tests too, so `#[ignore]` cannot hide a red test.
 - `PROPTEST_RNG_SEED=1` makes every run try the same cases. The weekly `explore` job in
   `scheduled.yml` tries new random cases, 10 000 per property.
@@ -110,26 +120,43 @@ Every other gate states its reason in a comment in its own file.
   `missing_docs_in_private_items` (forces a doc comment on
   every test), `print_stdout` (fires on the `main.rs` that must print).
 - The suppression search reads each `.rs` file whole, so an attribute that rustfmt splits over
-  lines matches too. It rejects any attribute that holds a `$`: a `macro_rules!` could build
-  `#[allow]` from an `allow` token at the call site. This also rejects the common
-  `$(#[$meta])*` pattern; macros need the owner's approval anyway. `unsafe_code = "forbid"`
-  holds regardless. Deleting a line from `[lints]` is a gate-file change that review catches.
+  lines matches too. It reads the code with the same Perl reader as the test check: comments
+  are dropped and strings emptied, so a comment or a string can name `#[allow]` without failing
+  the check, and a `]` in a string inside `#[cfg_attr(...)]` cannot end the attribute early (it
+  hid an `allow` from the first, regex-only version). Brackets are matched in pairs. The text of
+  doc comments and strings is searched only for doc example fences. It rejects any attribute
+  that holds a `$`: a `macro_rules!` could build `#[allow]` from an `allow` token at the call
+  site. This also rejects the common `$(#[$meta])*` pattern; macros need the owner's approval
+  anyway. `unsafe_code = "forbid"` holds regardless.
 - Doc examples marked `ignore`, `no_run` or `should_panic` are rejected: each lets a wrong
   assertion pass. `compile_fail` stays allowed, because it shows what the types forbid. The
   match takes any rustdoc separator, so `rust ignore` is caught too.
 - proptest settings in the code (`proptest_config`, `ProptestConfig`, `TestRunner`) are
   rejected: `with_cases(0)` passed a wrong property, and a fixed case count overrides the
-  weekly job's `PROPTEST_CASES`.
+  weekly job's `PROPTEST_CASES`. A case count takes one of these three, so the name
+  `test_runner` alone is allowed: it rejected a module of that name, and a helper that returns
+  `test_runner::TestCaseError`.
 - A thrown-away Result: `let _ =` is a lint, `.ok();` is the `unused_result_ok` lint, and
-  `_ = f();` is rejected by the search. `drop(f())`, `if let Ok(_)` and other forms pass;
-  review catches them.
+  `_ = f();` is rejected by the search. Other forms are not closed (see below).
 - `#[doc(hidden)]` is rejected: it takes a public item out of `missing_docs`.
 - `std::process::abort` is a disallowed method in `clippy.toml`. `assert!` in library code and
   indexing (`b[0]`) still panic on bad input. `indexing_slicing` is left out (see above), and
   `assert!` states an invariant: a failing one is a bug, which a panic is for.
-- Left to review: a deleted test, a test without an assertion, an early `return` on an
-  environment variable, `#[should_panic(expected = ...)]` that matches the wrong panic, and an
-  unused `pub` item (never dead code in a library).
+- Not closed. Only the owner's review of every change catches these:
+  - Gate files: deleting a line from `[lints]` in `Cargo.toml` (such as `unwrap_used`), or
+    emptying `disallowed-methods` in `clippy.toml`, switches a lint off. CODEOWNERS adds nothing
+    in a one-owner repository, because GitHub does not let the author approve their own PR.
+  - A thrown-away Result in other forms: `drop(f())`, `let _ignored = f()`,
+    `(_, ok) = (f(), true)`, `if let Ok(_) = f()`. No lint matches a named or passed-on value,
+    and each search pattern would leave the next form open.
+  - A test that swallows its own failure: `drop(std::panic::catch_unwind(|| assert!(...)))`, or a
+    thread whose `join()` result is thrown away as above.
+  - `#[should_panic(expected = ...)]` with text that the wrong panic also holds. `""` matches
+    every panic, and so do `"assertion"` or a common word, so a search for one value would not
+    close it.
+  - A deleted test, a test without an assertion, an early `return` on an environment variable,
+    an unused `pub` item (never dead code in a library), and a test that a procedural macro from
+    an approved dependency writes.
 
 ## CI
 
@@ -150,6 +177,10 @@ Every other gate states its reason in a comment in its own file.
 - CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-rust.yml`, weekly too,
   so a new Clippy lint that fires on the stub shows up there first. It pins the tool versions at
   the top of that file. When you scaffold with newer tools, bump them there to match.
+- `tests/scaffold/rust/` holds attacks on the gates: bad changes that must fail at a named step,
+  and good code an agent would write that must pass. `scripts/test-scaffold rust` replays them
+  on a fresh render, and the same workflow runs it on its sample project. When a gate changes,
+  add the attack that it closes, and a green case for any code it must still accept.
 - Project-specific material (domain terms, reference documents) stays out of the template.
 - The template works with any set of agent skills. It names no skill and holds no convention that
   comes from one, such as a glossary file or a folder of decision records. A project adds those

@@ -7,11 +7,15 @@ on:
     paths:
       - skills/scaffold/scaffold-rust/**
       - .github/workflows/scaffold-rust.yml
+      - tests/scaffold/rust/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-rust/**
       - .github/workflows/scaffold-rust.yml
+      - tests/scaffold/rust/**
+      - scripts/test-scaffold
   # The scaffold takes the newest proptest from crates.io, and the pinned Clippy can meet new
   # crate versions. A weekly run catches a template that breaks without a change here.
   schedule:
@@ -63,3 +67,9 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Replays the attacks in tests/scaffold/rust on the sample project: each bad change must
+      # fail at its step, and each good one must pass.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold rust --project "$RUNNER_TEMP/sample-tool"
