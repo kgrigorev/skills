@@ -37,6 +37,14 @@ if [ -n "$lock_drift" ]; then
   fail 'mise.lock does not match mise.toml for the tools above. Run: mise lock, and commit mise.lock.'
 fi
 
+# A MISE_<TOOL>_VERSION variable picks another version than mise.toml. Whether mise would then
+# refuse it depends on what this machine has installed, so refuse it here, on every machine.
+tool_overrides=$(env | sed -n 's/^\(MISE_[A-Z0-9_]\{1,\}_VERSION\)=.*/\1/p')
+if [ -n "$tool_overrides" ]; then
+  printf '%s\n' "$tool_overrides" >&2
+  fail 'Unset the variables above: only mise.toml picks tool versions.'
+fi
+
 # The JDK and Scala CLI versions live in mise.toml. Agent shells and git hooks do not activate
 # mise, so the script runs itself again through `mise exec`, which puts those exact versions first
 # on PATH and sets JAVA_HOME. --locked takes download URLs only from mise.lock. The absolute
