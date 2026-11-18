@@ -52,7 +52,9 @@ Every other gate states its reason in a comment in its own file.
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
 - CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-python.yml`, weekly too,
-  because the scaffold takes the newest dev tools from PyPI. When you bump `uv_version` in
+  because the scaffold takes the newest dev tools from PyPI. It then replays the attacks in
+  `tests/scaffold/python/` with `scripts/test-scaffold python`: each bad change must fail at its
+  step, and each `green-*` control must pass. A gate change comes with a case there. When you bump `uv_version` in
   `scripts/scaffold`, bump `UV_VERSION` in that workflow too.
 - Bump `python_minor` in `scripts/scaffold` when a newer minor has been out for about three
   months.
