@@ -5,9 +5,10 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 
 ## Checks
 
-`scripts/check` runs every gate: source layout, scalafmt, the build settings in `project.scala`,
-a search for switched-off checks, then a build with warnings and WartRemover findings as errors,
-and the tests. The git hook and CI run it too. It works without mise activated, from any folder.
+`scripts/check` runs every gate: the tools mise runs, source layout, scalafmt, the build settings
+in `project.scala`, a build with warnings and WartRemover findings as errors, a search of the
+compiled code for switched-off checks, and the tests. The git hook and CI run it too. It works
+without mise activated, from any folder.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
@@ -52,10 +53,13 @@ The compiler and WartRemover reject these. Write the form on the right:
   classes. For a Java type, add one given in a shared object, such as
   `given CanEqual[Instant, Instant] = CanEqual.derived`. Never `CanEqual[Any, Any]`.
 - `.head`, `.get`, `.last`, `xs(i)`, `xs.updated(i, x)` and `???` throw. Use `headOption`,
-  `lift(i)`, `getOrElse`, `fold` or `match`. `throw` is banned: return an `Either`.
+  `lift(i)`, `getOrElse`, `fold` or `match`. `throw`, `require`, `assert` (outside munit) and
+  `sys.error` are banned: return an `Either`.
 - Not checked, so review rejects them: `m(key)` on a `Map` (use `get`), `s.toInt` (use
-  `toIntOption`), a `match` on a non-sealed type such as `Int` without a `case _`, and
-  `catch case _` or `Try(...).foreach`, which drop the error.
+  `toIntOption`), `arr(i)` on an `Array`, `it.next()`, `s.charAt(i)`, a `match` on a non-sealed
+  type such as `Int` without a `case _`, `catch case _`, `Try(...).foreach` or
+  `Try(...).getOrElse`, which drop the error, `AtomicInteger` and `java.util` collections, and
+  `sys.exit` outside `Main.scala`.
 - `var`, `while`, `return`, `null`, casts and `scala.collection.mutable` are banned. Build
   results with `map`, `foldLeft` or `++` on immutable collections.
 - Text: `toLowerCase(Locale.ROOT)`, and string interpolation `s"..."` instead of `"a" + value`.
@@ -64,24 +68,35 @@ The compiler and WartRemover reject these. Write the form on the right:
 - A pattern that may not match: write a `match` with every case, never `@unchecked`.
 - Property tests go in a `munit.ScalaCheckSuite` with `property(...)`. A plain ScalaCheck
   `Properties` object never runs.
+- A test that expects an exception uses `intercept[E](...)`. Tests never `catch`, `Try(...)` or
+  `Using(...)`: a test that catches can catch its own failed assertion. Tests never end the JVM.
+- No macros (`scala.quoted`): WartRemover never sees the code they build.
 
-The search for switched-off checks bans some names: `only`, `ignore`, `fail`, `pending`,
-`flaky`, `nowarn`, `unused` and `unchecked` after a dot, `.tag(`, `Tag(`, `TestOptions`,
-`withTags`, a method named `test` or `property`, the words `Ignore`, `Flaky` and `isCI`, and
-`type X = Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`). Name your own code differently,
-such as `rejectWith` instead of `fail`. Test tags are not used: every test runs on every run.
+The search for switched-off checks reads the code as the compiler resolved it, so comments, strings,
+aliases and renamed imports do not matter. In all code it rejects `@nowarn`, `@unused`, `@unchecked`
+and the other `unchecked` annotations, `@SuppressWarnings`, `.runtimeChecked`, `scala.language`
+imports, `assume`, and a `CanEqual` for `Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`), or for
+a type alias or type parameter that can stand for one. In test files (a `test` folder, a
+`.test.scala` name, or any file that uses munit) it also bans `only`, `ignore`, `fail`, `pending`,
+`flaky` and `tag` after a dot, `withTags`, `isCI`, a method named `test` or `property`, and munit's
+tags (`munit.Fail` in any spelling). Name your own code differently, such as `rejectWith` instead of
+`fail`. Test tags are not used: every test runs on every run. scalafmt switches (`format: off`,
+`@formatter:off`, `scalafmt: {`) are banned in comments.
 
 ## Layout
 
 - All code lives in `src/` as `.scala` files. `scripts/check` fails on `.scala`, `.sc` or `.java`
   files anywhere else, on symlinks in `src/`, and on names with characters other than letters,
   digits, `_`, `.` and `-`.
-- Every suite runs at least one test and ignores none. `scripts/check` reads munit's summary.
+- Every suite runs at least one test and ignores none. `scripts/check` reads munit's summary
+  and checks that the test runner, not a test, ended the run.
 - Logic goes in `src/main/scala`. `src/main/scala/Main.scala` only calls it.
 - Tests go in `src/test/scala`. Every munit suite there runs automatically.
 - Build settings live only in `project.scala`: the Scala version, compiler options, WartRemover
   and dependencies, each with an exact version. A new dependency needs the owner's approval.
-- `mise.toml` pins the JDK and Scala CLI. `mise.lock` holds their checksums.
+- `mise.toml` pins the JDK and Scala CLI. `mise.lock` holds their checksums. No other mise file
+  (`mise.local.toml`, `.mise.toml`, `.config/mise.toml`, `.tool-versions`) may exist in the
+  project: `scripts/check` fails on any file mise loads besides `mise.toml`.
 
 ## Writing
 

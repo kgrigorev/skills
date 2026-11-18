@@ -1,5 +1,6 @@
 """Shared test settings and gates. Agents: change only with the owner's approval."""
 
+import inspect
 from collections.abc import Generator
 
 import pytest
@@ -18,6 +19,11 @@ settings.register_profile(
 
 # The weekly audit workflow runs "explore": new random examples, many more of them.
 settings.register_profile("explore", max_examples=2000, database=None, deadline=None)
+
+# The profile objects as registered here. A test with settings of its own (also through
+# another import path or a decorator such as @seed), or a test module that registers a
+# profile again, gets a different object.
+_PROFILES = [settings.get_profile(name) for name in ("default", "check", "explore")]
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -40,6 +46,8 @@ def pytest_collection_modifyitems(
     -k, -m and --deselect still work by hand. scripts/check passes none of them.
     """
     collected = len(items)
+    _fail_on_uncollected_tests(items)
+    _fail_on_own_hypothesis_settings(items)
     yield
     asked = any(
         config.getoption(name) for name in ("keyword", "markexpr", "deselect")
@@ -70,3 +78,98 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         writer.line("Tests that did not run (make them run or delete them):", red=True)
         for nodeid in _not_run:
             writer.line(f"  {nodeid}")
+
+
+# The test modules that pytest imported without an error.
+_modules: list[pytest.Module] = []
+_imported: set[str] = set()
+
+
+def pytest_collectstart(collector: pytest.Collector) -> None:
+    """Remember every test module pytest starts to collect."""
+    if isinstance(collector, pytest.Module):
+        _modules.append(collector)
+
+
+def pytest_collectreport(report: pytest.CollectReport) -> None:
+    """Remember every collector that pytest collected without an error."""
+    if report.passed:
+        _imported.add(report.nodeid)
+
+
+def _defined_tests(module: pytest.Module) -> set[tuple[str | None, str]]:
+    """Return (class name or None, function name) of every test the module defines.
+
+    pytest's own name rules decide what a test is. Names imported from elsewhere are
+    left out: their own module collects them.
+    """
+    found: set[tuple[str | None, str]] = set()
+    name = module.obj.__name__
+    for attribute, value in vars(module.obj).items():
+        if getattr(value, "__module__", None) != name:
+            continue
+        if inspect.isfunction(value) and module.funcnamefilter(attribute):
+            found.add((None, attribute))
+        elif inspect.isclass(value) and module.classnamefilter(attribute):
+            found.update(
+                (attribute, method)
+                for method, function in vars(value).items()
+                if inspect.isfunction(function) and module.funcnamefilter(method)
+            )
+    return found
+
+
+def _fail_on_uncollected_tests(items: list[pytest.Item]) -> None:
+    """Fail when a test module defines a test that pytest did not collect.
+
+    A `__test__ = False`, also set at run time through globals() or setattr, hides
+    a test from pytest without any skip or deselect.
+    """
+    collected = {
+        (item.path, item.cls.__name__ if item.cls else None, item.originalname)
+        for item in items
+        if isinstance(item, pytest.Function)
+    }
+    missing = [
+        f"{module.nodeid}::{f'{cls}::' if cls else ''}{function}"
+        for module in _modules
+        if module.nodeid in _imported
+        for cls, function in sorted(_defined_tests(module), key=str)
+        if (module.path, cls, function) not in collected
+    ]
+    if missing:
+        msg = (
+            f"pytest did not collect these tests: {', '.join(missing)}. Make them run."
+        )
+        raise pytest.UsageError(msg)
+
+
+def _fail_on_own_hypothesis_settings(items: list[pytest.Item]) -> None:
+    """Fail when a Hypothesis test runs with settings that are not the active profile.
+
+    ruff's banned-api and the search in scripts/check see @settings only under the
+    names they know. This looks at the settings each test really runs with. The
+    attributes are Hypothesis internals: if a new version renames the settings one,
+    every Hypothesis test fails here, so the bump cannot switch this gate off quietly.
+    """
+    active = settings.default
+    own = [
+        item.nodeid
+        for item in items
+        if isinstance(item, pytest.Function)
+        and getattr(item.obj, "is_hypothesis_test", False)
+        and (
+            all(active is not profile for profile in _PROFILES)
+            or getattr(item.obj, "_hypothesis_internal_use_settings", None)
+            is not active
+            or getattr(item.obj, "_hypothesis_internal_use_seed", None) is not None
+            or getattr(item.obj, "_hypothesis_internal_use_reproduce_failure", None)
+            is not None
+        )
+    ]
+    if own:
+        msg = (
+            f"These Hypothesis tests do not run the profile from tests/conftest.py: "
+            f"{', '.join(own)}. Remove their own settings."
+        )
+        raise pytest.UsageError(msg)

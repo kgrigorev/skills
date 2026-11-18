@@ -57,7 +57,7 @@ linters:
     - funlen # functions too long to read on one screen
     - gochecknoglobals # mutable package-level state
     - gochecknoinits # init functions, which run hidden at import
-    - forbidigo # printing, logging, exiting or panicking in the library
+    - forbidigo # printing, exiting, environment and system calls in the library; test skips
     # Tests
     - thelper # helpers without t.Helper(), so failures point at the wrong line
     - tparallel # t.Parallel used in a way that does not run in parallel
@@ -99,16 +99,46 @@ linters:
       statements: 40
       ignore-comments: true
     forbidigo:
+      # Match what a name refers to, not how it is spelled: an import alias, a *testing.T named
+      # x, a testing.TB parameter or a method value (skip := t.Skip) cannot hide a call.
+      analyze-types: true
+      # Each message that says "a command (cmd/<name>/)" is allowed in a command's own files:
+      # see the exclusion rules below. The others apply everywhere.
       forbid:
         # Each pattern names a way to write to the terminal, a global logger or the exit code.
-        - pattern: ^(fmt\.Print.*|print|println|os\.(Stdout|Stderr))$
-          msg: Return values from the library; print only in cmd/.
+        - pattern: ^(fmt\.Print.*|print|println|os\.(Stdout|Stderr|NewFile))$
+          msg: Return values from the library; print only in a command (cmd/<name>/).
         - pattern: ^(log\.(Print|Fatal|Panic|Default|SetOutput|Output|Writer).*|slog\.(Debug|Info|Warn|Error|Log|LogAttrs|Default|SetDefault).*)$
-          msg: Take a logger as a parameter, or return the information; log only in cmd/.
-        - pattern: ^(os\.Exit|syscall\.Exit|runtime\.Goexit)$
-          msg: Return an error; only main decides the exit code.
+          msg: Take a logger as a parameter, or return the information; log only in a command (cmd/<name>/).
+        # os.FindProcess gives a handle on the program's own process, which can then kill it.
+        - pattern: ^(os\.(Exit|FindProcess)|runtime\.Goexit)$
+          msg: Return an error; only a command (cmd/<name>/) decides the exit code.
         - pattern: ^panic$
-          msg: Return an error instead.
+          msg: Return an error instead; only a command (cmd/<name>/) may panic.
+        # Raw system calls reach around every rule above (write to file descriptor 1, kill the
+        # process). A command may use them, for example syscall.SIGTERM for os/signal.
+        - pattern: ^syscall\.
+          pkg: ^syscall$
+          msg: Use the os, os/signal and io packages; raw system calls only in a command (cmd/<name>/), or with the owner's approval.
+        - pattern: ^(unix|windows)\.
+          pkg: ^golang\.org/x/sys/(unix|windows)$
+          msg: Use the os, os/signal and io packages; raw system calls only in a command (cmd/<name>/), or with the owner's approval.
+        # A setting read from the environment is a hidden input, and a test that reads it can
+        # skip itself (if os.Getenv("SLOW") == "" { return }).
+        - pattern: ^os\.(Getenv|LookupEnv|Environ|ExpandEnv)$
+          msg: Take settings as parameters; only a command (cmd/<name>/) reads the environment. Tests set it with t.Setenv.
+        # A skipped test passes without checking anything. Matched by type, so every name and
+        # form counts: t.Skip, x.Skipf, tb.SkipNow, (*testing.T).Skip, skip := t.Skip.
+        - pattern: ^testing\..*\.Skip(f|Now)?$
+          pkg: ^testing$
+          msg: A test must not skip itself; fix it or delete it.
+        - pattern: ^testing\.Short$
+          pkg: ^testing$
+          msg: A test must not skip itself under -short; fix it or delete it.
+        # In rapid, t.Skip drops an input: draw only valid inputs instead (rapid.Custom, Filter).
+        - pattern: ^rapid\.T\.Skip(f|Now)?$
+          pkg: ^pgregory\.net/rapid$
+          msg: A property must not skip inputs; draw only valid ones (rapid.Custom, Filter).
     depguard:
       rules:
         # CODING_STANDARDS.md: reflection, unsafe and C code need the owner's approval. When the
@@ -130,9 +160,17 @@ linters:
     # generated file needs the owner's approval and an exclusion rule below.
     generated: disable
     rules:
-      # The command is where printing and exiting belong.
-      - path: ^cmd/
+      # A command's own files (package main in cmd/<name>/, not its tests and not packages below
+      # it) are where printing, exiting and reading the environment belong. Go regexps have no
+      # lookahead, so the path spells out "a file name that does not end in _test.go".
+      - path: ^cmd/[^/]+/([^/]*([^t/]|[^s/]t|[^e/]st|[^t/]est|[^_/]test)|t|st|est|test)\.go$
+        text: a command \(cmd/<name>/\)
         linters: [forbidigo]
+      # A command reports a failure on stderr and exits; when that write fails too, it has
+      # nowhere left to report it (fmt.Fprintln(stderr, err) in run(args, stdout, stderr)).
+      - path: ^cmd/[^/]+/([^/]*([^t/]|[^s/]t|[^e/]st|[^t/]est|[^_/]test)|t|st|est|test)\.go$
+        text: fmt\.Fprint
+        linters: [errcheck]
       # Table tests are long by nature.
       - path: _test\.go$
         linters: [funlen]

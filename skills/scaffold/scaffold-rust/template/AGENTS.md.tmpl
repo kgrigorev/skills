@@ -43,7 +43,9 @@ The checks enforce the `[lints]` list in `Cargo.toml`: no `unsafe`; no `unwrap`,
 public item and on each crate. `#[allow]` and `#[expect]` are rejected, even with a reason: fix the
 cause, or ask the owner for an exception in `Cargo.toml`. Also rejected: `#[doc(hidden)]`,
 `_ = f();`, proptest settings in the code, and doc examples marked `ignore`, `no_run` or
-`should_panic`. Every `#[test]` function must run: a cfg that hides one turns the check red.
+`should_panic`. Every test must run: a cfg that hides one turns the check red. Write each test as
+a plain `#[test] fn` or a property in `proptest!`: the checks reject a test that another macro
+writes.
 Prefix commands with `mise exec --` when `cargo nextest` is not found.
 
 ## Layout

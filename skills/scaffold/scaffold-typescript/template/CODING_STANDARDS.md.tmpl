@@ -51,8 +51,10 @@ A new entry in `dependencies` or `devDependencies` in `package.json`, or in `all
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
 - Test names describe behaviour.
-- Review what the checks cannot see: a type guard (`value is T`) that checks less than its type
-  claims, a deleted or weakened test, an export or method that only tests use, an unused
-  parameter renamed to `_name`, and a devDependency imported from `src/`.
+- Review what the checks cannot see: a type guard (`value is T`) or an overload signature that
+  claims more than the code checks, a `catch` that turns every error into a default value, a
+  deleted or weakened test, a test that returns before its real assertion, catches its own
+  assertion error or mocks the module it tests, an export or method that only tests use, and a
+  devDependency imported from `src/`.
 - A rule that holds for many inputs gets a property test with fast-check, as in
   `tests/{{package}}.test.ts`.
