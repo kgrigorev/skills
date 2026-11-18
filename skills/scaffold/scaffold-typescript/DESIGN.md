@@ -94,8 +94,11 @@ Every other gate states its reason in a comment in its own file.
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
 - CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-typescript.yml`, and
-  checks that planted defects fail at the right gate. When you scaffold with a newer mise, bump
-  `MISE_VERSION` at the top of that file to match.
+  checks that planted defects fail at the right gate. It then replays every attack in
+  `tests/scaffold/typescript/` with `scripts/test-scaffold typescript`: each must fail at its
+  gate, and the green controls (good code an agent would write) must pass. When you close a hole,
+  add its attack there; when a gate rejects good code, add a green control. When you scaffold
+  with a newer mise, bump `MISE_VERSION` at the top of that file to match.
 - The tool versions are literal in `template/package.json.tmpl`, `template/mise.toml.tmpl` and
   `devEngines`. Pick versions at least one day old: a younger one makes pnpm write a long
   exclusion list into `pnpm-workspace.yaml`.
