@@ -89,21 +89,32 @@ search() {
 }
 # Comments that switch off the linter, the type checker, the formatter, coverage or knip.
 switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|@(public|beta|alias)([^[:alnum:]_]|$)'
-# vitest options that let a test pass without running, searched in tests/ only: `retry: 3` in an
-# HTTP client or a `summary.fails` count is fine in src/. The reporter in vitest.config.ts fails
-# the run on any of them wherever they come from; this names the line first.
-vitest_options='\.(skipIf|runIf|fails)[[:space:]]*[(.]|(^|[^[:alnum:]_])retry[[:space:]]*:'
+# vitest options that skip a test, searched in tests/ only. The reporter in vitest.config.ts fails
+# the run on a skipped, expected-to-fail (.fails) or retried test wherever its options come from;
+# this names the line first. `fails` and `retry` are left to the reporter: as words they also
+# name a count or an HTTP client option that a test passes (`{ fetch, retry: 2 }`).
+vitest_options='\.(skipIf|runIf)[[:space:]]*[(.]'
 if search "$switch_off" '*.ts' ':!vitest.config.ts' ||
   search "$vitest_options" 'tests/*.ts'; then
   fail 'The lines above switch off a check. Remove them and fix the cause.'
 fi
+# `declare` claims that a value exists with a type, and nothing checks the claim: the type check
+# passes and the code fails when it runs. It is the hand-written .d.ts rejected above, inside a
+# .ts file (`declare function`, `declare global`, `declare module`, a `declare` class field).
+# Anchored at the start of a line, so the word in a comment or a string does not count.
+if search '^[[:space:]]*(export[[:space:]]+)?declare[[:space:]]+[[:alpha:]_$]' '*.ts'; then
+  fail 'The lines above declare a value without defining it. Import it from a typed module, or define it.'
+fi
 # Tests must give the same result on every run. The fast-check seed and run count are set in
-# tests/setup.ts only, and no module may hand a test other options.
-if search 'configureGlobal|(^|[^[:alnum:]_])seed[[:space:]]*:|numRuns' '*.ts' ':!tests/setup.ts' ':!vitest.config.ts'; then
-  fail 'The lines above change the fast-check seed or run count. tests/setup.ts sets them.'
+# tests/setup.ts only, and no module may hand a test other options. A `seed:` key is not searched:
+# a seeded generator in src/ takes one. tests/setup.ts fails a property test that ran with
+# another seed or run count, however the options reached it; this names the plain spellings first.
+if search 'configureGlobal|numRuns|interruptAfterTimeLimit|skipAllAfterTimeLimit' '*.ts' ':!tests/setup.ts' ':!vitest.config.ts'; then
+  fail 'The lines above change the fast-check seed, run count or time limit. tests/setup.ts sets them.'
 fi
 # Date["now"] and Math["random"] count, a Date[] type does not. The names are whole words, so a
-# `randomIntegers` arbitrary passes.
+# `randomIntegers` arbitrary passes. tests/setup.ts fails a test that reaches these functions in
+# any other way (an alias, destructuring); this names the plain spellings first.
 nondeterministic='(^|[^[:alnum:]_$])(Date[[:space:]]*(\.[[:space:]]*now|\[[^]])|Math[[:space:]]*(\.[[:space:]]*random|\[))|new Date\(\)|performance\.now|(^|[^[:alnum:]_$])(hrtime|randomUUID|randomBytes|randomInt|getRandomValues)([^[:alnum:]_$]|$)'
 if search "$nondeterministic" 'tests/*.ts' ':!tests/setup.ts'; then
   fail 'The lines above make a test depend on the clock or on random values. Pass fixed values.'

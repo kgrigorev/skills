@@ -1,4 +1,4 @@
-# expect: red No switched-off checks
+# expect: red Test (vitest)
 # A property test with its own seed.
 cat >tests/extra.test.ts <<'X'
 import * as fc from "fast-check";

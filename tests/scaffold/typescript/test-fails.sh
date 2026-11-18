@@ -1,4 +1,4 @@
-# expect: red No switched-off checks
+# expect: red Test (vitest)
 # it.fails passes when the test fails.
 cat >tests/extra.test.ts <<'X'
 import { expect, it } from "vitest";

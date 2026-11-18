@@ -1,4 +1,4 @@
-# expect: red No switched-off checks
+# expect: red Test (vitest)
 # A retry option, which turns a flaky test green.
 cat >tests/extra.test.ts <<'X'
 import { expect, it } from "vitest";

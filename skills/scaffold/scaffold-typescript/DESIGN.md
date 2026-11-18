@@ -54,7 +54,15 @@ Every other gate states its reason in a comment in its own file.
   upgrade.
 - **fast-check with a fixed seed.** Same commit, same result. To explore new inputs, change the
   seed in its own commit. `tests/setup.ts` uses `import * as fc` because the default import trips
-  an oxlint rule on every `fc.assert`.
+  an oxlint rule on every `fc.assert`. It installs a global fast-check plugin (fast-check 4.10 or
+  later) that fails a property run with another seed or fewer runs: options passed to
+  `fc.assert` cannot remove a global plugin, and a search of the source cannot follow a computed
+  key.
+- **The clock and random values in tests are checked at run time.** `tests/setup.ts` wraps
+  `Date`, `Math.random`, `performance.now`, `process.hrtime`, `Temporal.Now` and the `crypto`
+  random functions, and fails the call when the nearest caller is a file under `tests/`. A search
+  of the source cannot see an alias (`const { now } = Date`). Code under `src/` keeps the real
+  functions, because a log stamp or retry jitter is fine there.
 - **knip.** Unused files, exports and dependencies are the debris agents leave most. knip always
   treats exports tagged `@public`, `@beta` or `@alias` as used, and no setting turns that off, so
   `scripts/check` rejects those tags instead.
@@ -86,6 +94,28 @@ Every other gate states its reason in a comment in its own file.
   the green controls: a retry loop must await inside the loop, and an exhaustive `switch` over
   a union needs no `default`. With disable comments rejected, an agent could only contort the
   code. tsc's `noImplicitReturns` covers a missing return.
+- **Holes that stay open.** Each was tried as an attack and passes the gates. Review catches them
+  (`CODING_STANDARDS.md` lists them for the reviewer):
+  - An overload signature that promises a narrower return type than the implementation
+    (`function parse(t: string): Totals;` over an implementation that returns `unknown`). tsc
+    accepts an overload whose return type relates to the implementation's in either direction,
+    no oxlint rule compares them, and banning overloads would reject good code.
+  - A type guard or assertion function that reads its argument but checks less than it claims.
+    Only one that never reads the argument fails (`eslint/no-unused-vars`).
+  - A test that catches its own failing assertion (`try { expect(...) } catch { /* flaky */ }`).
+    `vitest/no-conditional-expect` covers an `expect` inside `catch` only, and a run-time check
+    for swallowed assertion errors would also fail `vi.waitFor` and `expect.poll`, which retry a
+    failing assertion on purpose.
+  - A test that returns early after a trivial assertion (`if (process.platform !== "win32")
+    return;`). `vitest/no-conditional-in-test` would catch it, but it also rejects the `&&`, `?:`
+    and `if` that property tests and result checks need.
+  - A test that mocks the module it tests (`vi.mock("../src/x.ts")`), and a `catch` that turns
+    every error into a default value. Mocking a module under `src/` is often right, and the
+    gates cannot tell an expected error from a bug.
+  - Clock sources other than the wrapped ones, such as `Intl.DateTimeFormat().format()` without
+    a date.
+  - Edits to the gate files themselves (`scripts/check`, the lint, compiler, formatter and test
+    configs, `tests/setup.ts`). Only the owner's review guards them; see CODEOWNERS above.
 - **A browser variant.** A browser app needs bundler resolution, the DOM types, `.tsx`, Vite and
   the React lint rules. That is a separate template.
 

@@ -15,8 +15,22 @@
   },
   "env": { "builtin": true, "node": true },
   "rules": {
-    // tsc reports unused names (noUnusedLocals, noUnusedParameters); one report is enough.
-    "eslint/no-unused-vars": "off",
+    // tsc reports unused names too, but skips any name that starts with `_`, so a type guard
+    // `(_value: unknown): _value is T` that checks nothing passed. No name is exempt here. An
+    // unused parameter before a used one stays (`(_, index) => index`), as does a key left out
+    // with a rest pattern (`const { password: _password, ...visible } = user`).
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "args": "after-used",
+        "argsIgnorePattern": "^$",
+        "varsIgnorePattern": "^$",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^$",
+        "destructuredArrayIgnorePattern": "^$",
+        "ignoreRestSiblings": true
+      }
+    ],
     // tsc reports a path without a return (noImplicitReturns) and, unlike this rule, knows that a
     // switch over every member of a union needs no default.
     "typescript/consistent-return": "off",
@@ -38,6 +52,8 @@
     "typescript/use-unknown-in-catch-callback-variable": "error",
 
     // Promises: a forgotten await loses errors; an async callback where void is expected hides them.
+    // `void promise` loses the error as well: await it, or handle it with .catch.
+    "typescript/no-floating-promises": ["error", { "ignoreVoid": false }],
     "typescript/no-misused-promises": "error",
     "typescript/require-await": "error",
     "typescript/return-await": ["error", "error-handling-correctness-only"],
