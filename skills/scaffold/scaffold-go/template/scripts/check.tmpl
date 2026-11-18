@@ -69,9 +69,11 @@ if [ -n "$in_project" ]; then
   exit 1
 fi
 # The tools that run must be the ones mise installed, not others earlier on PATH.
+# Symlinked folders are resolved first: on CI, PATH reaches a tool through installs/<tool>/latest.
+physical() { [ -n "$1" ] && (cd -P "$(dirname "$1")" && printf '%s/%s\n' "$PWD" "${1##*/}"); }
 for tool in go golangci-lint; do
-  found=$(command -v "$tool" || true)
-  installed=$(mise which "$tool")
+  found=$(physical "$(command -v "$tool" || true)" || true)
+  installed=$(physical "$(mise which "$tool")")
   if [ "$found" != "$installed" ]; then
     echo "$tool runs from $found, not from the mise install $installed. Remove what puts it first on PATH." >&2
     exit 1

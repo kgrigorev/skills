@@ -5,3 +5,5 @@
 cast_body | add_extra
 fmt
 fake_tidy tools
+# The caller PATH above must still reach mise, wherever it is installed.
+ln -s "$(command -v mise)" tools/mise
