@@ -1,4 +1,4 @@
-# expect: red Build
+# expect: red Build (warnings
 # An unused top-level binding: a warning, so an error.
 cat >>src/SampleTool.hs <<'HS'
 

@@ -6,8 +6,9 @@ Every other gate states its reason in a comment in its own file.
   - `sandbox.filesystem.allowWrite` lists the cache and state folders of cabal and mise, so
     `scripts/check` runs inside the sandbox without a bypass. `~/.ghcup` and `~/.config/cabal`
     are left out on purpose. Installing GHC is an owner step. The cabal user config can add
-    compiler options (`program-default-options`), so agents must not write it. The README's
-    `cabal update` creates it once during setup.
+    compiler options (`program-default-options`), so agents must not write it, although
+    `scripts/check` no longer reads it for builds (see Gates). The README's `cabal update`
+    creates it once during setup.
   - `sandbox.excludedCommands` holds `gh *`, because the macOS TLS check fails inside the
     sandbox. It only matches a plain `gh ...` call, without `cd`, a heredoc or a redirect.
   - `attribution` is empty, so commits and PRs describe the change only.
@@ -55,15 +56,45 @@ Every other gate states its reason in a comment in its own file.
   Alex, Happy and c2hs sources, which Ormolu and HLint do not read, so `scripts/check` rejects
   them, and git-ignored `.hs` files outside `dist-newstyle/`, which pass locally and are missing
   in CI.
-- The switch-off step reads each file whole (perl), because HLint and GHC accept a pragma or an
-  `HLINT ignore` comment split over several lines. It also rejects modules with an `Unsafe` part
-  in their name and every `unsafe*` name: HLint bans only exact names, and base re-exports
-  unsafe functions from many modules (`GHC.IO`, `GHC.Exts`, `Control.Monad.ST.Unsafe`). Comments
-  are stripped before that search, strings are not. Warning flags such as `-Wno-` and `-w` are
-  searched for only in `.cabal` and `cabal.project` files: a `.hs` file can pass flags to GHC
-  only through an `OPTIONS` pragma, which the step rejects whole, so there these words are text,
-  such as a command-line option the program parses. For the same reason `ANN` and `OPTIONS`
-  count only as pragmas (`{-#`), and a comment such as `{- Annual totals -}` passes.
+- The switch-off step reads each `.hs` file whole (perl), because HLint and GHC accept a pragma
+  or an `HLINT ignore` comment split over several lines. It first splits the file the way GHC
+  lexes it: nested block comments, line comments, string and character literals. A regex over
+  the raw text read `"--"` or `"{-"` in a string as a comment start and skipped real code after
+  it, and read a word in a string as code. Pragmas are searched for in comments only, code
+  rules in code only. `ANN` and `OPTIONS` count only as pragmas (`{-#`), so a comment such as
+  `{- Annual totals -}` passes.
+- Escape hatches are matched by where they come from, not by every name: imports of another
+  package's module with an `Unsafe` or `Internal` part in its name (`Data.ByteString.Internal`
+  exports `accursedUnutterablePerformIO`), `unsafe*` names in an import list, and `unsafe*` names
+  used through the qualifier of another package's module (`IO.unsafeIOToST`). HLint bans only
+  exact names, and base re-exports unsafe functions from many modules (`GHC.IO`, `GHC.Exts`).
+  `-Wmissing-import-lists` makes every other import name what it brings in, also with `hiding`,
+  so these three cover them all. The project's own modules are exempt: a local `unsafeChars` or a
+  `SampleTool.Internal` module is fine.
+- `module M (module M)` is rejected: it exports every name, so `-Wunused-top-binds` never sees
+  dead code.
+- Flags in `.cabal` and `cabal.project` files are checked against a list of allowed flags (the
+  warning list, `-Werror`, `-threaded`, `-rtsopts`, `-with-rtsopts=`, `-O`), not against bad
+  ones. GHC also reads flags from response files (`@file`), runs preprocessors (`-F -pgmF`) that
+  can add an `OPTIONS_GHC` line no step sees, and has many spellings for "warnings off". Other
+  `*-options` fields are not allowed. In `.hs` files GHC reads flags only from an `OPTIONS`
+  pragma, which the step rejects whole, so there `-w` is text, such as a command-line option.
+- `cabal.project` may set only `packages`, `tests`, `benchmarks`, `with-compiler`, `index-state`,
+  `optimization`, `constraints`, `allow-newer` and `allow-older`, plus `package` stanzas with
+  `ghc-options` and `flags` and `source-repository-package` stanzas. cabal also reads test
+  options, a test wrapper, program options and other files (`import:`) from it.
+- The build settings step parses the `.cabal` file: every component starts with
+  `import: common`, extensions and the language are set only in `common common` (a component
+  could switch GADTs or CPP back on, and HLint lints only one branch of `#if`), no `buildable`
+  field (an unbuildable component hides its type errors), `build-type: Simple`, and every
+  `hs-source-dirs` and `packages` entry is a folder inside the project that git does not ignore.
+  The format, lint and switch-off steps read only files git sees, so a source folder under
+  `dist-newstyle/` would skip them.
+- From the freeze step on, `scripts/check` runs cabal with a config file of its own: the Hackage
+  repository, and the index and store folders that the user's config names. cabal reads
+  compiler and test options from its user config (`program-default-options`, `test-wrapper`),
+  and `CABAL_CONFIG`, also set in `mise.toml`'s `[env]`, can point it at any file. Other
+  settings of the user's config, such as an extra repository, do not apply to the check.
 - The warning list lives twice: in the `common common` stanza, where GHC and HLS read it, and in
   `scripts/check`, which fails when the stanza loses a flag or a component does not start with
   `import: common`. A new component would otherwise build without `-Wall`. The `-Werror` stanza
@@ -71,8 +102,18 @@ Every other gate states its reason in a comment in its own file.
   `import:` other files, which no step reads. Passing the flags on the command line
   (`--ghc-options`) would need no list, but cabal then rebuilds the package every time someone
   switches between `cabal build` and `scripts/check`.
-- The test step counts hspec summaries ("N examples, 0 failures") and expects one per
-  `test-suite`. A `Main` that replaces the hspec-discover driver would run nothing and pass.
+- Every test suite's `main-is` must be exactly the hspec-discover driver line, and its
+  `other-modules` must be `*Spec` modules under the driver's folder (hspec-discover runs only
+  those) or modules that another module imports. A hand-written `Main` or a spec module with
+  another name would run only some tests, or none. The test step also counts hspec summaries
+  ("N examples, 0 failures") and expects one per `test-suite`.
+- HLint bans the settings that make a test check less or invert it: `expectFailure`, `once`,
+  `withMaxSuccess`, `withNumTests` and the other `with*` and `modify*` settings, and hspec's
+  `Test.Hspec.Core.*` and `Test.Hspec.Runner` modules, which can turn a suite into a dry run.
+- HLint bans by module where a name is total elsewhere: `Data.Text.index` and
+  `Data.List.NonEmpty.fromList` are banned, `Data.List.NonEmpty.head` is allowed although
+  `head` is banned. `System.Exit` is allowed only in `Main` modules, so the library returns an
+  `Either`. `throw` and `assert` are banned like `error`; `throwIO` stays allowed.
 - `scripts/check` clears every `HSPEC_*` variable and passes `--ignore-dot-hspec`, because either
   can skip tests or turn every test into a dry run.
 - QuickCheck runs with a fixed seed, so the gate never fails by chance. The weekly
@@ -83,17 +124,21 @@ Every other gate states its reason in a comment in its own file.
 - The freeze file could differ between macOS and Linux (OS-specific dependencies or flags). Today
   they agree. If they ever differ, generate the file in CI only.
 - Not closed:
-  - The user's `~/.config/cabal/config` and `GHCRTS` can still change how cabal and the tests
-    run.
+  - `GHCRTS` can still change how the tests run.
   - The gate files themselves (`.hlint.yaml`, `scripts/check`, `mise.toml`, `cabal.project`, the
-    common stanza). An `ignore:` line in `.hlint.yaml` turns a ban off. Only the owner's review
-    of every change guards them. CODEOWNERS adds nothing in a one-owner repository, because
-    GitHub does not let the author approve their own PR.
-  - Test content: a test without an assertion (`it "x" True`), `when False`,
-    `modifyMaxSuccess (const 1)` or deleted tests pass. Only review catches them.
-  - Unused exported code (no weeder: it needs HIE files and a release per GHC version),
-    exceptions caught as `SomeException` (HLint cannot match types) and partial arithmetic such
-    as `div` by zero.
+    common stanza). An `ignore:` line in `.hlint.yaml` turns a ban off; `default-extensions:
+    CPP` or a flag in the common stanza, or a variable in `mise.toml`'s `[env]`, changes the
+    build. Only the owner's review of every change guards them. CODEOWNERS adds nothing in a
+    one-owner repository, because GitHub does not let the author approve their own PR.
+  - Test content: a test without an assertion (`it "x" True`, `seq` instead of `shouldBe`),
+    `when False`, a generator that yields one value (`forAll (pure "")`) or deleted tests pass.
+    Only review catches them. Pattern hints for each form would be one more list to dodge.
+  - Exceptions that are caught and dropped (`void (try ...)`, `_ <- try ...`) and exceptions
+    caught as `SomeException` (HLint cannot match types).
+  - Partial functions outside the ban list, such as `Text.splitOn ""` or `Text.replace ""`, and
+    partial arithmetic such as `div` by zero. The list names the ones an agent reaches for in
+    base, containers and text.
+  - Unused exported code (no weeder: it needs HIE files and a release per GHC version).
   - `scripts/freeze` needs a local Hackage index at least as new as `index-state`; it runs
     `cabal update` first for that reason.
 

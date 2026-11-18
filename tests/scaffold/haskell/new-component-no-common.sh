@@ -1,4 +1,4 @@
-# expect: red Warning settings
+# expect: red Build settings
 # A new executable without import: common builds without the warning flags.
 printf '\nexecutable extra\n  hs-source-dirs: tools\n  main-is: Main.hs\n  default-language: GHC2024\n  build-depends: base\n' >>sample-tool.cabal
 mkdir tools

@@ -1,4 +1,4 @@
-# expect: red Build
+# expect: red Build (warnings
 # A case that misses a constructor.
 perl -0pi -e 's/\(banner, tidyName\)/(banner, describe, tidyName)/' src/SampleTool.hs
 cat >>src/SampleTool.hs <<'HS'

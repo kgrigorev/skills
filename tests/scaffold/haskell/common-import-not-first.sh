@@ -1,4 +1,4 @@
-# expect: red Warning settings
+# expect: red Build settings
 # A new executable whose import: common is not its first field.
 printf '\nexecutable extra\n  hs-source-dirs: tools\n  import: common\n  main-is: Main.hs\n' >>sample-tool.cabal
 mkdir tools

@@ -1,4 +1,4 @@
-# expect: red Warning settings
+# expect: red Build settings
 # -Wall dropped from the common stanza.
 perl -0pi -e 's/    -Wall\n//' sample-tool.cabal
 cat >>src/SampleTool.hs <<'HS'

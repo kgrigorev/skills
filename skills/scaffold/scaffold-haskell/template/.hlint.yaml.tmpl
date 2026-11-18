@@ -12,14 +12,22 @@
 - functions:
   - {name: [head, tail, init, last, "!!", "!", foldl1, foldr1, maximum, minimum, genericIndex, cycle], within: [], message: "Partial: fails on some inputs. Pattern match instead, or use a total function such as !?."}
   - {name: [toEnum, succ, pred], within: [], message: "Partial: fails outside the type's range. Use a case expression or a lookup that returns Maybe."}
+  - {name: [foldl1', chr, digitToInt, intToDigit, findMin, findMax, deleteFindMin, deleteFindMax, elemAt, deleteAt, updateAt], within: [], message: "Partial: fails on some inputs. Use a total function, such as lookupMin, or return Maybe."}
+  # Names that other modules also use for total functions, so they are banned per module.
+  - {name: [Data.Map.Strict.findIndex, Data.Set.findIndex, Data.Text.index, Data.Text.Lazy.index, Data.ByteString.index, Data.ByteString.Char8.index, Data.Sequence.index, Data.Ix.index, Data.List.NonEmpty.fromList], within: [], message: "Partial: fails on some inputs. Use a total function, such as lookupIndex or nonEmpty, or return Maybe."}
+  # The same names on a NonEmpty list are total: allowed everywhere.
+  - {name: [Data.List.NonEmpty.head, Data.List.NonEmpty.tail, Data.List.NonEmpty.init, Data.List.NonEmpty.last, Data.List.NonEmpty.cycle], within: ['**'], message: "Total on a NonEmpty list."}
   - {name: foldl, within: [], message: "Lazy: builds up thunks. Use foldl' (exported by Prelude)."}
   - {name: fromJust, within: [], message: "Partial. Pattern match, or use fromMaybe or maybe."}
-  - {name: read, within: [], message: "Partial. Use readMaybe from Text.Read."}
-  - {name: [error, errorWithoutStackTrace, undefined], within: [], message: "Return a Maybe or an Either instead."}
+  - {name: [read, readLn, readIO], within: [], message: "Partial. Use readMaybe from Text.Read."}
+  # Crashes from pure code. In IO, throwIO is fine for the unexpected, such as a full disk.
+  - {name: [error, errorWithoutStackTrace, undefined, throw, Control.Exception.assert, Control.Exception.Base.assert, GHC.Base.assert], within: [], message: "Return a Maybe or an Either instead."}
   - {name: [unsafePerformIO, unsafeDupablePerformIO, unsafeInterleaveIO, unsafeCoerce], within: [], message: "Unsafe. Not allowed."}
   - {name: [trace, traceShow, traceShowId, traceM, traceShowM, traceId], within: [], message: "Debug output. Remove it."}
   - {name: [xit, xspecify, xdescribe, xcontext, pending, pendingWith], within: [], message: "Do not skip tests. Fix or delete them with the owner's approval."}
   - {name: [fit, fspecify, fdescribe, fcontext, focus], within: [], message: "Do not commit focused tests."}
+  # Settings that make a test check less, or invert it. scripts/check sets the test options.
+  - {name: [expectFailure, Test.QuickCheck.once, Test.QuickCheck.Property.once, withMaxSuccess, withNumTests, withDiscardRatio, withMaxSize, withMaxShrinks, modifyMaxSuccess, modifyMaxDiscardRatio, modifyMaxSize, modifyMaxShrinks, modifyArgs, modifyConfig], within: [], message: "Do not change how much a test checks. Write a better generator or test instead."}
 
 - modules:
   - {name: [Debug.Trace, System.IO.Unsafe, Unsafe.Coerce], within: [], message: "Not allowed."}
@@ -28,6 +36,10 @@
   - {name: Data.Dynamic, within: [], message: "Not allowed. Use a sum type."}
   - {name: [Data.Map, Data.Map.Lazy], within: [], message: "Use Data.Map.Strict."}
   - {name: Control.Arrow, within: [], message: "Hard to read. Write a lambda or a helper function."}
+  # Only an executable's Main decides to stop the program. The library returns an Either.
+  - {name: System.Exit, within: [Main], message: "Only Main may exit. Return an Either and let Main exit."}
+  # hspec's internals can switch a whole suite to a dry run or skip examples.
+  - {name: [Test.Hspec.Core.**, Test.Hspec.Runner, Test.Hspec.Api.**], within: [], message: "Not allowed. scripts/check sets the test options."}
 
 # Point-free style hides the arguments and is hard to read. Do not suggest it.
 - ignore: {name: Eta reduce}
