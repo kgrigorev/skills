@@ -13,6 +13,8 @@ if [ -z "${CHECK_UNDER_MISE:-}" ]; then
   }
   # An absolute path, so a call from a subfolder (../../scripts/check) works too.
   self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  # Printed here, before mise starts: a mise.lock that lacks a pinned version fails inside mise.
+  printf '==> Tools (the versions in mise.toml, and no other mise config)\n'
   # Only mise.toml may set these, not the caller: where modules come from, the C compiler and
   # its flags, race detector options, and which extra mise config files load.
   unset GOPROXY GOSUMDB GONOSUMDB GONOPROXY GOPRIVATE GOINSECURE GOVCS GOAUTH \
@@ -140,10 +142,18 @@ if [ -n "$unchecked" ]; then
 fi
 # Comments that switch off a linter, change runtime defaults, reach into unexported symbols, or
 # skip a test. Searched in every file above, so a file that git ignores is searched too.
-switch_off='//[[:space:]]*(nolint|lint:|#?nosec|gosec:disable|exhaustive:ignore|go:debug|go:linkname)|#nosec|\.Skip(f|Now)?\(|testing\.Short\('
+# A skip is matched on the usual names of a *testing.T, B, F or TB (t, b, f, tb, tt, s.T()) and
+# on a method expression, not on any ".Skip(": a reader or parser type may have its own Skip
+# method, and its callers must not fail here.
+switch_off='//[[:space:]]*(nolint|lint:|#?nosec|gosec:disable|exhaustive:ignore|go:debug|go:linkname)|#nosec|testing\.Short\(|(^|[^[:alnum:]_])(t|b|f|tb|tt|T\(\))\.Skip(f|Now)?\(|testing\.(T|B|F|TB)\)\.Skip'
+# In a test file, also a skip call continued from the line before ("t.\n\tSkip(...)").
+test_skip='^[[:space:]]*Skip(f|Now)?\('
 # shellcheck disable=SC2016 # $0 is awk's, not the shell's.
 sort -u "$work/seen" "$work/git" | tr '\n' '\0' |
-  switch_off=$switch_off xargs -0 awk '$0 ~ ENVIRON["switch_off"] { print FILENAME ":" FNR ": " $0 }' >"$work/switched"
+  switch_off=$switch_off test_skip=$test_skip xargs -0 awk '
+    $0 ~ ENVIRON["switch_off"] || (FILENAME ~ /_test\.go$/ && $0 ~ ENVIRON["test_skip"]) {
+      print FILENAME ":" FNR ": " $0
+    }' >"$work/switched"
 if [ -s "$work/switched" ]; then
   cat "$work/switched"
   echo 'The lines above switch off a check. Remove them and fix the cause.' >&2

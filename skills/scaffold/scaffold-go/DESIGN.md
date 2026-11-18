@@ -61,8 +61,14 @@ Every other gate states its reason in a comment in its own file.
   template turns that off: such a header is one line any file can carry. A real generated file
   needs the owner's approval and an exclusion rule for its path.
 - Known gaps, left to the reviewer (`CODING_STANDARDS.md` names them): a skip through another
-  name (`skip := t.Skip`), a test that asserts nothing or returns early, a deleted test case,
-  and a `TestMain` that narrows which tests run.
+  name (`skip := t.Skip`, a type that embeds `*testing.T`), a test that asserts nothing or
+  returns early, a deleted test case, and a `TestMain` that narrows which tests run.
+- The skip search matches the usual names of a test's `t` (`t`, `b`, `f`, `tb`, `tt`, `s.T()`),
+  not every `.Skip(`: a reader or parser type with its own `Skip` method is ordinary code, and
+  rejecting its callers would push agents to rename good APIs.
+- `scripts/check` prints its first step, `Tools`, before it starts mise, so a failure inside
+  mise (a pin that `mise.lock` lacks) is reported under a step too. `tests/scaffold/go` in
+  `kgrigorev/skills` replays known attacks and good changes against each step.
 - No coverage gate. A coverage number rises with tests that run code without checking it, the
   weak test it would be meant to catch, and agents then write tests for the number.
 - The gate files are protected by `AGENTS.md` and the owner's review, not by a check: a check

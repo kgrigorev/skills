@@ -59,8 +59,9 @@ A new `require` in `go.mod` needs the owner's approval.
 - Write a property test with rapid when a rule holds for all inputs.
 - Helpers call `t.Helper()`. Use `t.TempDir()`, `t.Context()` and `t.Setenv()`, not the `os`
   versions.
-- No test skips itself. The check finds `t.Skip(...)` by text, so look out for a skip through
-  another name, such as `skip := t.Skip`.
+- No test skips itself. The check finds `t.Skip(...)` by text, on the usual names `t`, `b`, `f`,
+  `tb`, `tt` and `s.T()`, so look out for a skip through another name, such as
+  `skip := t.Skip` or a helper type that embeds `*testing.T`.
 - A test asserts something, and does not return early on the environment. The check only
   sees that a test ran, not what it checked, and there is no coverage gate.
 - A `TestMain` calls `m.Run()` and does not change which tests run (for example by setting
