@@ -2,8 +2,9 @@
 # Runs every quality gate. People, agents, the git hook and CI all run this script.
 # It stops at the first failure. Agents: change it only with the owner's approval.
 set -eu
-cd "$(dirname "$0")/.."
-root=$(pwd -P)
+# -P: CMake records paths from $PWD, so a symlinked folder (macOS /tmp, /var) would not match.
+cd -P "$(dirname "$0")/.."
+root=$PWD
 
 # mise.lock must pin the exact version of every tool in mise.toml. mise does not enforce this
 # itself: for a version that the lock lacks it only warns, then may install that version and
