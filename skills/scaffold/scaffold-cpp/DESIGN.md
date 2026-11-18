@@ -44,14 +44,66 @@ Every other gate states its reason in a comment in its own file.
   GoogleTest case as `gtest_discover_tests` writes it, with no other property, and the preset
   must run all of them. Properties such as `PASS_REGULAR_EXPRESSION` or `ENVIRONMENT` can be set
   in many CMake spellings; reading the result covers all of them.
+- ctest trusts a test's exit code, and what ctest runs is what discovery found. Both can be
+  bent: a test can end its process with exit code 0 after a failure (a signal handler, a
+  sanitizer death callback, `exec`), and discovery can be filtered (`DISCOVERY_EXTRA_ARGS`, a
+  `CTestCustom.cmake` ignore list, a test executable that nothing registers). So the check asks
+  each project executable that links GoogleTest for its tests (`--gtest_list_tests`, run by the
+  check itself, outside the preset), runs ctest with `GTEST_OUTPUT=json`, and requires a report
+  that says "completed, no failure" for every listed test. GoogleTest writes the report only when
+  the test run ends normally.
+- `compile_commands.json` must give every project file the same `-D` macros, so a header cannot
+  act differently in the test target than in the program.
 - Link lines in `build.ninja` may not name `-l`, `-L`, frameworks or absolute paths, except the
   C library parts `-lpthread`, `-ldl`, `-lm`, `-lrt` and `-pthread`. That catches `find_package`
   and bare system libraries, which build on one machine and not on another.
-- Not enforced, left to review: edits to the gate files themselves (`.clang-tidy` checks,
-  `cmake/strict.cmake`, the preset's environment), tests without assertions or deleted tests,
-  and code under `#ifdef` of a macro that nothing defines. The owner reviews every PR; a CI
-  label gate for gate files would add a step to each legitimate change and still trust whoever
-  sets the label.
+
+## What `scripts/check` reads in the source
+
+- The C++ searches read the code with comments and the text of string and character literals
+  blanked out, and with backslash-continued lines joined, as the compiler reads it. So a word
+  in a comment or a string is not flagged, and a comment cannot split a word (`#/**/pragma`).
+  Only the `NOLINT` and `clang-format off` searches read comments, because those are comments.
+- A search cannot see a word that a macro builds from parts, so token pasting (`##`) is
+  rejected.
+- `#if`, `#ifdef` and `#elif` may test only `__APPLE__`, `__linux__`, `__cplusplus`, `__cpp_*`
+  and `__has_include`. This is a closed list for the same reason as the flag list: code under
+  any other macro (`NDEBUG`, `__OPTIMIZE__`, a macro nothing defines) is never compiled in the
+  checked build, and naming each such macro misses the next one. Headers use `#pragma once`, the
+  only allowed pragma.
+- In test files (those that include GoogleTest or rapidcheck), `main` and a bare `return;` are
+  rejected. A property skips an input with `RC_PRE`, which fails it when too many are skipped.
+- `std::abort`, `std::terminate`, `std::quick_exit` and `_Exit` are rejected: they skip the test
+  report and the caller's error handling. `assert` stays, for preconditions.
+- The dependency scan reads CMake as CMake does: it drops `#` and `#[[ ]]` comments outside
+  quotes, joins a command over its lines, and matches command names in any letter case.
+- In test files, clang-tidy's `bugprone-unchecked-optional-access` is off. It does not model
+  `ASSERT_TRUE(value.has_value())`, so it rejects the usual GoogleTest code. Every line of a test
+  runs in the check, and the hardened standard library stops a bad access there.
+- `misc-include-cleaner` ignores rapidcheck's headers: it maps `rc::gen::inRange` to no header,
+  so no include of `rapidcheck/gen/Numeric.h` passes.
+
+## Not closed, left to review
+
+The owner reviews every PR. These are the known ways past the gates, and why each stays open:
+
+- Edits to the gate files themselves: `.clang-tidy` checks, `cmake/strict.cmake`,
+  `scripts/check`, and the test preset's environment (for example `max_size=2` in `RC_PARAMS`,
+  so properties try only tiny inputs). A CI label gate for gate files would add a step to each
+  legitimate change and still trust whoever sets the label; hashing them would do the same.
+- Tests without assertions, deleted tests, and tests whose assertions sit under a condition that
+  is false. No tool can tell a weak test from a strong one.
+- A swallowed error: `catch (...) { return 0; }` or `catch (const std::exception &)` with a
+  default value. The catch is not empty, so `bugprone-empty-catch` is silent, and catching to
+  return a fallback is sometimes right.
+- A dropped result: `std::ignore = f();` or `static_cast<void>(f());` on a `[[nodiscard]]`
+  function. `main` needs the second form for `std::fputs`, so the check allows both and
+  CODING_STANDARDS.md asks the reviewer to look.
+- Code that detects the test build without a macro: a `std::source_location` default argument
+  or `__FILE__` inside a macro names the calling test file. The searches catch `__BASE_FILE__`
+  only.
+- A `main` for a test executable in a file that does not include GoogleTest, or a test that
+  writes a fake GoogleTest report before it ends the process.
 
 ## Toolchain
 

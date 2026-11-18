@@ -44,3 +44,6 @@ CheckOptions:
   readability-function-cognitive-complexity.IgnoreMacros: true
   # By default an empty catch passes when its comment says @TODO or @FIXME.
   bugprone-empty-catch.IgnoreCatchWithKeywords: ''
+  # rapidcheck's headers do not map to its symbols: rc::gen::inRange is "not provided" by
+  # rapidcheck/gen/Numeric.h, so no include of it passes. Includes of rapidcheck/ are not checked.
+  misc-include-cleaner.IgnoreHeaders: 'rapidcheck/.*'

@@ -8,7 +8,8 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 `scripts/check` runs every gate: clang-format, a search for switched-off checks, clang-tidy, a
 build with warnings as errors, and the tests with AddressSanitizer, UndefinedBehaviorSanitizer and
 a hardened standard library. It also reads what the compiler really got: a flag outside its list,
-a file the gates skip, a library from the machine, a test property or a skipped test fails it.
+a file the gates skip, a library from the machine, a test property, a skipped test or a test
+that did not finish with a passing GoogleTest report fails it.
 The git hook and CI run it too.
 
 - Work in small steps and keep `scripts/check` green after each one.
@@ -39,13 +40,18 @@ Read `CODING_STANDARDS.md` before writing or reviewing C++.
 
 The checks enforce C++23 without compiler extensions, include what you use
 (`misc-include-cleaner`), no C-style casts, no implicit narrowing, and internal linkage for
-helpers. Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call
-Apple's clang.
+helpers. They also reject in code (comments and strings are not searched): pragmas other than
+`#pragma once`, token pasting (`##`), `#if` on any macro except `__APPLE__`, `__linux__`,
+`__cplusplus`, `__cpp_*` and `__has_include`, and `std::abort`, `std::terminate` and `_Exit`.
+Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call Apple's
+clang.
 
 ## Layout
 
 - Logic goes in the library under `src/`. `app/main.cpp` only calls it.
-- `tests/` holds GoogleTest tests and rapidcheck properties (`RC_GTEST_PROP`).
+- `tests/` holds GoogleTest tests and rapidcheck properties (`RC_GTEST_PROP`). Each test
+  executable links `GTest::gtest_main` and is registered with `gtest_discover_tests`, with no
+  extra arguments. The check runs every test that each one lists.
 - C++ files end in `.cpp` (source) or `.hpp` (header). The check rejects other extensions, and
   any `.cpp` or `.hpp` that nothing compiles.
 - Add every new `.cpp` to `CMakeLists.txt` by name, without globbing. Define new targets below
