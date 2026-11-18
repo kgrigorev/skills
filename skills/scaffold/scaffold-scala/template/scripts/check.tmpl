@@ -55,6 +55,29 @@ unset MUNIT_FLAKY_OK
 
 step 'Tools that run match mise.toml'
 # Printed in the re-run, or when CHECK_UNDER_MISE was set from outside and the re-run skipped.
+# mise reads more files than mise.toml: mise.local.toml, .mise.toml, .config/mise.toml,
+# mise.<env>.toml, .tool-versions and others. Such a file can pick other tools, put its own
+# scala-cli first on PATH or set variables that the JVM reads, and the shape check above never
+# sees it. So ask mise which files it loaded, and allow only mise.toml inside this project.
+root=$(pwd -P)
+project_configs() {
+  mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p' | while read -r path; do
+    case $path in
+    "$PWD/mise.toml" | "$root/mise.toml") ;;
+    "$PWD"/* | "$root"/*) printf '%s\n' "$path" ;;
+    esac
+  done
+}
+extra_configs=$(project_configs)
+if [ -n "$extra_configs" ]; then
+  printf '%s\n' "$extra_configs" >&2
+  fail 'mise reads the files above besides mise.toml. Remove them: only mise.toml sets up the tools.'
+fi
+# The scala-cli and java that run must be the files mise installed, not a script earlier on PATH.
+for tool in scala-cli java; do
+  [ "$(command -v "$tool")" = "$(mise which "$tool")" ] ||
+    fail "$(command -v "$tool") runs, not the $tool that mise installed ($(mise which "$tool")). Remove what changes PATH."
+done
 # mise.local.toml, .tool-versions or a MISE_<TOOL>_VERSION variable can still change what
 # `mise exec` picks, and mise falls back to the machine's java when a version is not in mise.lock.
 # So compare the tools that run now with mise.toml. The JDK pin must be a temurin-X.Y.Z+B one.
@@ -128,9 +151,11 @@ scala-cli fmt --check project.scala src
 
 step 'Build settings only in project.scala, in their fixed shapes'
 # Scala CLI reads `//> using` lines from every source file, so one line in a source file could
-# add -Wconf or a dependency that review misses.
+# add -Wconf or a dependency that review misses. Scala CLI also reads a directive after a
+# byte-order mark or another character that grep does not count as space, so `//>` is banned
+# anywhere in a line.
 # shellcheck disable=SC2086 # the step above keeps spaces out of file names
-if scan '^[[:space:]]*//>' $scala_files; then
+if scan '//>' $scala_files; then
   fail 'Move the lines above to project.scala. Build settings live only there.'
 fi
 # project.scala holds only comments and these directive shapes. Each dependency or plugin is one
@@ -176,53 +201,14 @@ if [ "$expected" != "$actual" ]; then
   fail 'Restore the compiler options in project.scala.'
 fi
 
-step 'No switched-off checks'
-# Annotations, imports, givens and test helpers that silence the compiler, WartRemover, scalafmt
-# or munit, or that let a test pass without checking anything. The annotations are also caught
-# when written in full (@annotation.nowarn), in backticks (@`nowarn`) or imported under another
-# name ({nowarn as quiet}).
-w='[^A-Za-z0-9_]'
-# scalafmt reads its switches from comments, so this pattern reads every line.
-format_off='scalafmt: *\{|format: *(off|on)'
-# Universal equality: a CanEqual given for a top type, or an alias that hides one.
-top='(_root_\.)?(scala\.|java\.lang\.)?(Any|AnyRef|AnyVal|Matchable|Object)'
-switch_off="[@.{,] *\`?(nowarn|unchecked|unused)\`?($w|$)|SuppressWarnings|uncheckedVariance|uncheckedStable"
-switch_off="$switch_off|import .*language($w|$)|assume\\("
-switch_off="$switch_off|CanEqual\\[([^]]*$w)?$top($w|$)|(^|$w)type .*= *$top($w|$)|canEqualAny"
-# munit: skipped, focused, flaky or expected-to-fail tests, and overrides that drop or rewrite the
-# test list. Tags: munit.Fail turns a failure into a pass, and a Tag can carry any name. Every tag
-# lives in package munit, so the tag names are banned after `munit.`, in munit imports (also
-# `munit.*`) and under a renamed or reopened package munit. Plain names such as `Ignore` or `Fail`
-# stay free for the project's own code.
-tags='Tag|Ignore|Only|Flaky|Fail|Pending|Slow'
-test_off="\\. *\`?(only|ignore|pending|flaky|fail)\`?($w|$)|munit\\. *\`?($tags)\`?($w|$)"
-test_off="$test_off|(import|export) .*munit.*[.{, ]\`?(\\*|_|given|$tags)\`?($w|$)|munit +as($w|$)|(^|$w)package +munit($w|$)"
-test_off="$test_off|IgnoreSuite|munitIgnore|munitFlakyOK|isCI|TestOptions|withTags|\\.tag *\\("
-test_off="$test_off|munitTests($w|$)|munit[A-Za-z]*Transforms?($w|$)|(Test|Suite|Value)Transform($w|$)"
-test_off="$test_off|(^|$w)def +(test|property)($w|$)"
-# ScalaCheck: fewer runs, or Properties objects that munit never runs.
-test_off="$test_off|scalaCheckTestParameters|withMinSuccessfulTests|org\\.scalacheck\\.Properties|extends +Properties"
-# Scala CLI puts a file in the test scope when a folder on its path is named test or its name ends
-# in .test.scala. Only there can code see munit and ScalaCheck, so the munit and ScalaCheck words
-# are banned only there, and a domain name such as `def property` or `Tag(...)` in main code
-# passes. Any path with "test" in it counts, to be safe.
+step 'No switched-off checks in comments'
+# scalafmt reads switches from comments: `format: off`, the IntelliJ form `@formatter:off`, and
+# `scalafmt: { ... }`, which changes the rules for one file. Comments never reach the compiled code
+# that the search after the build reads, so they are searched here, in any case.
+format_off='scalafmt *: *\{|(@?formatter|format) *: *(off|on)'
 # shellcheck disable=SC2086 # the step above keeps spaces out of file names
-test_files=$(printf '%s\n' $scala_files | grep -i test || true)
-# A line that holds only a comment switches nothing off, and comments use these words in plain
-# English ("Ignore blank lines"). A line with code before or after a comment is still read.
-comment_only='^[^:]*:[0-9]+:[[:space:]]*(//|/\*([^*]|\*+[^*/])*\*+/[[:space:]]*$)'
-code_scan() {
-  status=0
-  found=$(grep -nHE "$@") || status=$?
-  [ "$status" -le 1 ] || fail 'grep could not read the files above.'
-  found=$(printf '%s\n' "$found" | grep -vE "$comment_only" || true)
-  [ -n "$found" ] || return 1
-  printf '%s\n' "$found"
-}
-# shellcheck disable=SC2086 # the step above keeps spaces out of file names
-if scan "$format_off" .scalafmt.conf $scala_files || code_scan "$switch_off" $scala_files ||
-  { [ -n "$test_files" ] && code_scan "$test_off" $test_files; }; then
-  fail 'The lines above switch off a check. Remove them and fix the cause.'
+if scan -i "$format_off" .scalafmt.conf $scala_files; then
+  fail 'The lines above switch off the format check. Remove them and format the code.'
 fi
 
 step 'Build and test (warnings and WartRemover findings are errors, set in project.scala)'
@@ -231,24 +217,225 @@ step 'Build and test (warnings and WartRemover findings are errors, set in proje
 # from scratch, so the result never depends on server state.
 # --suppress-outdated-dependency-warning: that hint asks Maven Central, so it changes by the day.
 # --require-tests with munit as the only framework: a run that finds no test suite fails.
-# Each suite ends with "Test run <suite> finished: F failed, I ignored, T total". A skipped test, or
-# a suite with no tests (munit counts it as ignored), fails here, though munit exits 0.
-test_log=$(mktemp)
-test_status=$(mktemp)
-trap 'rm -f "$test_log" "$test_status"' EXIT
+# -Vprint:typer: the compiler prints the code it compiled, after it resolved every name. The next
+# step searches that code instead of the source text, so an alias, a renamed import, a line break
+# or a comment-like line in a string cannot hide a switch-off. The printout is kept out of the log
+# shown here (hide_trees). -color:never keeps it plain text.
+# The logging setting makes the JDK record every call of System.exit with its caller (see the
+# last step).
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+test_log=$work/test.log
+# shellcheck disable=SC2016 # %5$s and %6$s are Java format fields, not shell variables
+printf '%s\n' 'handlers = java.util.logging.FileHandler' \
+  "java.util.logging.FileHandler.pattern = $work/exit.log" \
+  'java.util.logging.FileHandler.level = ALL' \
+  'java.util.logging.FileHandler.formatter = java.util.logging.SimpleFormatter' \
+  'java.util.logging.SimpleFormatter.format = %5$s%6$s%n' \
+  'java.lang.Runtime.level = ALL' >"$work/logging.properties"
+# shellcheck disable=SC2016 # an awk program, not shell code
+hide_trees='
+  /^\[\[syntax trees at end of/ { hide = 1; next }
+  hide == 1 { if ($0 == "}" || $0 == "<empty>") hide = 2; next }
+  hide == 2 { hide = 0; if ($0 == "") next }
+  { print; fflush() }
+'
 {
   if scala-cli test project.scala src --server=false --suppress-outdated-dependency-warning \
-    --test-framework munit.Framework --require-tests 2>&1; then
-    echo 0 >"$test_status"
+    --test-framework munit.Framework --require-tests -O -Vprint:typer -O -color:never \
+    --java-opt "-Djava.util.logging.config.file=$work/logging.properties" 2>&1; then
+    echo 0 >"$work/status"
   else
-    echo 1 >"$test_status"
+    echo 1 >"$work/status"
   fi
-} | tee "$test_log"
-[ "$(cat "$test_status")" = 0 ] || exit 1
+} | tee "$test_log" | awk "$hide_trees"
+test_status=$(cat "$work/status")
+# No test ran: the build failed, and its errors are above.
+if [ "$test_status" != 0 ] && ! grep -q '^Test run ' "$test_log"; then
+  exit 1
+fi
+
+step 'No switched-off checks in the compiled code'
+# The compiled code from the step above, one file after another, up to the first test result.
+# String and char literals are blanked out first, so words in text never count. Each finding is
+# printed as "file: reason: code". The compiler adds code of its own, which is skipped:
+# `x$1: @unchecked` in a desugared `for`, `@uncheckedVariance` on default arguments, the try and
+# catch in enum and @main code.
+# Universal equality: a CanEqual instance for a top type (Any, AnyRef, AnyVal, Matchable, Object),
+# for a type alias or a type parameter that can stand for one, or a generic CanEqual given.
+# Test files are the files Scala CLI puts in the test scope (a folder named test, or a name that
+# ends in .test.scala) and every file that uses munit or ScalaCheck. Only there are the munit and
+# ScalaCheck words banned, so a domain name such as `def property` in main code passes. Test
+# files also may not catch exceptions: a test that catches can catch its own failed assertion.
+# shellcheck disable=SC2016 # an awk program, not shell code
+tree_scan='
+  function strip(s,   out, i, n, c, j) {
+    out = ""; n = length(s); i = 1
+    while (i <= n) {
+      c = substr(s, i, 1)
+      if (c == "\"") {
+        for (i++; i <= n; i++) { c = substr(s, i, 1); if (c == "\\") i++; else if (c == "\"") break }
+        out = out "\"\""; i++; continue
+      }
+      if (c == q && substr(s, i + 1, 1) == "\\") {
+        j = index(substr(s, i + 3), q)
+        if (j > 0) { out = out q q; i += 3 + j; continue }
+      }
+      if (c == q && substr(s, i + 2, 1) == q) { out = out q q; i += 3; continue }
+      out = out c; i++
+    }
+    return out
+  }
+  function rel(p) {
+    if (index(p, root "/") == 1) return substr(p, length(root) + 2)
+    if (index(p, real "/") == 1) return substr(p, length(real) + 2)
+    return p
+  }
+  function keep() {
+    if (pending == "") return
+    n++; L[n] = pending; F[n] = file; J[file] = J[file] " " pending; pending = ""
+  }
+  function opens(s,   t, o) { t = s; o = gsub(/\{/, "", t); t = s; return o - gsub(/\}/, "", t) }
+  function report(f, why, s) {
+    gsub(/^ +| +$/, "", s)
+    if (length(s) > 150) s = substr(s, 1, 147) "..."
+    printf "%s: %s: %s\n", f, why, s
+  }
+  function mentions(s,   part, k, m) {
+    m = split(s, part, /[^A-Za-z0-9_$]+/)
+    for (k = 1; k <= m; k++) if (part[k] in top || part[k] in wide) return 1
+    return 0
+  }
+  function collect(s,   rest, name, body, m, hi) {
+    rest = s
+    while (match(rest, / type [A-Za-z_][A-Za-z0-9_]*/)) {
+      name = substr(rest, RSTART + 6, RLENGTH - 6); rest = substr(rest, RSTART + RLENGTH); body = rest
+      if (match(body, / (final|lazy|given|def|val|var|type|class|object|trait|case|private|protected|override|implicit|sealed|abstract|opaque|enum|import|export|package|module|inline|transparent)[ [(]|[{}]/))
+        body = substr(body, 1, RSTART - 1)
+      alias[name] = alias[name] " " body
+    }
+    rest = s
+    while (match(rest, /[[, ][A-Za-z_][A-Za-z0-9_]*( >: [^],<]*)? <: [A-Za-z0-9_.]+/)) {
+      m = substr(rest, RSTART + 1, RLENGTH - 1); rest = substr(rest, RSTART + RLENGTH)
+      name = m; sub(/ .*/, "", name); hi = m; sub(/.* <: /, "", hi); sub(/.*\./, "", hi)
+      if (hi in top) wide[name] = 1
+    }
+  }
+  function caneq(f, s,   rest, i, d, k, len, c, args) {
+    rest = s
+    while ((i = index(rest, "CanEqual[")) > 0) {
+      rest = substr(rest, i + 9); len = length(rest); d = 1
+      for (k = 1; k <= len && d > 0; k++) { c = substr(rest, k, 1); if (c == "[") d++; else if (c == "]") d-- }
+      args = substr(rest, 1, k - 2)
+      if (mentions(args)) report(f, "universal equality", "CanEqual[" args "]")
+      rest = substr(rest, k)
+    }
+  }
+  function check(i,   f, s, t) {
+    f = F[i]; s = L[i]; t = (f in testfile)
+    gsub(/x\$[0-9]+:\(x\$[0-9]+ : .*\) @unchecked/, "", s)
+    if (s ~ /^ *def [A-Za-z0-9_]*[$]default[$][0-9]+/) gsub(/@uncheckedVariance/, "", s)
+    if (s ~ ("@([A-Za-z0-9_]+[.])*(nowarn|unused|unchecked|uncheckedVariance|uncheckedStable|uncheckedCaptures|SuppressWarnings)" e))
+      report(f, "an annotation that silences a check", s)
+    if (s ~ (b "runtimeChecked" e)) report(f, "runtimeChecked skips the match check", s)
+    if (s ~ ("^ *(import|export) .*" b "language" e) || s ~ ("scala[.]language" e) || s ~ /language[.]type/)
+      report(f, "a language import switches a feature warning off", s)
+    if (s ~ /canEqualAny/) report(f, "universal equality", s)
+    if (s ~ ("(^|[^.A-Za-z0-9_$])(require|assert)[(]") || s ~ /Predef[.](require|assert)[(]/ || s ~ (b "sys[.]error[(]"))
+      report(f, "throws without the throw keyword: return an Either", s)
+    if (s ~ (b "assume[(]")) report(f, "assume skips a test or a check", s)
+    if (s ~ /scala[.]quoted[.]/) report(f, "a macro: WartRemover never sees the code it builds", s)
+    if (s ~ ("munit[.](Tag|Ignore|Only|Flaky|Fail|Pending|Slow)" e) || s ~ (b "package munit" e))
+      report(f, "a munit tag skips, focuses or excuses tests", s)
+    if (s ~ /IgnoreSuite|munitIgnore|munitFlakyOK|withTags|scalaCheckTestParameters|withMinSuccessfulTests/ ||
+      s ~ (b "isCI" e) || s ~ ("(munitTests|munit[A-Za-z]*Transforms?|(Test|Suite|Value)Transforms?)" e) ||
+      s ~ ("org[.]scalacheck[.]Properties" e))
+      report(f, "changes which tests run or how often", s)
+    if (!t) return
+    if (s ~ ("[.](only|ignore|pending|flaky|fail|tag)" e)) report(f, "a munit test option skips, focuses or excuses a test", s)
+    if (s ~ (b "def (test|property)" e)) report(f, "replaces how munit registers tests", s)
+    if ((s ~ (b "catch" e) && s !~ /[$]values[.]apply[(]ordinal[)] catch/ && L[i + 2] !~ /CommandLineParser[.]ParseError/) ||
+      s ~ ("scala[.]util[.](Try|Using)[.]apply" e) || s ~ /scala[.]util[.]control[.]Exception/)
+      report(f, "a test that catches exceptions can catch its own failure: use intercept", s)
+  }
+  BEGIN { q = sprintf("%c", 39); b = "(^|[^A-Za-z0-9_])"; e = "([^A-Za-z0-9_]|$)" }
+  { gsub(/\033\[[0-9;]*m/, "") }
+  /^Test run / { stop = 1 }
+  stop { next }
+  /^\[\[syntax trees at end of/ {
+    keep(); file = $0; sub(/^.*\]\] *\/\/ */, "", file); file = rel(file); seen[file] = 1; next
+  }
+  file == "" { next }
+  {
+    line = strip($0)
+    if (pending != "") { sub(/^ +/, "", line); line = pending (pending ~ /[.]$/ ? "" : " ") line; pending = "" }
+    pending = line
+    if (line ~ /[.]$/ || (line ~ /^ *(import|export) / && opens(line) > 0)) next
+    keep()
+  }
+  END {
+    keep()
+    split("Any AnyRef AnyVal Matchable Object", word, " ")
+    for (k in word) top[word[k]] = 1
+    m = split(expected, want, " ")
+    for (k = 1; k <= m; k++) if (want[k] != "" && !(want[k] in seen)) { print want[k] ": not in the compiled code"; missing = 1 }
+    if (missing) exit 3
+    for (f in J) {
+      collect(J[f])
+      if (f ~ /(^|\/)test\// || f ~ /\.test\.scala$/ || J[f] ~ /munit[.]|org[.]scalacheck[.]/) testfile[f] = 1
+    }
+    for (a in alias) if (mentions(alias[a])) wide[a] = 1
+    for (round = 0; round < 20; round++) {
+      changed = 0
+      for (a in alias) if (!(a in wide) && mentions(alias[a])) { wide[a] = 1; changed = 1 }
+      if (!changed) break
+    }
+    for (f in J) caneq(f, J[f])
+    for (k = 1; k <= n; k++) check(k)
+  }
+'
+# Every source file must be in the printout, or a file would escape the search.
+# shellcheck disable=SC2086 # the step above keeps spaces out of file names
+expected=$(printf '%s ' project.scala $scala_files)
+status=0
+findings=$(awk -v root="$PWD" -v real="$root" -v expected="$expected" "$tree_scan" "$test_log") ||
+  status=$?
+if [ "$status" -ne 0 ]; then
+  printf '%s\n' "$findings" >&2
+  fail 'The compiled code above is missing, so the search could not run. Run scripts/check again.'
+fi
+if [ -n "$findings" ]; then
+  printf '%s\n' "$findings" >&2
+  fail 'The code above switches off a check. Remove it and fix the cause.'
+fi
+
+step 'Build and test: test results'
+[ "$test_status" = 0 ] || fail 'The build or a test failed. The errors are in the output of the build and test step.'
+# A test that ends the JVM with exit code 0 stops the run early, and the suites after it never
+# report. The test runner itself exits last, so the last recorded exit must come from it.
+exit_caller=''
+if [ -f "$work/exit.log" ]; then
+  exit_caller=$(awk '
+    /^java[.]lang[.]Throwable: Runtime[.]exit[(]/ { caller = ""; seen = 1; next }
+    seen && caller == "" && /^[ \t]*at / && !/at java[.]base\// && !/at scala[.]sys[.]package[$][.]exit/ { caller = $0 }
+    END { sub(/^[ \t]*at /, "", caller); print caller }
+  ' "$work/exit.log")
+fi
+case $exit_caller in
+'scala.build.testrunner.DynamicTestRunner$.main('*) ;;
+*) fail "The test run ended before the test runner finished. The exit came from: ${exit_caller:-no recorded exit (Runtime.halt?)}. Tests must not end the JVM." ;;
+esac
+# Each suite ends with "Test run <suite> finished: F failed, I ignored, T total". A skipped test, or
+# a suite with no tests (munit counts it as ignored), fails here, though munit exits 0. A suite that
+# started and did not finish also fails.
 esc=$(printf '\033')
 skipped=$(sed "s/$esc\\[[0-9;]*m//g" "$test_log" | awk '
+  /^Test run .* started/ { started++ }
   /^Test run .* finished: / { runs++; if ($0 !~ / 0 ignored, / || $0 ~ / 0 total/) print }
-  END { if (runs == 0) print "No test summary found." }
+  END {
+    if (runs == 0) print "No test summary found."
+    if (started != runs) print started " suites started, " runs " finished."
+  }
 ')
 if [ -n "$skipped" ]; then
   printf '%s\n' "$skipped" >&2
