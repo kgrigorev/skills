@@ -68,7 +68,9 @@ step 'No switched-off checks'
 # In C source: comments, pragmas, attributes and macros that switch off a warning, clang-tidy, the
 # analyzer, clang-format, a sanitizer or a test. Every #pragma except `#pragma once` counts.
 # `#line` and line markers would make the compiler read the code as another file.
-c_off='NOLINT|_Pragma|#[[:space:]]*pragma|^[[:space:]]*#[[:space:]]*(line|[0-9])|clang-format[[:space:]]+off|__clang_analyzer__|_sanitizer|__SANITIZE_|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|maybe_unused|__attribute__.*unused|gnu::(__)?unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|#[[:space:]]*(define|undef)[[:space:]]+(TEST_|UNITY_|RUN_TEST|setUp|tearDown)|TEST_(IGNORE|PASS)'
+# __has_feature and __has_extension can ask whether a sanitizer is on; a plain word such as
+# name_sanitizer is fine.
+c_off='NOLINT|_Pragma|#[[:space:]]*pragma|^[[:space:]]*#[[:space:]]*(line|[0-9])|clang-format[[:space:]]+off|__clang_analyzer__|__has_(feature|extension)|__SANITIZE_|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|maybe_unused|__attribute__.*unused|gnu::(__)?unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|#[[:space:]]*(define|undef)[[:space:]]+(TEST_|UNITY_|RUN_TEST|setUp|tearDown)|TEST_(IGNORE|PASS)'
 # In CMake, in any letter case: anything that changes warnings, clang-tidy or how a test passes.
 cmake_off='CLANG_TIDY|SKIP_LINTING|WARNING_AS_ERROR|compile_options|COMPILE_FLAGS|_FLAGS|-Wno-|[[:space:]"(]-w([[:space:]")]|$)|add_test|set_tests_properties|set_property|set_directory_properties|set_source_files_properties|DISABLED|WILL_FAIL|SKIP_RETURN_CODE|REGULAR_EXPRESSION|EXCLUDE_FROM_ALL'
 # shellcheck disable=SC2086 # file names have no spaces
@@ -173,11 +175,37 @@ These files are included but are not .h or .inc files that git tracks. Rename or
 toolchain_headers=$(printf '%s\n' "$deps" | grep -E '/conda-clang/[^/]+/include/' || true)
 [ -z "$toolchain_headers" ] || fail "$toolchain_headers
 These headers come from the compiler's own folder, not from a declared dependency."
+# A file from outside the repository must come through an include folder: the compiler's own
+# list (the C library and the OS), or an -I folder that CMake declares for a dependency, which
+# review sees. `#include "../../x.h"` or "/tmp/x.h" would bring in code that no search reads and
+# that CI does not have. The SDK's SDKSettings.json is read by the compiler, not included.
+{
+  run clang -xc -E -v - </dev/null 2>&1 | sed -n '/<\.\.\.> search starts here:/,/^End of search list/p' |
+    sed -n 's/^ //p' | sed 's/ (framework directory)$//'
+  tr ' ' '\n' <build/dev/check-preprocess | sed -n 's/^-I\(..*\)$/\1/p'
+} >build/dev/check-include-dirs
+outside=$(printf '%s\n' "$deps" | awk -v root="$root/" -v clang="$clang_dir/" '
+  BEGIN { while ((getline line <"build/dev/check-include-dirs") > 0) dir[++n] = line }
+  /^    / {
+    path = substr($0, 5)
+    if (index(path, root) == 1 || index(path, clang) == 1) next
+    for (i = 1; i <= n; i++) {
+      sdk = dir[i]
+      sub(/\/usr\/include$/, "", sdk)
+      if (dir[i] == "") continue
+      if (index(path, dir[i] "/") == 1 || path == sdk "/SDKSettings.json") next
+    }
+    print path
+  }' | sort -u)
+[ -z "$outside" ] || fail "$outside
+These files are included from outside the repository, not through an include folder."
 
 step 'No switched-off checks after macro expansion'
 # The compiler sees code after macros expand, so a macro could hide a pragma or an attribute from
 # the search above. Search the project's lines of the preprocessed code too.
-pp_off='#[[:space:]]*pragma|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|(\(\(|\[\[|::|,)[[:space:]]*(__)?(maybe_)?unused(__)?[[:space:]]*(\)|\]|,)|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|__declspec'
+# An unused attribute counts only inside __attribute__((...)) or [[...]]: a variable named
+# `unused` passed to a macro, as in `f((unused))` or `f(a, unused)`, is fine.
+pp_off='#[[:space:]]*pragma|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|__attribute(__)?[[:space:]]*\([[:space:]]*\((([^()]|\([^()]*\))*[^[:alnum:]_])?(__)?unused(__)?([^[:alnum:]_]|$)|\[[[:space:]]*\[[^]]*unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|__declspec'
 found=$(
   while IFS= read -r command; do
     (cd build/dev && run sh -c "$command")

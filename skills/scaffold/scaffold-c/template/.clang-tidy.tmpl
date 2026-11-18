@@ -29,6 +29,8 @@ Checks: >
   -readability-magic-numbers
 CheckOptions:
   # `if (ptr)` is plain C. An integer used as a bool, as in `if (strcmp(a, b))`, is still an error.
+  # In C, `&&`, `||` and `!` give an int, so `return a && b;` from a bool function is an error too.
+  # Compare instead (`(a && b) != 0`), or return early.
   readability-implicit-bool-conversion.AllowPointerConditions: true
   # Every value a project function returns is used, or dropped on purpose with (void). This list
   # replaces the default one, which names C++ functions and C functions without side effects.

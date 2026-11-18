@@ -47,9 +47,14 @@ Every other gate states its reason in a comment in its own file.
 - Every file that a project file includes must be a `.h` or `.inc` file that git tracks (from
   `ninja -t deps`). The format and the searches read only those, so a `.inl` file or an ignored
   header cannot hide a suppression.
+  A file from outside the repository must come through an include folder: the compiler's own
+  list, or an `-I` folder that CMake declares for a dependency. `#include "../../x.h"` cannot reach
+  code that no search reads and that CI does not have.
 - The search for suppressions runs twice: on the source, for comments and conditions such as
   `NOLINT` or `#ifndef __clang_analyzer__`, and on the preprocessed project lines, where a macro
   can no longer hide a pragma or an attribute.
+  Sanitizer detection is matched by its spelling (`__has_feature`, `__SANITIZE_`, `__asan_`), not by
+  the word `sanitizer`, so a function such as `name_sanitizer` passes.
 - The tools run with `env -i` and only `PATH`, `HOME` and `TMPDIR`. `LSAN_OPTIONS`, `CFLAGS` or
   `CMAKE_C_COMPILER_LAUNCHER` from a shell or a mise config would change a result. The check also
   fails when a tool on `PATH` is not the pinned one, or when a mise config other than `mise.toml`

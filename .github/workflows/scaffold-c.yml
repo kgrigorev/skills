@@ -9,11 +9,15 @@ on:
     paths:
       - skills/scaffold/scaffold-c/**
       - .github/workflows/scaffold-c.yml
+      - tests/scaffold/c/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-c/**
       - .github/workflows/scaffold-c.yml
+      - tests/scaffold/c/**
+      - scripts/test-scaffold
   # The scaffold writes mise.lock from conda-forge, and the runners change. A weekly run catches a
   # break that comes without a change here.
   schedule:
@@ -75,3 +79,9 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Replays known ways to slip bad code past the gates (each must fail at its step) and good
+      # code the gates must accept, on the project rendered above.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold c --project "$RUNNER_TEMP/sample-tool"
