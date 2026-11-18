@@ -137,8 +137,16 @@ source = ["{{module}}"]
 fail_under = 100
 show_missing = true
 skip_covered = true
-# The `python -m` guard runs only as a script; tests call main() directly.
-exclude_also = ['if __name__ == "__main__":']
+# The `python -m` guard runs only as a script; tests call main() directly. The pattern matches
+# the guard only when its block is the single line `main()`: coverage skips a whole block when
+# its first line matches, so a looser pattern would hide any code under a guard in any module.
+# `case _: assert_never(status)` ends an exhaustive match. mypy proves it never runs, so no test
+# can reach it. The pattern takes a whole line with a plain name as the argument, so a call
+# inside the parentheses or a comment on another line hides nothing.
+exclude_also = [
+  'if __name__ == "__main__":\n    main\(\)$(?!\n[ \t])',
+  '^[ \t]*assert_never\([A-Za-z_][A-Za-z0-9_.]*\)$',
+]
 
 [tool.pyright]
 # For the editor and agent language server only (pyright-lsp). mypy in scripts/check is the gate.

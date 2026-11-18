@@ -29,8 +29,9 @@ done
 # The same hash seed everywhere, so set iteration order cannot differ between runs.
 export PYTHONHASHSEED=0
 # git reads only the repository's own config: a global core.excludesFile or core.attributesFile
-# must not hide files from the searches below.
-git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git "$@"; }
+# must not hide files from the searches below. quotePath=false: git prints a non-ASCII file name
+# as it is, not quoted, so the layout check below can match it.
+git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.quotePath=false "$@"; }
 
 step() { printf '\n==> %s\n' "$1"; }
 # The environment is synced once below; later commands must not change it.
@@ -77,6 +78,15 @@ if [ -n "$misplaced" ]; then
   printf '%s\n' "$misplaced"
   echo 'Move the files above: code goes in src/{{module}}/, tests and their fixtures in' \
     'tests/test_*.py. No .pyi stubs.' >&2
+  exit 1
+fi
+# The tools read a file that git ignores, but the search above skips it and CI never gets it:
+# the check would pass here and fail in CI.
+ignored=$(git ls-files --others --ignored --exclude-standard -- 'src/*.py' 'src/*.pyi' \
+  'tests/*.py' 'tests/*.pyi')
+if [ -n "$ignored" ]; then
+  printf '%s\n' "$ignored"
+  echo 'git ignores the files above. Commit them or delete them.' >&2
   exit 1
 fi
 # ruff uses the nearest config file, and mypy and pytest prefer their own files over

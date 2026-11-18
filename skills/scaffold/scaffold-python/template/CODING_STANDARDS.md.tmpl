@@ -31,6 +31,8 @@ A reader can follow a module from top to bottom by its docstrings and comments a
 ## Types and errors
 
 - Model data with dataclasses, enums and `TypedDict`, not with `dict[str, object]` passed around.
+- End a `match` over an enum or union with `case _: assert_never(value)`. mypy then reports a
+  missing case, and coverage does not ask for a test of the line that cannot run.
 - Expected failures are values, or specific exception types named in the docstring (`Raises:`).
   `raise ValueError("negative n")` with the message inline is fine. Never catch `Exception`.
 - `json.loads` and similar APIs return `Any`, which mypy cannot check. Turn such a value into a
