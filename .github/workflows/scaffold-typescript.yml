@@ -126,7 +126,7 @@ jobs:
           printf 'export const spaced = 1;\n' >'src/a name with spaces.ts'
           red 'suppression comment next to a file name with spaces' 'No switched-off checks'
           edit 's/^(?=  return )/  const unused = 1;\n/' src/sample-tool.ts
-          red 'unused local (a compiler warning)' 'Type check (tsc, settings in tsconfig.json)'
+          red 'unused local' 'Lint (oxlint with type information, rules in .oxlintrc.json)'
           printf '\nexport function shout(text: string): string {\n  return text.toUpperCase();\n}\n' >>src/sample-tool.ts
           red 'unused export' 'Unused files, exports and dependencies (knip)'
           edit 's/Hello, world!/Hello!/' tests/sample-tool.test.ts

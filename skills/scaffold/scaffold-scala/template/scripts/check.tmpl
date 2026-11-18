@@ -74,8 +74,10 @@ if [ -n "$extra_configs" ]; then
   fail 'mise reads the files above besides mise.toml. Remove them: only mise.toml sets up the tools.'
 fi
 # The scala-cli and java that run must be the files mise installed, not a script earlier on PATH.
+# Symlinked folders are resolved first: on CI, PATH reaches a tool through installs/<tool>/latest.
+physical() { [ -n "$1" ] && (cd -P "$(dirname "$1")" && printf '%s/%s\n' "$PWD" "${1##*/}"); }
 for tool in scala-cli java; do
-  [ "$(command -v "$tool")" = "$(mise which "$tool")" ] ||
+  [ "$(physical "$(command -v "$tool" || true)" || true)" = "$(physical "$(mise which "$tool")")" ] ||
     fail "$(command -v "$tool") runs, not the $tool that mise installed ($(mise which "$tool")). Remove what changes PATH."
 done
 # mise.local.toml, .tool-versions or a MISE_<TOOL>_VERSION variable can still change what

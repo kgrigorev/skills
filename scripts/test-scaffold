@@ -9,6 +9,8 @@
 # Each attack file starts with header lines:
 #   # expect: red <text>   scripts/check fails, and the last "==> " step it printed contains <text>
 #   # expect: green        scripts/check passes (good code the gates must not reject)
+#   # expect-<OS>: ...     optional: replaces the expect line where `uname -s` prints <OS>, for an
+#                          attack that the platform itself stops at another step
 #   # env: NAME=value      optional, repeatable: set for scripts/check only
 # The rest of the file is a sh script that changes the project (cwd is the project root).
 set -eu
@@ -68,11 +70,13 @@ else
   files=$(find "$attacks" -name '*.sh' -type f | sort)
 fi
 
+os=$(uname -s)
 pass=0
 bad=''
 for file in $files; do
   name=$(basename "$file" .sh)
-  expect=$(sed -n 's/^# expect: //p' "$file" | head -n 1)
+  expect=$(sed -n "s/^# expect-$os: //p" "$file" | head -n 1)
+  [ -n "$expect" ] || expect=$(sed -n 's/^# expect: //p' "$file" | head -n 1)
   case $expect in
   green | red\ ?*) ;;
   *) echo "$name: header needs '# expect: green' or '# expect: red <step text>'" >&2; exit 2 ;;
