@@ -1,5 +1,6 @@
-# expect: red No switched-off checks
-# scala.language renamed to a name past maxColumn.
+# expect: red Build and test
+# scala.language renamed to a name past maxColumn. The compiler does not count it as a feature
+# import, so the conversion still fails the build.
 cat > src/main/scala/X.scala <<'EOF'
 package sampletool
 

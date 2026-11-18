@@ -5,7 +5,7 @@ package sampletool
 
 class SampleToolSuite extends munit.FunSuite:
   override def munitTestTransforms: List[TestTransform] =
-    super.munitTestTransforms :+ new TestTransform("p", t => t.withBody(() => ()))
+    super.munitTestTransforms :+ new TestTransform("p", t => t.withBody(() => scala.concurrent.Future.unit))
 
   test("broken"):
     assertEquals(SampleTool.greet("a"), "nope")

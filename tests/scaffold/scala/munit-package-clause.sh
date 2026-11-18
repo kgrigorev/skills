@@ -1,12 +1,16 @@
 # expect: red No switched-off checks
-# A test file in package munit sees Fail without a prefix.
-cat > src/test/scala/Hack.scala <<'EOF'
-package munit.hack
+# A test file in package munit sees Fail without a prefix. Two package clauses open munit's
+# members; a single `package munit.hack` would not.
+cat > src/test/scala/Hack.scala <<'X'
+package munit
+package hack
 
 import sampletool.SampleTool
 
 class HackSuite extends munit.FunSuite:
-  test(testOptionsFromString("broken").copy(tags = Set(Fail))):
+  private val broken = "broken".tag
+
+  test(broken(Fail)):
     assertEquals(SampleTool.greet("a"), "nope")
-EOF
+X
 mise exec -- scala-cli fmt project.scala src >/dev/null
