@@ -1,7 +1,7 @@
 # expect: red Tests
 # A pytest plugin in the package, registered as an entry point, with the hook name built at
-# run time. The text search and the layout check see nothing; tests/conftest.py sees the
-# dropped test.
+# run time. The text search and the layout check see nothing. pytest loads no entry-point
+# plugin (--disable-plugin-autoload), so the failing test runs.
 cat >>pyproject.toml <<'TOML'
 
 [project.entry-points.pytest11]

@@ -1,12 +1,19 @@
-# expect: red Lint
-# ruff format honours yapf: disable like fmt: off, but ruff's ERA001 reads the yapf comments as
-# commented-out code, so lint fails before the search runs.
+# expect: red No switched-off checks
+# A trailing yapf: disable. ruff format honours it like fmt: skip and leaves the line alone, and
+# ruff's ERA001 does not read a trailing comment as code. The search finds it.
 cat >>src/sample_tool/core.py <<'PY'
 
 
-# yapf: disable
 def double(number: int) -> int:
     """Return twice the number."""
-    return number+   2
-# yapf: enable
+    return number*2  # yapf: disable
+PY
+cat >tests/test_double.py <<'PY'
+"""Tests for double."""
+
+from sample_tool.core import double
+
+
+def test_double() -> None:
+    assert double(2) == 4
 PY

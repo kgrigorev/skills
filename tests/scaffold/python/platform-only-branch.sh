@@ -1,6 +1,6 @@
-# expect: red Tests
+# expect: red Lint
 # A macOS-only branch: mypy checks as Linux and skips it, and the tests never run it on CI.
-# Coverage fails on every machine, because no test covers both outcomes.
+# ruff bans sys.platform; coverage would fail too, because no test covers both outcomes.
 cat >src/sample_tool/core.py <<'PY'
 """The library: all the program's logic lives here."""
 

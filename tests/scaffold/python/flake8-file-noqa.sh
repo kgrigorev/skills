@@ -1,5 +1,6 @@
 # expect: red Lint
-# A flake8-style file exemption. ruff does not honour it, so the unused name fails lint.
+# A blanket flake8-style file exemption. ruff honours it, but PGH004 rejects a noqa that names no
+# rule. flake8-file-noqa-with-code covers the form that names one.
 cat >src/sample_tool/core.py <<'PY'
 """The library: all the program's logic lives here."""
 
