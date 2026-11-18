@@ -1,4 +1,4 @@
-# expect: red Every file is checked
+# expect: red Lint
 # A helper in a non-test file skips through a testing.TB named tb.
 mkdir -p internal/testenv
 cat >internal/testenv/testenv.go <<'GO'

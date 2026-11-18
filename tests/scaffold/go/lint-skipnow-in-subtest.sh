@@ -1,4 +1,4 @@
-# expect: red Every file is checked
+# expect: red Lint
 # A subtest that stops itself with SkipNow, on a *testing.T named tt.
 cat >>sampletool_test.go <<'GO'
 

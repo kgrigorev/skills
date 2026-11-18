@@ -1,4 +1,4 @@
-# expect: red Every file is checked
+# expect: red Lint
 # A skip through a method expression.
 cat >>sampletool_test.go <<'GO'
 

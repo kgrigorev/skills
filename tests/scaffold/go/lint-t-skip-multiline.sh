@@ -1,4 +1,4 @@
-# expect: red Every file is checked
+# expect: red Lint
 # A skip call split over two lines, so ".Skip(" is not on one line.
 cat >>sampletool_test.go <<'GO'
 

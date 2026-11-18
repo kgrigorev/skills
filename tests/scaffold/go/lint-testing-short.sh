@@ -1,4 +1,4 @@
-# expect: red Every file is checked
+# expect: red Lint
 # A test that does nothing under -short.
 cat >>sampletool_test.go <<'GO'
 

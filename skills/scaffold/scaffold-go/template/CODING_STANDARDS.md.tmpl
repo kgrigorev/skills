@@ -59,10 +59,14 @@ A new `require` in `go.mod` needs the owner's approval.
 - Write a property test with rapid when a rule holds for all inputs.
 - Helpers call `t.Helper()`. Use `t.TempDir()`, `t.Context()` and `t.Setenv()`, not the `os`
   versions.
-- No test skips itself. The check finds `t.Skip(...)` by text, on the usual names `t`, `b`, `f`,
-  `tb`, `tt` and `s.T()`, so look out for a skip through another name, such as
-  `skip := t.Skip` or a helper type that embeds `*testing.T`.
-- A test asserts something, and does not return early on the environment. The check only
-  sees that a test ran, not what it checked, and there is no coverage gate.
+- No test skips itself. The check finds `Skip`, `Skipf`, `SkipNow` and `testing.Short` by type,
+  under any name, and tests cannot read the environment. Look out for a skip through a helper
+  type that embeds `*testing.T`, or through `reflect`.
+- A test asserts something, and does not return early on any condition. The check only sees
+  that a test ran, not what it checked, and there is no coverage gate.
+- A function with no error result does not turn an error into a zero value
+  (`if err != nil { return nil }`) unless "nil" is its documented answer. No linter sees it.
+- No work at import time through a blank variable (`var _ = setup()`). The check rejects
+  `init` and package variables, but not `_`. `var _ Interface = (*T)(nil)` is fine.
 - A `TestMain` calls `m.Run()` and does not change which tests run (for example by setting
   `-test.run`). The check only finds a package where no test ran.
