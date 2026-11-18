@@ -6,11 +6,15 @@ on:
   pull_request:
     paths:
       - skills/scaffold/scaffold-scala/**
+      - tests/scaffold/scala/**
+      - scripts/test-scaffold
       - .github/workflows/scaffold-scala.yml
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-scala/**
+      - tests/scaffold/scala/**
+      - scripts/test-scaffold
       - .github/workflows/scaffold-scala.yml
   # Every version is pinned in the template, but downloads from Maven Central and GitHub can
   # still break. A weekly run catches that without a change here.
@@ -68,3 +72,9 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Replays each attack in tests/scaffold/scala on the sample project: bad code must fail
+      # scripts/check at the step the attack names, and the green controls must pass.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold scala --project "$RUNNER_TEMP/sample-tool"
