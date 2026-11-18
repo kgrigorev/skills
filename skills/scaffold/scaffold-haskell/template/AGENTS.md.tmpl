@@ -6,8 +6,9 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 ## Checks
 
 `scripts/check` runs every gate: the pinned tools, Ormolu and cabal-gild, HLint, a search for
-switched-off checks and unsafe code, the warning settings, the dependency lock, a build with
-warnings as errors, and the tests. The git hook and CI run it too.
+switched-off checks and unsafe code, the build settings, the dependency lock, a build with
+warnings as errors, and the tests. The git hook and CI run it too. It runs cabal with its own
+config file, so your cabal user config and `CABAL_CONFIG` do not change the checks.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
@@ -36,19 +37,25 @@ the code.
 
 Read `CODING_STANDARDS.md` before writing or reviewing Haskell.
 
-The checks enforce imports with an explicit list or a qualifier, extensions set only in
-`{{package}}.cabal` (no `LANGUAGE` pragmas), and the `.hlint.yaml` bans on partial functions. HLint
-bans by name, so names like `read`, `last` and `error` are taken: call your own `readConfig` or
-`lastValue`.
+The checks enforce imports with an explicit list or a qualifier, extensions set only in the
+`common common` stanza of `{{package}}.cabal` (no `LANGUAGE` pragmas), and the `.hlint.yaml` bans
+on partial functions, `throw`, `assert` and test settings such as `withMaxSuccess`. HLint bans by
+name, so names like `read`, `last` and `error` are taken: call your own `readConfig` or
+`lastValue`. Only `Main` modules may import `System.Exit`. Modules of other packages with
+`Unsafe` or `Internal` in their name, and their `unsafe*` functions, are not allowed.
 
 ## Layout
 
 - Logic goes in the library under `src/`. `app/Main.hs` only calls it.
 - `test/` is an hspec suite. Every `*Spec.hs` module that exports `spec` runs automatically.
-  Every test suite uses this hspec-discover driver, so `scripts/check` can pass its options,
-  and `scripts/check` fails when a suite prints no hspec summary.
+  Every test suite uses this hspec-discover driver, so `scripts/check` can pass its options.
+  `scripts/check` fails when a suite's `main-is` is another file or prints no hspec summary.
 - List every new module in `{{package}}.cabal` (`exposed-modules` or `other-modules`). Sources
-  are `.hs` files; every new component starts with `import: common`.
+  are `.hs` files in folders git does not ignore; every new component starts with
+  `import: common` and has no `buildable` field. A test helper module that is not a `*Spec`
+  module must be imported by one.
+- `ghc-options` may hold only the flags `scripts/check` lists: the warnings, `-Werror`,
+  `-threaded`, `-rtsopts`, `-with-rtsopts=` and `-O`. Ask the owner before you need another.
 - Configure mise only in `mise.toml`. `scripts/check` fails on `mise.local.toml` and other
   mise config files.
 - `cabal.project` pins `index-state`. Bump it on purpose when you need newer Hackage packages,

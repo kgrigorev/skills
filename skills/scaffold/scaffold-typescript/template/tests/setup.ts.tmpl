@@ -1,6 +1,109 @@
-// Fixes the fast-check seed, so a property test gives the same result on every run and machine.
-// To explore new inputs, change the seed in its own commit. A failure prints the seed and the
-// path that reproduce it. Agents: change this file only with the owner's approval.
+// Makes every test give the same result on every run and machine. vitest runs this file before
+// each test file. Agents: change this file only with the owner's approval.
+import crypto from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import { fileURLToPath } from "node:url";
 import * as fc from "fast-check";
 
-fc.configureGlobal({ seed: 1, numRuns: 200 });
+// The fast-check seed and run count. To explore new inputs, change the seed in its own commit. A
+// failure prints the seed and the path that reproduce it.
+const settings = { seed: 1, numRuns: 200 } as const;
+fc.configureGlobal(settings);
+
+// Options passed to fc.assert win over the global ones, however a test builds them (a computed
+// key, a module under src/, a time-limit plugin), and scripts/check can only search for the plain
+// spellings. A global plugin sees the settings each property ran with, and fails one that ran
+// with another seed or fewer runs. Options passed to fc.assert cannot remove it.
+fc.installGlobalPlugin(() => ({
+  onAllRunsComplete(details) {
+    // A failed property reports itself, with its seed.
+    if (details.failed) return;
+    const { seed, numRuns } = details.runConfiguration;
+    if (seed === settings.seed && details.numRuns === settings.numRuns && !details.interrupted)
+      return;
+    throw new Error(
+      `A property test ran ${String(details.numRuns)} of ${String(numRuns)} runs with seed ` +
+        `${String(seed)}${details.interrupted ? ", interrupted" : ""}. tests/setup.ts sets seed ` +
+        `${String(settings.seed)} and ${String(settings.numRuns)} runs: pass no options that change them.`,
+    );
+  },
+}));
+
+// A test that reads the clock or a random value fails, however it reaches the function (an
+// alias, destructuring, brackets), which a search of the source cannot see. Code under src/ may
+// read them: the nearest caller decides. A test passes fixed values, or uses vi.useFakeTimers
+// (vitest.config.ts starts the fake clock at 0).
+const self = fileURLToPath(import.meta.url);
+const testsFolder = fileURLToPath(new URL(".", import.meta.url));
+
+/** Throws when the nearest caller that is a file (not this one, not built-in) is under tests/. */
+function failInTest(name: string): void {
+  const caller = (new Error().stack ?? "")
+    .split("\n")
+    .slice(1)
+    .find(
+      (line) => !line.includes(self) && !line.includes("<anonymous>") && !line.includes("node:"),
+    );
+  if (caller?.includes(testsFolder) === true)
+    throw new Error(`A test called ${name}, which changes between runs. Pass a fixed value.`);
+}
+
+/** Replaces the function owner[key] with one that fails when a test calls it. */
+function guard(owner: object, key: string, name: string): void {
+  const original: unknown = Reflect.get(owner, key);
+  if (typeof original !== "function") return;
+  const value = function (this: unknown, ...args: unknown[]): unknown {
+    failInTest(name);
+    return Reflect.apply(original, this, args);
+  };
+  Reflect.defineProperty(owner, key, { value, writable: true, configurable: true });
+}
+
+guard(Math, "random", "Math.random");
+guard(Date, "now", "Date.now");
+guard(performance, "now", "performance.now");
+guard(process, "uptime", "process.uptime");
+const hrtime = process.hrtime;
+guard(process, "hrtime", "process.hrtime");
+Reflect.defineProperty(process.hrtime, "bigint", { value: Reflect.get(hrtime, "bigint") });
+guard(process.hrtime, "bigint", "process.hrtime.bigint");
+for (const key of ["randomUUID", "getRandomValues"]) guard(globalThis.crypto, key, `crypto.${key}`);
+for (const key of [
+  "randomUUID",
+  "getRandomValues",
+  "randomInt",
+  "randomBytes",
+  "randomFillSync",
+  "randomFill",
+])
+  guard(crypto, key, `crypto.${key}`);
+// `import { randomInt } from "node:crypto"` sees the guarded functions only after this.
+syncBuiltinESMExports();
+// Temporal is not in the es2025 types yet.
+const temporal: unknown = Reflect.get(globalThis, "Temporal");
+const temporalNow: unknown =
+  typeof temporal === "object" && temporal !== null ? Reflect.get(temporal, "Now") : undefined;
+if (typeof temporalNow === "object" && temporalNow !== null)
+  for (const key of Reflect.ownKeys(temporalNow))
+    if (typeof key === "string") guard(temporalNow, key, `Temporal.Now.${key}`);
+
+// new Date() and Date() read the clock; new Date(value) does not.
+const clockDate = new Proxy(Date, {
+  construct(target, args: unknown[], newTarget) {
+    if (args.length === 0) failInTest("new Date()");
+    const date: unknown = Reflect.construct(target, args, newTarget);
+    if (typeof date !== "object" || date === null)
+      throw new TypeError("Date did not construct an object.");
+    return date;
+  },
+  apply(target, thisArgument: unknown, args: unknown[]): unknown {
+    failInTest("Date()");
+    return Reflect.apply(target, thisArgument, args);
+  },
+});
+globalThis.Date = clockDate;
+Reflect.defineProperty(Date.prototype, "constructor", {
+  value: clockDate,
+  writable: true,
+  configurable: true,
+});

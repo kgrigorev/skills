@@ -7,11 +7,15 @@ on:
     paths:
       - skills/scaffold/scaffold-typescript/**
       - .github/workflows/scaffold-typescript.yml
+      - tests/scaffold/typescript/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-typescript/**
       - .github/workflows/scaffold-typescript.yml
+      - tests/scaffold/typescript/**
+      - scripts/test-scaffold
   # The template pins exact versions, but the registry and the mise downloads can change under
   # it. A weekly run catches that.
   schedule:
@@ -127,3 +131,12 @@ jobs:
           red 'unused export' 'Unused files, exports and dependencies (knip)'
           edit 's/Hello, world!/Hello!/' tests/sample-tool.test.ts
           red 'failing test' 'Test (vitest)'
+
+      # Every attack in tests/scaffold/typescript must turn scripts/check red at its gate, and every
+      # green control must pass. The planted defects above leave the project as rendered.
+      - name: Attack replay suite
+        # As above: mise reads an attack's mise.local.toml instead of refusing it.
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ runner.temp }}/sample-tool
+        run: |
+          scripts/test-scaffold typescript --project "$RUNNER_TEMP/sample-tool"

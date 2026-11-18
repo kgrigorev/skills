@@ -7,11 +7,15 @@ on:
     paths:
       - skills/scaffold/scaffold-go/**
       - .github/workflows/scaffold-go.yml
+      - tests/scaffold/go/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-go/**
       - .github/workflows/scaffold-go.yml
+      - tests/scaffold/go/**
+      - scripts/test-scaffold
   # The scaffold pins every version, but downloads can move or break (module proxy, release
   # assets, the mise version). A weekly run catches that without a change here.
   schedule:
@@ -97,3 +101,9 @@ jobs:
           mise exec -- go test -race -shuffle=on -count=1 ./...
           govulncheck=$(grep -o 'golang.org/x/vuln/cmd/govulncheck@[^ ]*' .github/workflows/explore.yml)
           mise exec -- go run "$govulncheck" -version
+
+      # Replays known attacks (each must fail at its step) and good changes (each must pass)
+      # against the rendered project. A failure means a gate lets bad code through or rejects
+      # good code.
+      - name: Replay attacks on the sample project
+        run: scripts/test-scaffold go --project "$RUNNER_TEMP/sample-tool"
