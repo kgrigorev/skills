@@ -8,7 +8,8 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-// Tests are static: one that main never runs is an unused function, which fails the build.
+// Tests are static: one that main never runs is an unused function, which fails the build. The
+// check also needs every line of this file to run.
 static void banner_names_the_program(void) {
     char banner[128];
     TEST_ASSERT_LESS_THAN_size_t(sizeof banner, {{c_name}}_banner(banner, sizeof banner));

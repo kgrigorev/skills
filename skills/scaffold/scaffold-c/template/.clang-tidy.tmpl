@@ -9,6 +9,8 @@
 # - misc-use-internal-linkage: -Wmissing-prototypes already rejects a non-static function without a
 #   declaration, and this check cannot be told about libFuzzer's entry point.
 # - readability-identifier-length, readability-magic-numbers: flag i, n and every literal.
+# - readability-named-parameter: C23 allows an unnamed parameter in a definition, the plain way to
+#   say a callback does not use it. -Wunused-parameter still rejects a named one that is unused.
 # Not turned on: concurrency-* (mt-unsafe flags getenv and strerror), performance-* and
 # portability-* (little applies to C; performance-no-int-to-ptr is the one kept). cert-* is on as a
 # whole: most of its C checks are other names for checks above, and a finding is reported once.
@@ -26,7 +28,8 @@ Checks: >
   -misc-no-recursion,
   -misc-use-internal-linkage,
   -readability-identifier-length,
-  -readability-magic-numbers
+  -readability-magic-numbers,
+  -readability-named-parameter
 CheckOptions:
   # `if (ptr)` is plain C. An integer used as a bool, as in `if (strcmp(a, b))`, is still an error.
   # In C, `&&`, `||` and `!` give an int, so `return a && b;` from a bool function is an error too.

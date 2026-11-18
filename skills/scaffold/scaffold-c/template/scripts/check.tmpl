@@ -39,6 +39,7 @@ cmake_files=$(files 'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake' ":!:$unity/*" 
 step 'Tool versions (pinned in mise.toml and mise.lock)'
 pinned() { sed -n "s/^\"*$1\"* = \"\(.*\)\"$/\1/p" mise.toml; }
 for pair in conda:clang=clang conda:clang-tools=clang-tidy conda:clang-format=clang-format \
+  conda:llvm-tools=llvm-cov conda:llvm-tools=llvm-profdata \
   cmake=cmake ninja=ninja; do
   tool=${pair%=*}
   bin=${pair##*=}
@@ -65,19 +66,139 @@ step 'Format (clang-format, rules in .clang-format). Fix: scripts/format'
 run clang-format --dry-run --Werror $c_files
 
 step 'No switched-off checks'
-# In C source: comments, pragmas, attributes and macros that switch off a warning, clang-tidy, the
-# analyzer, clang-format, a sanitizer or a test. Every #pragma except `#pragma once` counts.
-# `#line` and line markers would make the compiler read the code as another file.
+# In C source: comments, attributes and macros that switch off a warning, clang-tidy, the
+# analyzer, clang-format, a sanitizer or a test. Directives are read from tokens below.
 # __has_feature and __has_extension can ask whether a sanitizer is on; a plain word such as
 # name_sanitizer is fine.
-c_off='NOLINT|_Pragma|#[[:space:]]*pragma|^[[:space:]]*#[[:space:]]*(line|[0-9])|clang-format[[:space:]]+off|__clang_analyzer__|__has_(feature|extension)|__SANITIZE_|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|maybe_unused|__attribute__.*unused|gnu::(__)?unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|#[[:space:]]*(define|undef)[[:space:]]+(TEST_|UNITY_|RUN_TEST|setUp|tearDown)|TEST_(IGNORE|PASS)'
+c_off='NOLINT|_Pragma|clang-format[[:space:]]+off|__clang_analyzer__|__has_(feature|extension)|__SANITIZE_|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|maybe_unused|__attribute__.*unused|gnu::(__)?unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|TEST_(IGNORE|PASS)'
 # In CMake, in any letter case: anything that changes warnings, clang-tidy or how a test passes.
+# Comments are left out, so a comment may use any word.
 cmake_off='CLANG_TIDY|SKIP_LINTING|WARNING_AS_ERROR|compile_options|COMPILE_FLAGS|_FLAGS|-Wno-|[[:space:]"(]-w([[:space:]")]|$)|add_test|set_tests_properties|set_property|set_directory_properties|set_source_files_properties|DISABLED|WILL_FAIL|SKIP_RETURN_CODE|REGULAR_EXPRESSION|EXCLUDE_FROM_ALL'
+# Prints CMake files as file:line:code, without `#` comments and `#[[...]]` bracket comments.
+# A `#` inside a quoted argument is not a comment.
+cmake_code() {
+  awk '
+    FNR == 1 { quoted = 0; bracket = "" }
+    {
+      text = $0
+      out = ""
+      while (text != "") {
+        if (bracket != "") {
+          at = index(text, bracket)
+          if (at == 0) break
+          text = substr(text, at + length(bracket))
+          bracket = ""
+        } else if (quoted) {
+          if (match(text, /^([^"\\]|\\.)*"/)) {
+            out = out substr(text, 1, RLENGTH)
+            text = substr(text, RLENGTH + 1)
+            quoted = 0
+          } else {
+            out = out text
+            text = ""
+          }
+        } else if (match(text, /^[^"#]+/)) {
+          out = out substr(text, 1, RLENGTH)
+          text = substr(text, RLENGTH + 1)
+        } else if (substr(text, 1, 1) == "\"") {
+          out = out "\""
+          text = substr(text, 2)
+          quoted = 1
+        } else if (match(text, /^#\[=*\[/)) {
+          bracket = "]" substr(text, 3, RLENGTH - 3) "]"
+          text = substr(text, RLENGTH + 1)
+        } else {
+          text = ""
+        }
+      }
+      print FILENAME ":" FNR ":" out
+    }' "$@"
+}
+# Preprocessor directives, read from clang's own tokens of each file, so a comment, a line splice
+# or the digraph `%:` cannot hide one:
+# - `#line` and line markers: the compiler would read the code as another file.
+# - every #pragma except `#pragma once`.
+# - #define or #undef of a name that Unity defines or declares, of setUp and tearDown, or of a
+#   function that ends a test (abort, exit, longjmp): `#define abort() return 0` would turn a
+#   failed property into a passed one. A name of the project's own, such as TEST_BUFFER_SIZE, is
+#   fine.
+# - #if, #ifdef and the like in a test file (under test/): a test that is compiled only sometimes
+#   does not run here.
+unity_names=$(
+  run clang -std=c23 -E -dD -x c "$unity/unity.h" | awk -v unity="$unity/" '
+    BEGIN { split("setUp tearDown suiteSetUp suiteTearDown abort exit _Exit quick_exit longjmp", fixed, " ")
+      for (i in fixed) print fixed[i] }
+    /^# [0-9]+ "/ { file = $3; gsub(/"/, "", file); next }
+    index(file, unity) != 1 { next }
+    $1 == "#define" { name = $2; sub(/\(.*/, "", name); print name; next }
+    { while (match($0, /Unity[A-Za-z0-9_]*/)) { print substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH) } }' |
+    sort -u | tr '\n' ' '
+)
+# One clang run lexes every file. Each token is a line: kind, spelling in single quotes,
+# Loc=<file:line:column>, flags.
+directives() {
+  # shellcheck disable=SC2086 # file names have no spaces
+  run clang -std=c23 -fsyntax-only -Xclang -dump-raw-tokens -x c $c_files 2>&1 |
+    awk -v banned=" $unity_names " '
+      BEGIN { q = sprintf("%c", 39) }
+      # A token spelled over several lines (a line splice) continues on lines of its own.
+      $0 !~ ("^[a-z_]+ +" q) { next }
+      {
+        kind = $1
+        spelling = $0
+        sub("^[a-z_]+ +" q, "", spelling)
+        sub(q "[ \t]+Loc=<.*$", "", spelling)
+        loc = $0
+        sub(/.*Loc=</, "", loc)
+        sub(/:[0-9]+>.*/, "", loc)
+        line = loc
+        sub(/.*:/, "", line)
+        sub(/:[0-9]+$/, "", loc)
+        if (loc != file) { file = loc; start = 1; want = ""; in_test = file ~ /^test\/.*\.c$/ }
+      }
+      # Comments and spaces do not end a line; a newline does. A directive starts with the first
+      # # (or %:) on a line.
+      kind == "comment" { next }
+      kind == "unknown" {
+        if (index(spelling, "\\n")) { start = 1; want = "" }
+        next
+      }
+      /\[StartOfLine\]/ { start = 1 }
+      start && kind == "hash" {
+        start = 0
+        want = "directive"
+        at = file ":" line ": "
+        next
+      }
+      { start = 0 }
+      want == "directive" {
+        want = ""
+        directive = spelling
+        if (kind == "numeric_constant") print at "a line marker"
+        else if (kind != "raw_identifier") next
+        else if (directive == "line") print at "#line"
+        else if (directive == "pragma") want = "pragma"
+        else if (directive == "define" || directive == "undef") want = "macro"
+        else if (in_test && directive ~ /^(if|ifdef|ifndef|elif|elifdef|elifndef|else)$/)
+          print at "#" directive " in a test file"
+        next
+      }
+      want == "pragma" {
+        want = ""
+        if (spelling != "once") print at "#pragma " spelling
+        next
+      }
+      want == "macro" {
+        want = ""
+        if (index(banned, " " spelling " ")) print at "#" directive " " spelling
+      }'
+}
 # shellcheck disable=SC2086 # file names have no spaces
 found=$(
   {
-    grep -nE "$c_off" $c_files /dev/null | grep -vE ':[[:space:]]*#[[:space:]]*pragma[[:space:]]+once[[:space:]]*$' || true
-    grep -niE "$cmake_off" $cmake_files /dev/null || true
+    grep -nE "$c_off" $c_files /dev/null || true
+    directives
+    cmake_code $cmake_files | grep -iE "^[^:]+:[0-9]+:.*($cmake_off)" || true
   }
 )
 [ -z "$found" ] || fail "$found
@@ -206,19 +327,88 @@ step 'No switched-off checks after macro expansion'
 # An unused attribute counts only inside __attribute__((...)) or [[...]]: a variable named
 # `unused` passed to a macro, as in `f((unused))` or `f(a, unused)`, is fine.
 pp_off='#[[:space:]]*pragma|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|__attribute(__)?[[:space:]]*\([[:space:]]*\((([^()]|\([^()]*\))*[^[:alnum:]_])?(__)?unused(__)?([^[:alnum:]_]|$)|\[[[:space:]]*\[[^]]*unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|__declspec'
+# A line marker without the flag 1 (enter an include) or 2 (back from one) that names another file
+# comes from `#line` or a hand-written marker in any spelling. Lines after it would be credited to
+# that file and skipped here.
+rm -f build/dev/check-renamed
 found=$(
   while IFS= read -r command; do
+    echo '#check-next-file'
     (cd build/dev && run sh -c "$command")
   done <build/dev/check-preprocess | awk -v root="$root/" -v unity="$root/$unity/" '
-    /^# [0-9]+ "/ { file = $3; gsub(/"/, "", file); line = $2 - 1; next }
+    $0 == "#check-next-file" { file = ""; next }
+    /^# [0-9]+ "/ {
+      name = $3
+      gsub(/"/, "", name)
+      flags = " " $4 " " $5 " " $6 " "
+      if (file != "" && name != file && index(flags, " 1 ") == 0 && index(flags, " 2 ") == 0 &&
+        index(file, root) == 1 && index(file, unity) != 1)
+        print substr(file, length(root) + 1) ":" line ": a #line or line marker names " name > "build/dev/check-renamed"
+      file = name
+      line = $2 - 1
+      next
+    }
     { line++ }
     index(file, root) == 1 && index(file, unity) != 1 { print substr(file, length(root) + 1) ":" line ": " $0 }' |
-    grep -E "^[^:]+:[0-9]+: .*($pp_off)" | grep -vE ': [[:space:]]*#[[:space:]]*pragma[[:space:]]+once[[:space:]]*$' | sort -u || true
+    grep -E "^[^:]+:[0-9]+: .*($pp_off)" | grep -vE ': [[:space:]]*#[[:space:]]*pragma[[:space:]]+once[[:space:]]*$' || true
+  cat build/dev/check-renamed 2>/dev/null || true
 )
+found=$(printf '%s\n' "$found" | sed '/^$/d' | sort -u)
 [ -z "$found" ] || fail "$found
 After macro expansion, the lines above switch off a check. Remove them and fix the cause."
 
+step 'No switched-off checks or dropped results in the syntax tree (clang-query)'
+# clang-query matches the parsed code, so no spelling, line break, macro or #line can hide what it
+# finds. Each name below says what it found.
+# - An attribute that hides an unused function (unused, maybe_unused, used: a test that main
+#   never runs), switches a sanitizer off or suppresses clang-tidy or the analyzer. Also an asm
+#   label, which can give a plain name the symbol of a sanitizer hook such as __lsan_disable.
+# - A call to a project function whose result is dropped without (void). clang-tidy's
+#   bugprone-unused-return-value covers only the {{c_name}}_ functions; this covers static helpers.
+# - exit() in the library (src/). The library reports errors to its caller (CODING_STANDARDS.md).
+cat >build/dev/check-query <<'X'
+set bind-root false
+set output diag
+match decl(anyOf(hasAttr("attr::Unused"), hasAttr("attr::Used"), hasAttr("attr::NoSanitize"), hasAttr("attr::DisableSanitizerInstrumentation"), hasAttr("attr::Suppress"), hasAttr("attr::AsmLabel")), unless(isExpansionInSystemHeader())).bind("an attribute or asm label that switches a check off")
+match callExpr(anyOf(hasParent(compoundStmt()), hasParent(caseStmt()), hasParent(defaultStmt()), hasParent(labelStmt())), unless(hasType(voidType())), unless(isExpansionInSystemHeader()), callee(functionDecl(unless(isExpansionInSystemHeader())))).bind("a dropped result: use it, or drop it on purpose with (void)")
+X
+{
+  cat build/dev/check-query
+  echo 'match callExpr(callee(functionDecl(hasAnyName("exit", "_Exit", "quick_exit"))), unless(isExpansionInSystemHeader())).bind("exit in the library: return an error to the caller")'
+} >build/dev/check-query-library
+found=$(
+  while IFS= read -r command; do
+    source=${command##* }
+    flags=${command#* }
+    flags=${flags% -E *}
+    queries=$root/build/dev/check-query
+    [ "${source#"$root"/src/}" = "$source" ] || queries=$root/build/dev/check-query-library
+    if ! output=$(cd build/dev && run sh -c "clang-query -f $queries $source -- $flags" 2>&1); then
+      printf '%s\nclang-query failed on %s.\n' "$output" "$source"
+      continue
+    fi
+    printf '%s\n' "$output" | sed -n 's/^\(.*:[0-9]*\):[0-9]*: note: "\(.*\)" binds here$/\1: \2/p' |
+      sed "s|^$root/||"
+  done <build/dev/check-preprocess | sort -u
+)
+[ -z "$found" ] || fail "$found
+Fix the lines above."
+
 step 'Test (sanitizers on; the property test runs a fixed seed)'
+# ctest reads CTestCustom.cmake or CTestCustom.ctest in the build folder. CTEST_CUSTOM_TESTS_IGNORE
+# there drops a test from both ctest runs below, so the counts would still agree. CMake or a hand
+# can write one, and git ignores build/, so the check removes it and fails.
+custom=$(find build/dev -name 'CTestCustom.*' -type f)
+if [ -n "$custom" ]; then
+  # shellcheck disable=SC2086 # file names have no spaces
+  rm -f $custom
+  fail "$custom
+ctest reads these files, and they can drop tests. scripts/check removed them. Remove what wrote them."
+fi
+# Every test must be one that add_unity_test or add_property_test made, with no test property
+# added (cmake/gates.cmake reads CMake's own list of tests).
+run ctest --test-dir build/dev --show-only=json-v1 >build/dev/check-tests.json
+run cmake -DGATES_TESTS_JSON=build/dev/check-tests.json -P cmake/gates.cmake
 if ! run ctest --preset dev >build/dev/ctest.log 2>&1; then
   cat build/dev/ctest.log
   exit 1

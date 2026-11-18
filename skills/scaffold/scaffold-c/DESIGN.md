@@ -50,27 +50,70 @@ Every other gate states its reason in a comment in its own file.
   A file from outside the repository must come through an include folder: the compiler's own
   list, or an `-I` folder that CMake declares for a dependency. `#include "../../x.h"` cannot reach
   code that no search reads and that CI does not have.
-- The search for suppressions runs twice: on the source, for comments and conditions such as
-  `NOLINT` or `#ifndef __clang_analyzer__`, and on the preprocessed project lines, where a macro
-  can no longer hide a pragma or an attribute.
+- The search for suppressions runs four times, each on what a tool made, not on text a line break
+  can split:
+  - on the source text, for comments and conditions such as `NOLINT` or
+    `#ifndef __clang_analyzer__`.
+  - on clang's raw tokens, for directives: `#line`, line markers, `#pragma`, `#define` or `#undef`
+    of a Unity name or of `abort`/`exit`, and `#if` in a test file. A comment, a line splice or
+    the digraph `%:` cannot hide a directive from the lexer. A name the project defines, such as
+    `TEST_BUFFER_SIZE`, passes.
+  - on the preprocessed project lines, where a macro can no longer hide a pragma or an attribute.
+    A line marker that renames the file is reported, so `#line` in any spelling cannot move lines
+    out of the search.
+  - on the syntax tree, with clang-query: attributes (unused, used, no_sanitize, suppress, asm
+    labels) in any spelling, a dropped result of any project function, and `exit` in `src/`.
   Sanitizer detection is matched by its spelling (`__has_feature`, `__SANITIZE_`, `__asan_`), not by
-  the word `sanitizer`, so a function such as `name_sanitizer` passes.
+  the word `sanitizer`, so a function such as `name_sanitizer` passes. The CMake search skips
+  comments, so a comment may say "tests disabled".
 - The tools run with `env -i` and only `PATH`, `HOME` and `TMPDIR`. `LSAN_OPTIONS`, `CFLAGS` or
   `CMAKE_C_COMPILER_LAUNCHER` from a shell or a mise config would change a result. The check also
   fails when a tool on `PATH` is not the pinned one, or when a mise config other than `mise.toml`
   applies in the repository.
 - `scripts/check` holds the sha256 of every file in `third_party/unity/`. Unity is built without
   the gates, and its summary decides whether a test passed.
-- `scripts/check` rejects a raw `add_test` in `CMakeLists.txt`. The helpers in
-  `cmake/gates.cmake` add the checks that Unity and libFuzzer need. A Unity test runs through
+- Every test must come from `add_unity_test` or `add_property_test`, with no test property but
+  `WORKING_DIRECTORY`. `scripts/check` reads CMake's own list (`ctest --show-only=json-v1`, with
+  the backtrace of each `add_test`), so `cmake_language(CALL ...)` with a built-up name cannot add
+  `WILL_FAIL` or `ENVIRONMENT`. The CMake search for `add_test` stays for a clearer message.
+  The helpers add the checks that Unity and libFuzzer need. A Unity test runs through
   `cmake -P cmake/gates.cmake`, which needs both exit code 0 and Unity's summary of passed tests.
   A `FAIL_REGULAR_EXPRESSION` alone passes a `main` that drops the result of `UNITY_END`, and a
   `PASS_REGULAR_EXPRESSION` makes ctest ignore the exit code, so a leak found at exit would pass.
+- Every line of a Unity test file must run (clang's source-based coverage, read with llvm-cov).
+  One rule covers a test that `main` never runs (`(void)name;` keeps it from
+  `-Wunused-function`), an early `return`, `TEST_ABORT`, a skip on an environment variable and a
+  `main` that prints a fake Unity summary. Line coverage cannot see code that is not compiled,
+  so a test file has no `#if`. A partly run line counts as run, so an assertion whose failure
+  branch did not run passes. Property tests are not measured: their failure branches never run.
+  `llvm-tools` is pinned on its own, because conda's clang does not bring it on Linux.
+- A property test runs through `cmake -P cmake/gates.cmake` too, which needs libFuzzer's
+  `Done 100000 runs`: an `exit(0)` in `LLVMFuzzerInitialize` would pass with no input.
+- Tests link the project's static libraries whole (`WHOLE_ARCHIVE`). A test that defines a
+  library function itself then fails with a duplicate symbol. Without it, the linker leaves the
+  library's object out and the test checks the stub.
+- `scripts/check` removes a `CTestCustom.cmake` or `CTestCustom.ctest` from the build folder and
+  fails. `CTEST_CUSTOM_TESTS_IGNORE` there drops a test from every ctest run, and git ignores
+  `build/`.
 - `scripts/check` fails when fewer tests ran than `ctest -N` lists, or when one did not run: ctest
   counts a disabled test as passed, and a preset `filter` drops tests without a word.
-- Not checked: whether a test asserts anything, and edits to `.clang-tidy`, `.clang-format` or
-  `scripts/check` itself. Line coverage would not prove the first, and the check cannot guard its
-  own rules. The owner's review covers both, with `.github/CODEOWNERS` (step 4 of `SKILL.md`).
+- Not checked, and why:
+  - Whether a test asserts anything, or whether a property test reaches the code (a guard such as
+    `if (size < 4000) return 0;` passes every input by). Coverage proves that a line ran, not that
+    it checks the result. CODING_STANDARDS.md asks for both, and the owner reviews tests.
+  - `abort()` on bad input in the library. Only the meaning of the condition tells a broken
+    invariant from bad input. `exit` in `src/` is rejected.
+  - A macro that renames another C library function in a test (for example `strcmp`). Only the
+    functions that end a test (`abort`, `exit`, `_Exit`, `quick_exit`, `longjmp`) and Unity's names
+    are listed. A complete list would need every name the C library declares.
+  - Edits to the gate files: `.clang-tidy` and `.clang-format` (a check turned off,
+    `DisableFormat: true`), `CMakePresets.json` (`environment` in the build preset, such as
+    `CCC_OVERRIDE_OPTIONS=+-w`, or in the test preset, such as `detect_leaks=0`), `mise.toml`,
+    `cmake/gates.cmake` and `scripts/check` itself. The check cannot guard its own rules. These
+    files change only with the owner's approval, and the owner reviews them, with
+    `.github/CODEOWNERS` (step 4 of `SKILL.md`).
+  - Other state in the ignored build folder than `CTestCustom` files. `scripts/check` keeps
+    `build/dev` between runs for speed. CI builds from a clean folder.
 - Suppressions that `scripts/check` does not reject: `(void)name;` for an unused parameter. It is
   the plain C way and switches nothing off.
 

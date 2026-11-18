@@ -3,20 +3,119 @@
 # commands and requires the flags below on every project file: change both together.
 # Agents: change this file only with the owner's approval.
 
-# ctest runs each Unity test through this file in script mode (see add_unity_test). The test passes
-# only when it exits 0 and its last lines are Unity's summary with at least one test, no failure
-# and nothing ignored. A main that drops the result of UNITY_END, or never reaches it, fails.
+# ctest runs every test through this file in script mode (see add_unity_test and
+# add_property_test), and scripts/check runs it to read the list of tests. Each block says what it
+# requires.
 if(CMAKE_SCRIPT_MODE_FILE)
-  execute_process(COMMAND "${GATES_TEST}" RESULT_VARIABLE result
-    OUTPUT_VARIABLE output ERROR_VARIABLE output)
-  message("${output}")
-  if(NOT result EQUAL 0)
-    message(FATAL_ERROR "The test exited with ${result}.")
+  # A Unity test passes only when it exits 0, its last lines are Unity's summary with at least one
+  # test, no failure and nothing ignored, and every line of its source file ran. A main that drops
+  # the result of UNITY_END or never reaches it fails, and so does a test that returns early, stops
+  # with TEST_ABORT, depends on an environment variable or that main never runs.
+  if(GATES_TEST)
+    set(profile "${GATES_TEST}.profraw")
+    file(REMOVE "${profile}")
+    set(ENV{LLVM_PROFILE_FILE} "${profile}")
+    execute_process(COMMAND "${GATES_TEST}" RESULT_VARIABLE result
+      OUTPUT_VARIABLE output ERROR_VARIABLE output)
+    message("${output}")
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "The test exited with ${result}.")
+    endif()
+    if(output MATCHES ":FAIL" OR NOT output MATCHES "\n[1-9][0-9]* Tests 0 Failures 0 Ignored \nOK\n$")
+      message(FATAL_ERROR "The test did not end with a Unity summary of passed tests only.")
+    endif()
+    # Line coverage of the test's own source file. A partly run line, such as an assertion whose
+    # failure branch did not run, counts as run.
+    execute_process(COMMAND "${GATES_LLVM_PROFDATA}" merge -sparse -o "${GATES_TEST}.profdata"
+      "${profile}" RESULT_VARIABLE result ERROR_VARIABLE error)
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "${error}The test wrote no coverage data. It must end by returning from main.")
+    endif()
+    execute_process(COMMAND "${GATES_LLVM_COV}" export -format=lcov
+      "-instr-profile=${GATES_TEST}.profdata" "${GATES_TEST}" "${GATES_SOURCE}"
+      OUTPUT_VARIABLE lcov COMMAND_ERROR_IS_FATAL ANY)
+    if(NOT lcov MATCHES "(^|\n)SF:")
+      message(FATAL_ERROR "llvm-cov found no coverage data for ${GATES_SOURCE}.")
+    endif()
+    string(REGEX MATCHALL "\nDA:[0-9]+,0" missed "${lcov}")
+    if(missed)
+      cmake_path(GET CMAKE_CURRENT_LIST_DIR PARENT_PATH root)
+      file(RELATIVE_PATH source "${root}" "${GATES_SOURCE}")
+      string(REGEX REPLACE "\nDA:([0-9]+),0" "${source}:\\1\n" missed "${missed}")
+      string(REPLACE ";" "" missed "${missed}")
+      message("${missed}")
+      message(FATAL_ERROR "These lines of the test never ran. Every line of a test file "
+        "must run: remove dead code and early returns, run every test from main, and use a "
+        "TEST_ASSERT macro instead of an if around TEST_FAIL.")
+    endif()
+    return()
   endif()
-  if(output MATCHES ":FAIL" OR NOT output MATCHES "\n[1-9][0-9]* Tests 0 Failures 0 Ignored \nOK\n$")
-    message(FATAL_ERROR "The test did not end with a Unity summary of passed tests only.")
+  # A property test passes only when libFuzzer ran every input: a target that exits early, for
+  # example from LLVMFuzzerInitialize, would pass with none.
+  if(GATES_PROPERTY)
+    execute_process(COMMAND "${GATES_PROPERTY}" -seed=1 -runs=100000 -rss_limit_mb=0
+      RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
+    message("${output}")
+    if(NOT result EQUAL 0)
+      message(FATAL_ERROR "The property test exited with ${result}.")
+    endif()
+    if(NOT output MATCHES "\nDone 100000 runs in ")
+      message(FATAL_ERROR "The property test did not run all 100000 inputs.")
+    endif()
+    return()
   endif()
-  return()
+  # scripts/check passes `ctest --show-only=json-v1`. Every test must come from the add_test call
+  # in a helper below and have no other test property. This reads what CMake made, so no spelling
+  # in CMakeLists.txt (cmake_language, a variable command name, an include) can add WILL_FAIL,
+  # DISABLED, ENVIRONMENT or a raw add_test.
+  if(GATES_TESTS_JSON)
+    file(READ "${GATES_TESTS_JSON}" json)
+    string(JSON count LENGTH "${json}" tests)
+    set(problems "")
+    if(count GREATER 0)
+      math(EXPR last "${count} - 1")
+      foreach(i RANGE ${last})
+        string(JSON name GET "${json}" tests ${i} name)
+        string(JSON node ERROR_VARIABLE error GET "${json}" tests ${i} backtrace)
+        set(added "")
+        set(file "")
+        set(helper "")
+        if(NOT error)
+          string(JSON added ERROR_VARIABLE error GET "${json}" backtraceGraph nodes ${node} command)
+          string(JSON file ERROR_VARIABLE error GET "${json}" backtraceGraph nodes ${node} file)
+          string(JSON parent ERROR_VARIABLE error GET "${json}" backtraceGraph nodes ${node} parent)
+          string(JSON added ERROR_VARIABLE error GET "${json}" backtraceGraph commands ${added})
+          string(JSON file ERROR_VARIABLE error GET "${json}" backtraceGraph files ${file})
+          string(JSON helper ERROR_VARIABLE error GET "${json}" backtraceGraph nodes ${parent} command)
+          string(JSON helper ERROR_VARIABLE error GET "${json}" backtraceGraph commands ${helper})
+        endif()
+        file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" gates_file)
+        if(file)
+          file(REAL_PATH "${file}" file)
+        endif()
+        if(NOT added STREQUAL "add_test" OR NOT file STREQUAL gates_file
+            OR NOT helper MATCHES "^add_(unity|property)_test$")
+          string(APPEND problems "${name}: not added by add_unity_test or add_property_test.\n")
+        endif()
+        string(JSON properties ERROR_VARIABLE error LENGTH "${json}" tests ${i} properties)
+        if(NOT error AND properties GREATER 0)
+          math(EXPR last_property "${properties} - 1")
+          foreach(j RANGE ${last_property})
+            string(JSON property GET "${json}" tests ${i} properties ${j} name)
+            if(NOT property STREQUAL "WORKING_DIRECTORY")
+              string(APPEND problems "${name}: sets the test property ${property}.\n")
+            endif()
+          endforeach()
+        endif()
+      endforeach()
+    endif()
+    if(problems)
+      message(FATAL_ERROR "${problems}Add tests with add_unity_test or add_property_test only, and "
+        "set no test property: each changes how a test passes.")
+    endif()
+    return()
+  endif()
+  message(FATAL_ERROR "cmake/gates.cmake: script mode needs GATES_TEST, GATES_PROPERTY or GATES_TESTS_JSON.")
 endif()
 
 add_compile_options(
@@ -51,22 +150,47 @@ if(GATES_CLANG_TIDY)
   set(CMAKE_C_CLANG_TIDY "${GATES_CLANG_TIDY}")
 endif()
 
-# A Unity test executable. Unity exits 0 when it ran no test or ignored one, so ctest runs it
-# through the script-mode block at the top of this file, which also reads the summary.
-function(add_unity_test name source)
-  add_executable(${name} ${source})
-  target_link_libraries(${name} PRIVATE ${ARGN} unity)
-  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} -DGATES_TEST=$<TARGET_FILE:${name}>
-    -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
+# Links a test to the project libraries it tests. A static library is linked whole, so a test
+# that defines a library function itself (a stub that hides the real code) fails to link with a
+# duplicate symbol, instead of the linker quietly leaving the library's object out.
+function(gates_link_libraries name)
+  foreach(library IN LISTS ARGN)
+    if(TARGET ${library})
+      get_target_property(type ${library} TYPE)
+      if(type STREQUAL "STATIC_LIBRARY")
+        set(library "$<LINK_LIBRARY:WHOLE_ARCHIVE,${library}>")
+      endif()
+    endif()
+    target_link_libraries(${name} PRIVATE ${library})
+  endforeach()
 endfunction()
 
-# A property test: a libFuzzer target that ctest runs with a fixed seed and run count, so every run
-# tries the same inputs. -rss_limit_mb=0 stops libFuzzer's memory-watch thread, which
-# LeakSanitizer would report as a leak. AGENTS.md shows how to search longer for new failures.
+# A Unity test executable. Unity exits 0 when it ran no test or ignored one, so ctest runs it
+# through the script-mode block at the top of this file, which also reads the summary and the line
+# coverage of the test file. llvm-cov and llvm-profdata come from the pinned LLVM (mise.toml).
+function(add_unity_test name source)
+  find_program(GATES_LLVM_COV llvm-cov REQUIRED)
+  find_program(GATES_LLVM_PROFDATA llvm-profdata REQUIRED)
+  add_executable(${name} ${source})
+  gates_link_libraries(${name} ${ARGN})
+  target_link_libraries(${name} PRIVATE unity)
+  target_compile_options(${name} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+  target_link_options(${name} PRIVATE -fprofile-instr-generate)
+  cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} NORMALIZE)
+  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} -DGATES_TEST=$<TARGET_FILE:${name}>
+    -DGATES_SOURCE=${source} -DGATES_LLVM_COV=${GATES_LLVM_COV}
+    -DGATES_LLVM_PROFDATA=${GATES_LLVM_PROFDATA} -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
+endfunction()
+
+# A property test: a libFuzzer target that ctest runs with a fixed seed and run count (in the
+# script-mode block above), so every run tries the same inputs. -rss_limit_mb=0 stops libFuzzer's
+# memory-watch thread, which LeakSanitizer would report as a leak. AGENTS.md shows how to search
+# longer for new failures.
 function(add_property_test name source)
   add_executable(${name} ${source})
-  target_link_libraries(${name} PRIVATE ${ARGN})
+  gates_link_libraries(${name} ${ARGN})
   target_compile_options(${name} PRIVATE -fsanitize=fuzzer)
   target_link_options(${name} PRIVATE -fsanitize=fuzzer)
-  add_test(NAME ${name} COMMAND ${name} -seed=1 -runs=100000 -rss_limit_mb=0)
+  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} -DGATES_PROPERTY=$<TARGET_FILE:${name}>
+    -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
 endfunction()

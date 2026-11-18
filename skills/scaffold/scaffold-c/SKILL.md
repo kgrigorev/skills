@@ -10,8 +10,8 @@ The template makes a C23 project with CMake that agents can work in safely. One 
 and the agent hook. The rules for agents live in `AGENTS.md`. The quality floor comes from the
 gates, so it holds whether or not an agent follows the rules.
 
-mise pins the whole toolchain: clang, clang-tidy, clang-format and clangd from one LLVM release,
-CMake and Ninja. So the same commit gives the same warnings on every machine and in CI.
+mise pins the whole toolchain: clang, clang-tidy, clang-format, clangd and llvm-cov from one LLVM
+release, CMake and Ninja. So the same commit gives the same warnings on every machine and in CI.
 
 Paths below are relative to this skill's folder unless they start with `<target>`.
 

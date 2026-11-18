@@ -17,8 +17,8 @@ git config core.hooksPath .githooks
 gh extension install github/gh-stack   # optional: stacked PRs
 ```
 
-`mise.toml` pins clang, clang-tidy, clang-format and clangd (one LLVM release from conda-forge),
-CMake and Ninja. `mise.lock` pins every download by checksum, for macOS and Linux. The first
+`mise.toml` pins clang, clang-tidy, clang-format, clangd and llvm-cov (one LLVM release from
+conda-forge), CMake and Ninja. `mise.lock` pins every download by checksum, for macOS and Linux. The first
 install downloads about 1 GB. CI installs the same files. The git hook runs the checks before each
 push. `gh stack` is optional: it helps to open and update stacked PRs.
 

@@ -2,7 +2,8 @@
 # Agents: change it only with the owner's approval.
 # The compiler, clang-tidy, clang-format and clangd come from one LLVM release, so their diagnostics
 # agree. conda-forge ships that release for macOS and Linux, with its own Linux sysroot and
-# sanitizer runtimes. mise.lock pins every package by URL and checksum.
+# sanitizer runtimes. mise.lock pins every package by URL and checksum. llvm-tools holds llvm-cov
+# and llvm-profdata, which measure which lines of a test ran (cmake/gates.cmake).
 # To bump a tool: change the version here, run `mise lock`, then `mise install`.
 min_version = "2026.11.8"
 
@@ -10,6 +11,7 @@ min_version = "2026.11.8"
 "conda:clang" = "23.1.5"
 "conda:clang-tools" = "23.1.5"
 "conda:clang-format" = "23.1.5"
+"conda:llvm-tools" = "23.1.5"
 cmake = "4.5.0"
 ninja = "1.13.2"
 

@@ -6,9 +6,10 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 ## Checks
 
 `scripts/check` runs every gate: pinned tool versions, clang-format, a search for switched-off
-checks (in the source and after macro expansion), a build with clang-tidy and warnings as errors,
-a check of the build's own compile commands that every project file gets the gates, and the tests
-with AddressSanitizer, UndefinedBehaviorSanitizer and LeakSanitizer. The git hook and CI run it
+checks (in the source, its preprocessor directives, after macro expansion and in the syntax tree),
+a build with clang-tidy and warnings as errors, a check of the build's own compile commands that
+every project file gets the gates, and the tests with AddressSanitizer, UndefinedBehaviorSanitizer
+and LeakSanitizer. Every line of a Unity test file must run. The git hook and CI run it
 too. It works from any folder and any shell: it starts itself under `mise exec`, and the tools see
 none of the caller's environment variables.
 
@@ -42,8 +43,12 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
 - No variable-length arrays. Every implicit narrowing or sign change is an error: check the range,
   then convert explicitly.
 - Check the result of every library call that can fail (`fclose`, `fwrite`, `snprintf`, ...).
-  Use the result of every `{{c_name}}_` function, or drop it on purpose with `(void)`.
-- Braces on every branch (clang-format adds them). No `#pragma` except `#pragma once`.
+  Use the result of every project function, static helpers too, or drop it on purpose with
+  `(void)`.
+- The library never calls `exit`: it returns an error to its caller. `abort()` is for broken
+  invariants only.
+- Braces on every branch (clang-format adds them). No `#pragma` except `#pragma once`, no `#line`
+  and no asm labels.
 - Use only headers from the C library, the OS or a declared dependency. The check rejects headers
   that come from the compiler's own folder.
 
@@ -51,16 +56,22 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
 
 - Logic goes in the library: `include/{{c_name}}.h` and `src/`. `app/main.c` only calls it.
 - `test/` holds Unity example tests and libFuzzer property tests. Tests are `static` functions that
-  `main` runs with `RUN_TEST`. A test that `main` never runs fails the build as an unused function.
+  `main` runs with `RUN_TEST`. Every line of a Unity test file must run, so a test that `main`
+  never runs, an early `return` or a branch a test never takes fails the check. A test file has
+  no `#if` or `#ifdef`, and does not define a function of the library it tests (tests link the
+  library whole, so a stub fails the link). Do not `#define` or `#undef` Unity's names, `setUp`,
+  `tearDown`, `abort` or `exit`.
 - Register tests in `CMakeLists.txt` with `add_unity_test(name file libs...)` or
-  `add_property_test(name file libs...)`. The check rejects a plain `add_test`.
+  `add_property_test(name file libs...)`. The check rejects a test made any other way, a test
+  property such as `WILL_FAIL` or `ENVIRONMENT`, and a `CTestCustom.cmake` in the build folder.
 - Every new `.c` file goes into a target in `CMakeLists.txt`, after
   `include(cmake/gates.cmake)`, that the default build makes. Include only `.h` and `.inc` files
   that git tracks. New dependencies need the owner's approval.
 - A Unity test passes only when it exits 0 and ends with Unity's summary of passed tests:
   `return UNITY_END();` ends `main`.
-- A property test runs a fixed seed and run count in `scripts/check`. CI searches longer with a
-  random seed every week (`.github/workflows/weekly.yml`). A failing input becomes an example test.
+- A property test runs a fixed seed and run count in `scripts/check`, and passes only when
+  libFuzzer ran every input. CI searches longer with a random seed every week
+  (`.github/workflows/weekly.yml`). A failing input becomes an example test.
 - `clangd` reads `build/dev/compile_commands.json`. Run `scripts/check` once to create it.
 
 ## Writing

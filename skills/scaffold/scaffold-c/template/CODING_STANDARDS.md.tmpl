@@ -1,7 +1,8 @@
 # Coding standards
 
 The reviewer applies these to every C change. `scripts/check` already enforces formatting,
-warnings, clang-tidy, sanitizers and the banned suppressions, so they are not repeated here.
+warnings, clang-tidy, sanitizers, the banned suppressions, dropped results, `exit` in the library
+and that every line of a Unity test file runs, so they are not repeated here.
 
 The reader is {{reader}}. Every rule serves that reader.
 
@@ -18,7 +19,8 @@ The reader is {{reader}}. Every rule serves that reader.
 
 - Expected failures are return values: a status `enum` plus an out-parameter. On failure the
   out-parameter stays unchanged.
-- `abort()` is for broken invariants only, never for bad input.
+- `abort()` is for broken invariants only, never for bad input. The check cannot tell the two
+  apart; the reviewer does.
 
 ## Comments
 
@@ -46,5 +48,9 @@ A new library, vendored or found by CMake, needs the owner's approval.
 ## Tests
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Every test asserts what the code must do. The check proves that each test line ran, not that
+  it checks anything.
+- A property test reaches the code for most of its inputs. A guard that returns early for nearly
+  every input passes without testing.
 - Test names describe behaviour.
 - A contract that holds for every input, such as a round trip or a bound, gets a property test.
