@@ -59,7 +59,11 @@ Every other gate states its reason in a comment in its own file.
   `HLINT ignore` comment split over several lines. It also rejects modules with an `Unsafe` part
   in their name and every `unsafe*` name: HLint bans only exact names, and base re-exports
   unsafe functions from many modules (`GHC.IO`, `GHC.Exts`, `Control.Monad.ST.Unsafe`). Comments
-  are stripped before that search, strings are not.
+  are stripped before that search, strings are not. Warning flags such as `-Wno-` and `-w` are
+  searched for only in `.cabal` and `cabal.project` files: a `.hs` file can pass flags to GHC
+  only through an `OPTIONS` pragma, which the step rejects whole, so there these words are text,
+  such as a command-line option the program parses. For the same reason `ANN` and `OPTIONS`
+  count only as pragmas (`{-#`), and a comment such as `{- Annual totals -}` passes.
 - The warning list lives twice: in the `common common` stanza, where GHC and HLS read it, and in
   `scripts/check`, which fails when the stanza loses a flag or a component does not start with
   `import: common`. A new component would otherwise build without `-Wall`. The `-Werror` stanza

@@ -92,7 +92,8 @@ hlint $hs_files
 
 step 'No switched-off checks'
 # Pragmas and comments that switch off HLint, Ormolu or GHC checks, also when they span lines,
-# and flags (bare or quoted) that turn warnings off or defer errors to run time. A file that is
+# and flags (bare or quoted) in .cabal and cabal.project files that turn warnings off or defer
+# errors to run time. A file that is
 # exactly the hspec-discover driver keeps its OPTIONS_GHC line. In .hs files, modules with an
 # Unsafe part in their name and unsafe* names are not allowed either, wherever they come from.
 # shellcheck disable=SC2086 # file names have no spaces
@@ -109,9 +110,15 @@ if ! perl -e '
   for my $f (@ARGV) {
     open(my $h, "<", $f) or die "$f: $!"; local $/; my $t = <$h>; close $h;
     next if $t eq "{-# OPTIONS_GHC -F -pgmF hspec-discover #-}\n";
-    while ($t =~ /\{-\#?\s*(?:hlint|ormolu|ann|options)|-wno-|-fno-warn|-wwarn|-wnot\b|-fdefer-|(?<![^\s:"])-w(?=[\s"]|$)/gim) {
-      report($f, $t, $-[0]) }
-    next unless $f =~ /\.hs$/;
+    # ANN and OPTIONS only work as pragmas, so a plain {- Annual ... -} comment stays allowed.
+    while ($t =~ /\{-\#?\s*(?:hlint|ormolu)|\{-\#\s*(?:ann|options)/gi) { report($f, $t, $-[0]) }
+    unless ($f =~ /\.hs$/) {
+      # In .hs files GHC reads flags only from an OPTIONS pragma, which is rejected above, and
+      # "-w" or "-Wno-" there is usually text: a command-line option or a comment.
+      while ($t =~ /-wno-|-fno-warn|-wwarn|-wnot\b|-fdefer-|(?<![^\s:"])-w(?=[\s"]|$)/gim) {
+        report($f, $t, $-[0]) }
+      next;
+    }
     (my $code = $t) =~ s/\{-.*?-\}/$& =~ tr{\n}{}cdr/gse;
     $code =~ s/(?<![-!#\$%&*+.\/<=>?\@\\^|~:])--+(?![!#\$%&*+.\/<=>?\@\\^|~:])[^\n]*//g;
     while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?(?:"[^"\n]*"\s+)?(?:[\w.]*\.)?Unsafe\b|(?<![\w\x27])unsafe[A-Z]/gm) {
