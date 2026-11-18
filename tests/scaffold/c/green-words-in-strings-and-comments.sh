@@ -24,4 +24,8 @@ void sample_tool_name_sanitizer(char *text) {
     }
 }
 X
-perl -0pi -e 's/(int main\(void\) \{\n    UNITY_BEGIN\(\);\n)/\/\/ Test that the unused byte count is exact, and that a test never ignores a result.\nstatic void unused_bytes_are_counted(void) {\n    const size_t unused = sample_tool_unused_bytes(200);\n    TEST_ASSERT_EQUAL_size_t(200 - sizeof "sample-tool: A sample tool that tests the template",\n                             unused);\n    TEST_ASSERT_EQUAL_size_t(0, sample_tool_unused_bytes(3));\n    TEST_ASSERT_EQUAL_STRING("unused", "unused");\n}\n\nstatic void sanitizer_replaces_control_bytes(void) {\n    char name[] = "a\\tb";\n    sample_tool_name_sanitizer(name);\n    TEST_ASSERT_EQUAL_STRING("a?b", name);\n}\n\n$1    RUN_TEST(unused_bytes_are_counted);\n    RUN_TEST(sanitizer_replaces_control_bytes);\n/' test/sample_tool_test.c
+# The banner holds the synopsis the project was rendered with, so read it from the source.
+BANNER=$(sed -n 's/^static const char banner\[\] = "\(.*\)";$/\1/p' src/sample_tool.c)
+[ -n "$BANNER" ]
+export BANNER
+perl -0pi -e 's/(int main\(void\) \{\n    UNITY_BEGIN\(\);\n)/\/\/ Test that the unused byte count is exact, and that a test never ignores a result.\nstatic void unused_bytes_are_counted(void) {\n    const size_t unused = sample_tool_unused_bytes(200);\n    TEST_ASSERT_EQUAL_size_t(200 - sizeof "$ENV{BANNER}",\n                             unused);\n    TEST_ASSERT_EQUAL_size_t(0, sample_tool_unused_bytes(3));\n    TEST_ASSERT_EQUAL_STRING("unused", "unused");\n}\n\nstatic void sanitizer_replaces_control_bytes(void) {\n    char name[] = "a\\tb";\n    sample_tool_name_sanitizer(name);\n    TEST_ASSERT_EQUAL_STRING("a?b", name);\n}\n\n$1    RUN_TEST(unused_bytes_are_counted);\n    RUN_TEST(sanitizer_replaces_control_bytes);\n/' test/sample_tool_test.c
