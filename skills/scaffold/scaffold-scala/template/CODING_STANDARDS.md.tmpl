@@ -9,9 +9,9 @@ The reader is {{reader}}. Every rule serves that reader.
 ## Plain Scala
 
 Use case classes, enums, pattern matching, `Option`, `Either` and immutable collections, plus the
-approved extras below. Type-level programming, macros, implicit conversions, effect libraries
+approved extras below. Type-level programming, implicit conversions, effect libraries
 (cats-effect, ZIO) and new type classes need the owner's approval first. Once approved, they go
-into the list.
+into the list. Macros are rejected by `scripts/check`.
 
 Approved extras:
 
@@ -35,13 +35,17 @@ A reader can follow a file from top to bottom by its comments alone.
 - Every public method states its result type.
 - Model choices with an `enum` or a sealed trait, not with strings or booleans.
 - Expected failures are values: return `Either` with the module's error type. This code never
-  throws (`scripts/check` bans `throw`). Exceptions come only from libraries, for the unexpected,
-  such as a full disk.
-- Never drop an error: no `val _ =` on an `Either` or a `Try`, no `Try(...).foreach`, no
-  `catch case _` or `case _: Throwable`. Catch the exception types you expect, and turn them into
-  the module's error type.
-- Use the total form of a lookup: `map.get(key)`, `s.toIntOption`, `xs.lift(i)`. A `match` on a
-  type that is not sealed, such as `Int` or `String`, ends with `case _`.
+  throws (`scripts/check` bans `throw`, `require`, `assert` and `sys.error`). Exceptions come only
+  from libraries, for the unexpected, such as a full disk.
+- Never drop an error: no `val _ =` or `(x: Unit)` on an `Either` or a `Try`, no
+  `Try(...).foreach` or `Try(...).getOrElse(default)`, no `catch case _` or `case _: Throwable`.
+  Catch the exception types you expect, and turn them into the module's error type.
+- Use the total form of a lookup: `map.get(key)`, `s.toIntOption`, `xs.lift(i)`, also on an
+  `Array`, never `it.next()` or `s.charAt(i)` without a check. A `match` on a type that is not
+  sealed, such as `Int` or `String`, ends with `case _`.
+- No mutable state through Java types either: no `AtomicInteger`, `java.util` collections or
+  `array(i) = x`. WartRemover only knows the Scala collections.
+- Only `Main.scala` ends the program (`sys.exit`). Library code returns an error instead.
 - Take a tuple apart with `match`, not `val (a, b) = x` on a type that is not a tuple: that form
   needs `@unchecked`, which `scripts/check` rejects.
 
@@ -62,6 +66,10 @@ version and a comment that says what it is for.
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
 - Every test checks something: an `assert`, `assertEquals` or a property that can fail. A
   property such as `s == s` holds for every input and tests nothing.
-- Tests register unconditionally: no `test(...)` inside an `if`.
+- Tests register unconditionally: no `test(...)` inside an `if` or in a loop over a list that may
+  be empty.
+- A property's generator covers real inputs: no `Gen.resize(0, ...)` or a generator of one value.
+- An asynchronous test returns its `Future`, so munit waits for it. A dropped `Future` checks
+  nothing.
 - Test names describe behaviour.
 - Property tests keep the fixed seed. A failing property prints its seed; replay it there.

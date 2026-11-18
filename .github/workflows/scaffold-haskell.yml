@@ -7,11 +7,15 @@ on:
     paths:
       - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
+      - tests/scaffold/haskell/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
+      - tests/scaffold/haskell/**
+      - scripts/test-scaffold
   # The scaffold takes the newest hspec and QuickCheck from Hackage, so a new release can break
   # the template without a change here. A weekly run catches that.
   schedule:
@@ -105,3 +109,8 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/$SAMPLE/scripts/check"
+
+      # Replays the attacks in tests/scaffold/haskell on the rendered project: each bad change
+      # must turn scripts/check red at its step, and each good one must stay green.
+      - name: Replay the attacks on the sample project
+        run: scripts/test-scaffold haskell --project "$RUNNER_TEMP/$SAMPLE"
