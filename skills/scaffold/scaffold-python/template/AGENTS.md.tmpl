@@ -6,8 +6,8 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 ## Checks
 
 `scripts/check` runs every gate: ruff format, ruff check (all rules), a search for switched-off
-checks, mypy --strict, pytest with warnings as errors and no skipped tests, and 100 % branch
-coverage. The git hook and CI run it too.
+checks and code that hides from them, mypy --strict, pytest with warnings as errors and no
+skipped or uncollected tests, and 100 % branch coverage. The git hook and CI run it too.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
@@ -38,7 +38,9 @@ The checks ban `print` outside `__main__.py`, relative imports, `Any`, TODO comm
 commented-out code. Every module and function has a Google-style docstring, and mypy needs an
 annotation on every function. Do not use `cast`, `# noqa`, `# type: ignore`,
 `contextlib.suppress`, skips, xfails or warning filters: fix the cause. Hypothesis settings live
-only in `tests/conftest.py`.
+only in `tests/conftest.py`. `TYPE_CHECKING` appears only as `if TYPE_CHECKING:` with no `else`.
+Use `platform.system()`, not `sys.platform`. A test never expects or catches `AssertionError`,
+`Exception` or `BaseException`. pytest loads only the plugins that `pyproject.toml` names.
 
 The editor language server is pyright. When pyright and mypy disagree, mypy wins: it is the gate.
 

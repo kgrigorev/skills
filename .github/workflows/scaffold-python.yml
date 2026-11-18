@@ -6,11 +6,15 @@ on:
   pull_request:
     paths:
       - skills/scaffold/scaffold-python/**
+      - tests/scaffold/python/**
+      - scripts/test-scaffold
       - .github/workflows/scaffold-python.yml
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-python/**
+      - tests/scaffold/python/**
+      - scripts/test-scaffold
       - .github/workflows/scaffold-python.yml
   # The scaffold takes the newest ruff, mypy, pytest, Hypothesis and coverage from PyPI, so a new
   # release can break the template without a change here. A weekly run catches that.
@@ -72,3 +76,9 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Each attack in tests/scaffold/python changes the sample project; scripts/check must fail
+      # at the expected step, or pass for the green controls.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold python --project "$RUNNER_TEMP/sample-tool"

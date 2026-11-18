@@ -34,7 +34,7 @@ Paths below are relative to this skill's folder unless they start with `<target>
 
 2. **Render.** Run `sh scripts/scaffold <target> <package> "<synopsis>" "<reader>"`. The script
    installs the pinned tools with mise, runs `cabal update`, copies the template, fills in the
-   names, the reader and the dependency bounds, pins `index-state` to today, formats the Haskell
+   names, the reader and the dependency bounds, pins `index-state` to the newest index entry, formats the Haskell
    and cabal files, writes `cabal.project.freeze`, trusts the project's `mise.toml`, runs
    `git init` when needed and enables the hooks in `.githooks/`. It needs the network.
    - mise or git is missing: propose `brew bundle --file=template/Brewfile.tmpl` (macOS). Run it

@@ -46,5 +46,8 @@ export default defineConfig({
     // A snapshot that is missing fails, instead of being written on the first run.
     // `vitest run -u` writes snapshots on purpose.
     update: "none",
+    // vi.useFakeTimers() starts the fake clock at 0, not at the real time, so a test under fake
+    // timers cannot read today's date. vi.setSystemTime sets another fixed time.
+    fakeTimers: { now: 0 },
   },
 });

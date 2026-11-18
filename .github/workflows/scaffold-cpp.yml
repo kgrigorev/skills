@@ -7,11 +7,15 @@ on:
     paths:
       - skills/scaffold/scaffold-cpp/**
       - .github/workflows/scaffold-cpp.yml
+      - tests/scaffold/cpp/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-cpp/**
       - .github/workflows/scaffold-cpp.yml
+      - tests/scaffold/cpp/**
+      - scripts/test-scaffold
   # The scaffold writes mise.lock from conda-forge on each run, and conda-forge can publish a new
   # build of the same version. A weekly run catches a template that breaks without a change here.
   schedule:
@@ -74,3 +78,9 @@ jobs:
       - name: Run the sample project's checks
         run: |
           "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Replays known attacks on the project rendered above: each must fail at its step, and each
+      # piece of good code must pass. A green attack means a gate stopped catching it.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold cpp --project "$RUNNER_TEMP/sample-tool"

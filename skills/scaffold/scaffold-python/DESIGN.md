@@ -32,15 +32,27 @@ Every other gate states its reason in a comment in its own file.
     `tests/conftest.py` fails only when tests are dropped without `-k`, `-m` or `--deselect`.
     `scripts/check` passes none of them, and it clears `PYTEST_ADDOPTS`.
   - A "test must assert" gate: no cheap, reliable tool. Counting passed asserts
-    (`pytest_assertion_pass`) would fail every `pytest.raises` test. Review covers it, as it
-    covers edits to the gate files; CODEOWNERS would need an owner name the template lacks.
+    (`pytest_assertion_pass`) would fail every `pytest.raises` test, and a static "has an
+    assert" rule passes `assert True` and rejects tests that call an asserting helper.
+    Mutation testing would catch it but is slow. Review covers it, as it covers edits to the
+    gate files (`scripts/check`, `pyproject.toml` `[tool.*]`, `tests/conftest.py`, `.github/`);
+    CODEOWNERS would need an owner name the template lacks, and hashing the gate files would
+    only move the edit to the hash.
+  - `Any` that flows into a typed name (`value: int = json.loads(text)["port"]`). The only mypy
+    check is `disallow_any_expr`, which also rejects `@given`, pytest's hook decorators and
+    `json.loads` itself, even in `data: object = json.loads(text)`. CODING_STANDARDS.md asks to
+    narrow such values at the boundary; review covers it.
   - `uv audit`, outdated packages and random Hypothesis examples change from day to day. They run
     in the weekly `audit.yml`, which never blocks a merge.
 - Python lives only in `src/<module>/` and `tests/` (`test_*.py`, `conftest.py`). A script or
   tool folder elsewhere would be linted but not type-checked or covered; it goes into the
   package with a `[project.scripts]` entry instead.
 - The text search in `scripts/check` and ruff's `banned-api` overlap on purpose. The search sees
-  comments, which ruff cannot ban; ruff resolves aliases, which a text search cannot.
+  comments, which ruff cannot ban; ruff resolves aliases, which a text search cannot. Shapes
+  that neither sees (an `else` after `if TYPE_CHECKING:`, a function renamed to `assert_never`,
+  a test that expects a failing assert) are found in the parsed code (`ast`). What a test really
+  runs with is checked at run time in `tests/conftest.py`: tests that a module defines but
+  pytest does not collect, and Hypothesis tests whose settings are not the active profile.
 - `PYTHONHASHSEED=0` makes reruns identical. The cost: a bug that depends on set order stays
   hidden.
 - Per-test Hypothesis settings are banned, even ones that run more examples. A test that needs
@@ -52,7 +64,9 @@ Every other gate states its reason in a comment in its own file.
 - The template comes from a working project. When you improve a gate in a project made from it,
   port the change here. Then scaffold a scratch project and run its `scripts/check`.
 - CI in `kgrigorev/skills` does the same in `.github/workflows/scaffold-python.yml`, weekly too,
-  because the scaffold takes the newest dev tools from PyPI. When you bump `uv_version` in
+  because the scaffold takes the newest dev tools from PyPI. It then replays the attacks in
+  `tests/scaffold/python/` with `scripts/test-scaffold python`: each bad change must fail at its
+  step, and each `green-*` control must pass. A gate change comes with a case there. When you bump `uv_version` in
   `scripts/scaffold`, bump `UV_VERSION` in that workflow too.
 - Bump `python_minor` in `scripts/scaffold` when a newer minor has been out for about three
   months.

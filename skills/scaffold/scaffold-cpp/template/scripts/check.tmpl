@@ -11,6 +11,10 @@ root=$(pwd -P)
 # mise lock --platform macos-arm64,linux-x64,linux-arm64
 # mise.toml holds only [tools] and `lockfile = true`: an [env] section could put another
 # clang-tidy first on PATH, and other settings change how mise installs.
+step() { printf '\n==> %s\n' "$1"; }
+# The script runs twice (see `exec mise exec` below). The header prints once, so a failure here
+# names its step like every other gate.
+if [ -z "${SCRIPTS_CHECK_IN_MISE:-}" ]; then step 'Tools pinned by mise.toml and mise.lock'; fi
 unlocked=$(awk '
   FNR == 1 { file++ }
   file == 1 && /^[[:space:]]*(#|$)/ { next }
@@ -59,8 +63,6 @@ fi
 # filter, disabled tests, repeats), and compilers read the flag variables.
 for name in $(env | sed -n 's/^\(GTEST_[A-Z_]*\)=.*/\1/p'); do unset "$name"; done
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
-
-step() { printf '\n==> %s\n' "$1"; }
 
 # Each tool must be the one mise.toml pins, not one that comes earlier on PATH.
 for entry in cmake:cmake cmake:ctest ninja:ninja conda:clangxx:clang++ \
@@ -128,23 +130,145 @@ step 'Format (clang-format, rules in .clang-format). Fix: scripts/format'
 clang-format --dry-run --Werror $cpp_files
 
 step 'No switched-off checks'
-# Comments, pragmas, attributes, flags and test settings that switch off a check or a test.
-# Flags that reach the compiler are checked again after the configure step.
-switch_off='NOLINT|clang-format (off|on)|pragma +(clang|GCC)|_Pragma|clang::suppress'
-switch_off="$switch_off|-Wno-|(^|[[:space:]\"])-w([[:space:]\"]|$)|--no-warnings"
-switch_off="$switch_off|-fno-sanitize=|no_sanitize|-fsanitize-(ignorelist|blacklist)"
-switch_off="$switch_off|__(a|ub|l|m|t)san_default_(options|suppressions)"
-switch_off="$switch_off|COMPILE_WARNING_AS_ERROR|GTEST_SKIP|DISABLED|WILL_FAIL"
-switch_off="$switch_off|SKIP_RETURN_CODE|SKIP_REGULAR_EXPRESSION|TEST_FILTER|gtest_filter"
-# In C++ only: macros that tell the checked build apart from others, so code under them is
-# never compiled, linted or tested here. clang-tidy defines __clang_analyzer__. Also
-# RC_SUCCEED, which ends a property before its assertions.
-cpp_only='__clang_analyzer__|__has_feature|__SANITIZE_|NDEBUG|_LIBCPP_HARDENING|_GLIBCXX_ASSERTIONS'
-cpp_only="$cpp_only|RC_SUCCEED"
+# Comments, pragmas, attributes, macros, flags and test settings that switch off a check or a
+# test. Flags that reach the compiler are checked again after the configure step.
+failed=''
+# Comments that switch off clang-tidy or clang-format, in any file.
+# shellcheck disable=SC2086 # file names have no spaces
+if grep -nE 'NOLINT|clang-format (off|on)' $cpp_files $cmake_files; then
+  echo 'The comments above switch off clang-tidy or clang-format. Remove them and fix the cause.' >&2
+  failed=1
+fi
+# CMake settings and compiler flags that switch off a warning, a sanitizer or a test.
+cmake_words='COMPILE_WARNING_AS_ERROR|GTEST_SKIP|DISABLED|WILL_FAIL|SKIP_RETURN_CODE'
+cmake_words="$cmake_words|SKIP_REGULAR_EXPRESSION|TEST_FILTER|gtest_filter|no_sanitize"
+cmake_words="$cmake_words|-Wno-|(^|[[:space:]\"])-w([[:space:]\")]|\$)|--no-warnings"
+cmake_words="$cmake_words|-fno-sanitize=|-fsanitize-(ignorelist|blacklist)"
 # shellcheck disable=SC2086
-if grep -nE "$switch_off" $cpp_files $cmake_files || grep -nE "$cpp_only" $cpp_files; then
-  echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
-  exit 1
+# -e: the pattern starts with "-", which grep would read as an option.
+if grep -nE -e "$cmake_words" $cmake_files; then
+  echo 'The CMake lines above switch off a check or a test. Remove them and fix the cause.' >&2
+  failed=1
+fi
+
+# The C++ code without comments and without the text of string and character literals, one
+# "file:line: code" line per logical line (a line ended by a backslash is joined to the next, as
+# the compiler does). The searches below read it, so a word in a comment or a string, such as
+# the option "-w" or a note about NDEBUG, is not flagged, and a comment cannot split a word
+# (#/**/pragma). They read code, not what it means: a macro could still build a word from parts,
+# so token pasting (##) is rejected too.
+mkdir -p build/check
+code=build/check/code.txt
+# shellcheck disable=SC2086
+awk -v apostrophe="'" '
+  function blank(count,   out) { out = ""; while (count-- > 0) out = out " "; return out }
+  function strip(line,   n, i, c, out, word, rest, at) {
+    n = length(line); out = ""; word = ""; i = 1
+    while (i <= n) {
+      c = substr(line, i, 1)
+      if (state == "block") {
+        if (substr(line, i, 2) == "*/") { out = out "  "; i += 2; state = "code" } else { out = out " "; i++ }
+      } else if (state == "raw") {
+        at = index(substr(line, i), raw_end)
+        if (at == 0) { out = out blank(n - i + 1); i = n + 1 }
+        else { out = out blank(at - 1) raw_end; i += at - 1 + length(raw_end); state = "code" }
+      } else if (state == "string" || state == "char") {
+        if (c == "\\") { out = out "  "; i += 2 }
+        else if (c == quote) { out = out c; i++; state = "code" }
+        else { out = out " "; i++ }
+      } else if (substr(line, i, 2) == "//") { out = out blank(n - i + 1); i = n + 1
+      } else if (substr(line, i, 2) == "/*") { out = out "  "; i += 2; state = "block"; word = ""
+      } else if (c == "\"" && word ~ /^(u8|u|U|L)?R$/ && (at = index(substr(line, i + 1), "(")) > 0) {
+        # A raw string literal R"delimiter( ... )delimiter", which may span lines.
+        raw_end = ")" substr(line, i + 1, at - 1) "\""; out = out c blank(at); i += at + 1
+        state = "raw"; word = ""
+      } else if (c == "\"" || (c == apostrophe && word !~ /^[0-9]/)) {
+        # An apostrophe after a digit is a digit separator, not a character literal.
+        quote = c; out = out c; i++; state = (c == "\"") ? "string" : "char"; word = ""
+      } else {
+        out = out c; i++
+        if (c ~ /[A-Za-z0-9_.]/ || c == apostrophe) word = word c; else word = ""
+      }
+    }
+    # A string or character literal ends at the end of its line.
+    if (state == "string" || state == "char") state = "code"
+    return out
+  }
+  function emit() { if (pending != "") print file ":" first ": " strip(pending); pending = "" }
+  FNR == 1 { emit(); state = "code"; file = FILENAME }
+  {
+    if (pending == "") first = FNR
+    line = $0
+    if (line ~ /\\$/) { pending = pending substr(line, 1, length(line) - 1); next }
+    pending = pending line; if (pending == "") pending = " "
+    emit()
+  }
+  END { emit() }' $cpp_files >"$code"
+
+# Pragmas switch off warnings or change the compiler's settings for part of a file. Only
+# `#pragma once` is allowed.
+if grep -E '(^|[^A-Za-z0-9_])(_Pragma|__pragma|pragma)([^A-Za-z0-9_]|$)' "$code" |
+  grep -vE '^[^:]*:[0-9]+: [[:space:]]*(#|%:)[[:space:]]*pragma[[:space:]]+once[[:space:]]*$'; then
+  echo 'The pragmas above are not allowed. Only #pragma once is.' >&2
+  failed=1
+fi
+# Attributes and sanitizer calls that switch off a check or a sanitizer, test settings that skip
+# a test, and macros that tell the checked build apart from others, so code under them is never
+# compiled, linted or tested here. clang-tidy defines __clang_analyzer__, and __BASE_FILE__ names
+# the file being compiled, so a header can act differently in a test. RC_SUCCEED ends a property
+# before its assertions. GTEST_FLAG sets a GoogleTest flag, such as a filter, from code.
+code_words='(^|[^A-Za-z0-9_])_*suppress_*([^A-Za-z0-9_]|$)|no_sanitize|no_address_safety_analysis'
+code_words="$code_words|disable_sanitizer_instrumentation|__(a|ub|l|m|t|hwa)san(_|::)|__sanitizer_"
+code_words="$code_words|GTEST_SKIP|DISABLED|GTEST_FLAG|FLAGS_gtest_|gtest_filter|RC_SUCCEED"
+code_words="$code_words|__clang_analyzer__|__has_feature|__SANITIZE_|NDEBUG|_LIBCPP_|_GLIBCXX_"
+code_words="$code_words|__BASE_FILE__|__OPTIMIZE__|##|%:%:"
+if grep -E "$code_words" "$code"; then
+  echo 'The lines above switch off a check or a test. Remove them and fix the cause.' >&2
+  failed=1
+fi
+# Ending the process skips the test framework's report and the caller's error handling. Return
+# an error or throw instead (std::exit is caught by clang-tidy's concurrency-mt-unsafe).
+if grep -E '(^|[^A-Za-z0-9_.>])(std::|::)?(abort|terminate|quick_exit|_Exit|_exit)[[:space:]]*\(' "$code"; then
+  echo 'The lines above end the process. Return an error or throw instead.' >&2
+  failed=1
+fi
+# #if, #ifdef and #elif may test only the platform (__APPLE__, __linux__), the language and
+# library features (__cplusplus, __cpp_*) and __has_include. Code under any other macro is
+# compiled in other builds only, and a condition without a macro (#if 0) is never compiled.
+# defined() and __has_include() arguments are not macros of their own.
+bad_conditions=$(awk '
+  {
+    code = $0; sub(/^[^:]*:[0-9]+: /, "", code)
+    if (code !~ /^[[:space:]]*(#|%:)[[:space:]]*(if|ifdef|ifndef|elif|elifdef|elifndef)([^A-Za-z0-9_]|$)/) next
+    sub(/^[[:space:]]*(#|%:)[[:space:]]*[a-z]+/, "", code)
+    gsub(/__has_(include|include_next|cpp_attribute)[[:space:]]*\([^)]*\)/, " 1 ", code)
+    macros = 0; bad = ""
+    while (match(code, /[A-Za-z_][A-Za-z0-9_]*|[0-9][A-Za-z0-9_.]*/)) {
+      token = substr(code, RSTART, RLENGTH); code = substr(code, RSTART + RLENGTH)
+      if (token ~ /^[0-9]/ || token == "true" || token == "false" || token == "defined") continue
+      macros++
+      if (token !~ /^(__APPLE__|__linux__|__cplusplus|__cpp_[a-z0-9_]+)$/) bad = bad " " token
+    }
+    if (bad != "") print $0 "   <- tests" bad
+    else if (macros == 0) print $0 "   <- has no macro, so it never changes"
+  }' "$code")
+if [ -n "$bad_conditions" ]; then
+  printf '%s\n' "$bad_conditions"
+  echo 'Test only __APPLE__, __linux__, __cplusplus, __cpp_* or __has_include in #if. Headers use #pragma once.' >&2
+  failed=1
+fi
+# Test files are the files that include GoogleTest or rapidcheck. In them, main comes from
+# GoogleTest (a main of their own can ignore the result), and a bare `return;` ends a test before
+# its assertions. A property skips an input with RC_PRE, which fails it when too many are skipped.
+# shellcheck disable=SC2086
+test_files=$(grep -lE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"](gtest|gmock|rapidcheck)/' $cpp_files || true)
+if [ -n "$test_files" ] && TEST_FILES=$test_files awk '
+  BEGIN { n = split(ENVIRON["TEST_FILES"], list, "\n"); for (i = 1; i <= n; i++) test[list[i]] = 1 }
+  { file = $0; sub(/:.*/, "", file) }
+  (file in test) && /(^|[^A-Za-z0-9_])(return[[:space:]]*;|main[[:space:]]*\()/ { print; found = 1 }
+  END { exit !found }' "$code"; then
+  echo 'Test files may not define main or use a bare return. Skip a property input with RC_PRE.' >&2
+  failed=1
 fi
 # clang-tidy and clang-format use the nearest config file, so one in a subfolder overrides the
 # root one.
@@ -153,24 +277,85 @@ extra_configs=$(project_files '*.clang-tidy' '*.clang-format' '*_clang-format' |
 if [ -n "$extra_configs" ]; then
   printf '%s\n' "$extra_configs"
   echo 'Remove the files above: only the root .clang-tidy and .clang-format apply.' >&2
-  exit 1
+  failed=1
 fi
+if [ -n "$failed" ]; then exit 1; fi
 
 step 'Dependencies pinned by URL and SHA-256'
-# Other ways to fetch code (git, ExternalProject, file(DOWNLOAD)) give whatever the server has
-# today. A library from the machine (find_package) is caught after the build, by its path.
+# Other ways to fetch code (git, ExternalProject, file(DOWNLOAD), a local source folder) give
+# whatever the server or the folder has today. A library from the machine (find_package) is
+# caught after the build, by its path.
+# The scan reads CMake as CMake does: it drops # and #[[ ]] comments outside quotes, joins each
+# command over its lines up to the closing parenthesis, and matches command names in any letter
+# case (CMake ignores it there; keywords such as URL are case-sensitive).
+# shellcheck disable=SC2086
+cmake_scripts=$(printf '%s\n' $cmake_files | grep -v '\.json$')
 # shellcheck disable=SC2086
 unpinned=$(awk '
-  /^[[:space:]]*#/ { next }
-  /ExternalProject|FetchContent_Populate|CPMAddPackage|file *\( *DOWNLOAD/ {
-    print FILENAME ":" FNR ": fetches code without a pinned URL and SHA-256" }
-  /FetchContent_Declare/ { call = ""; start = FNR; open = 1 }
-  open { call = call " " $0
-    if (index($0, ")")) { open = 0
-      if (call !~ / URL https:\/\// || call !~ / URL_HASH SHA256=[0-9a-f][0-9a-f]*/ ||
-        call ~ /GIT_|SVN_|HG_|SOURCE_DIR|DOWNLOAD_COMMAND|PATCH_COMMAND/)
-        print FILENAME ":" start ": FetchContent_Declare needs URL https://... and URL_HASH SHA256=..." } }
-  ' $cmake_files)
+  function end_word() {
+    if (word == "" && !quoted) return
+    if (depth == 0) name = word; else args[++count] = word
+    word = ""; quoted = 0
+  }
+  function command(   i, url, hash) {
+    if (name ~ /^(externalproject_|fetchcontent_populate$|cpm)/ ||
+      (name == "include" && args[1] ~ /^(ExternalProject|CPM)/) ||
+      (name == "file" && args[1] == "DOWNLOAD") ||
+      (name == "set" && args[1] ~ /^FETCHCONTENT_(SOURCE_DIR_|TRY_FIND_PACKAGE_MODE)/)) {
+      print FILENAME ":" start ": " name " fetches code without a pinned URL and SHA-256"; return }
+    if (name != "fetchcontent_declare") return
+    url = 0; hash = 0
+    for (i = 2; i <= count; i++) {
+      if (args[i] == "URL" && args[i + 1] ~ /^https:\/\//) url = 1
+      if (args[i] == "URL_HASH" && args[i + 1] ~ /^SHA256=[0-9a-f]+$/ && length(args[i + 1]) == 71) hash = 1
+      if (args[i] ~ /^(GIT_|SVN_|HG_|CVS_|SOURCE_DIR$|DOWNLOAD_COMMAND$|PATCH_COMMAND$|UPDATE_COMMAND$|FIND_PACKAGE_ARGS$|OVERRIDE_FIND_PACKAGE$)/) {
+        url = 0; break }
+    }
+    if (!url || !hash)
+      print FILENAME ":" start ": FetchContent_Declare needs URL https://... and URL_HASH SHA256=... only"
+  }
+  FNR == 1 { mode = "code"; depth = 0; word = ""; quoted = 0; name = "" }
+  {
+    line = $0; n = length(line); i = 1
+    while (i <= n) {
+      c = substr(line, i, 1)
+      if (mode == "bracket") {
+        at = index(substr(line, i), bracket_end)
+        if (at == 0) { if (!comment) word = word substr(line, i) "\n"; i = n + 1; continue }
+        if (!comment) { word = word substr(line, i, at - 1); quoted = 1 }
+        i += at - 1 + length(bracket_end); mode = "code"; if (!comment) end_word(); continue
+      }
+      if (mode == "string") {
+        if (c == "\\") { word = word substr(line, i, 2); i += 2; continue }
+        if (c == "\"") { mode = "code"; i++; end_word(); continue }
+        word = word c; i++; continue
+      }
+      if (c == "#") {
+        if (match(substr(line, i + 1), /^\[=*\[/)) {
+          bracket_end = "]" substr(line, i + 2, RLENGTH - 2) "]"; mode = "bracket"; comment = 1
+          i += 1 + RLENGTH; continue }
+        break
+      }
+      if (c == "[" && word == "" && match(substr(line, i), /^\[=*\[/)) {
+        bracket_end = "]" substr(line, i + 1, RLENGTH - 2) "]"; mode = "bracket"; comment = 0
+        i += RLENGTH; continue }
+      if (c == "\"" && word == "") { mode = "string"; quoted = 1; i++; continue }
+      if (c == "\\") { word = word substr(line, i, 2); i += 2; continue }
+      if (c == "(") {
+        end_word()
+        if (depth == 0) { name = tolower(name); start = FNR; count = 0; delete args }
+        depth++; i++; continue
+      }
+      if (c == ")") {
+        end_word(); i++
+        if (depth > 0 && --depth == 0) { command(); name = "" }
+        continue
+      }
+      if (c == " " || c == "\t") { end_word(); i++; continue }
+      word = word c; i++
+    }
+    if (mode == "string") word = word "\n"; else if (mode == "code") end_word()
+  }' $cmake_scripts)
 if [ -n "$unpinned" ]; then
   printf '%s\n' "$unpinned"
   echo 'Pin each dependency in cmake/dependencies.cmake by URL and SHA-256.' >&2
@@ -187,6 +372,8 @@ cmake --preset dev --log-level=WARNING
 # catches a flag passed once by hand (cmake -D...), which stays in the build folder's cache.
 # Adding a flag to the list needs the owner's approval.
 # Every compiled file must be a .cpp file that the gates above read.
+# Every project file gets the same -D macros, so a header cannot act differently in the tests
+# (a macro set for the test target only) than in the program.
 bad_commands=$(CPP_FILES=$cpp_files awk -v root="$root/" -v compiler="$(mise where conda:clangxx)/" '
   function literal(text, from, to,   at, out) {
     out = ""
@@ -237,7 +424,11 @@ bad_commands=$(CPP_FILES=$cpp_files awk -v root="$root/" -v compiler="$(mise whe
       bad("gets " w ", which is not on the list of flags in scripts/check")
     }
     for (w in required) if (!(w in seen)) bad("is compiled without " w)
-  }' cmake/strict.cmake build/dev/compile_commands.json)
+    files++; for (w in seen) if (w ~ /^-D/ && !(w in required)) defines[w]++
+  }
+  END { for (w in defines) if (defines[w] != files)
+    print w ": is set for some project files only. Set it for every target or for none" }
+  ' cmake/strict.cmake build/dev/compile_commands.json)
 if [ -n "$bad_commands" ]; then
   printf '%s\n' "$bad_commands" | sed 's|@/||g' | sort -u
   echo 'Fix CMakeLists.txt, or clear a flag passed by hand: rm -rf build/dev' >&2
@@ -252,10 +443,13 @@ fi
 step 'Lint (clang-tidy, rules in .clang-tidy)'
 # One clang-tidy per source file, as many at once as the machine has cores. Headers are checked
 # through the source files that include them.
+# In test files, bugprone-unchecked-optional-access is off: it does not see that
+# ASSERT_TRUE(value.has_value()) ends the test, so it rejects the usual GoogleTest code. Every
+# line of a test runs in the check, and the hardened standard library stops a bad access there.
+lint() { xargs -r -P "$(getconf _NPROCESSORS_ONLN)" -n 1 clang-tidy -p build/dev --quiet --warnings-as-errors='*' "$@"; }
 # shellcheck disable=SC2086
-printf '%s\n' $cpp_files | grep -E '\.cpp$' |
-  xargs -r -P "$(getconf _NPROCESSORS_ONLN)" -n 1 clang-tidy -p build/dev --quiet \
-    --warnings-as-errors='*'
+printf '%s\n' $cpp_files | grep -E '\.cpp$' | grep -vxF "${test_files:-/}" | lint
+printf '%s\n' "$test_files" | grep -E '\.cpp$' | lint --checks=-bugprone-unchecked-optional-access
 
 step 'Build (warnings are errors)'
 cmake --build --preset dev
@@ -302,6 +496,10 @@ step 'Test (sanitizers on, fixed property seed)'
 # Every ctest test must be one GoogleTest case run as gtest_discover_tests writes it. Test
 # properties (PASS_REGULAR_EXPRESSION, ENVIRONMENT, WILL_FAIL, ...) and custom add_test
 # commands can make a failing test pass.
+# A CTestCustom file in the build folder can tell ctest to skip tests, and it outlives the CMake
+# code that wrote it. The check below would catch the skip; deleting the file stops a revert from
+# leaving the build folder broken.
+rm -f build/dev/CTestCustom.cmake build/dev/CTestCustom.ctest
 ctest --test-dir build/dev --show-only=json-v1 >build/dev/tests.json
 bad_tests=$(awk -v binary="$root/build/dev/" '
   /^      "command" : *$/ { in_command = 1; n = 0; next }
@@ -320,7 +518,39 @@ if printf '%s\n' "$bad_tests" | grep -v '^count '; then
   echo 'Remove the test properties and custom tests above from CMakeLists.txt.' >&2
   exit 1
 fi
-ctest --preset dev --output-log build/dev/ctest.log
+# The tests each test executable holds, as the executable itself lists them, without the
+# arguments, flag files or filters that discovery may pass. A test executable is any project
+# executable that links GoogleTest. Each must hold at least one test, so one with its own main
+# cannot list nothing and run nothing.
+test_binaries=$(awk '
+  /^build / { output = $2; sub(/:$/, "", output)
+    executable = ($3 ~ /^CXX_EXECUTABLE_LINKER/ && output !~ /^_deps\//); next }
+  executable && /^  LINK_LIBRARIES = / {
+    for (i = 3; i <= NF; i++) if ($i ~ /(^|\/)libgtest(_main)?[^\/]*\.a$/) { print output; next } }
+  ' build/dev/build.ninja | sort -u)
+listed=''
+for binary in $test_binaries; do
+  if ! list=$("build/dev/$binary" --gtest_list_tests --gtest_also_run_disabled_tests); then
+    echo "build/dev/$binary --gtest_list_tests failed." >&2
+    exit 1
+  fi
+  names=$(printf '%s\n' "$list" | awk '
+    /^[^ ]/ { suite = $1; listing = sub(/\.$/, "", suite); next }
+    listing && /^  [^ ]/ { print suite "." $1 }')
+  if [ -z "$names" ]; then
+    echo "build/dev/$binary links GoogleTest but lists no tests. Use GTest::gtest_main." >&2
+    exit 1
+  fi
+  listed="$listed$names
+"
+done
+# Each test writes a JSON report when it finishes, so a test that ends the process early, or
+# whose exit code was changed, has no passing report. ctest runs one test at a time, so each
+# report gets its own file name.
+rm -rf build/dev/gtest
+mkdir build/dev/gtest
+unset CTEST_PARALLEL_LEVEL
+GTEST_OUTPUT="json:$root/build/dev/gtest/" ctest --preset dev --output-log build/dev/ctest.log
 # ctest passes when a test is skipped or disabled; here that is a failure.
 if grep -A 1000 'tests did not run' build/dev/ctest.log; then
   echo 'Every test must run. Remove the skip or the DISABLED setting, or delete the test.' >&2
@@ -333,5 +563,29 @@ if [ "$ran" != "$defined" ]; then
   echo "ctest ran ${ran:-no} tests out of $defined. Remove the filter from CMakePresets.json." >&2
   exit 1
 fi
+# Every listed test must have a report that says it ran to the end without a failure.
+passed=$(find build/dev/gtest -name '*.json' -exec awk '
+  function value(   text) { text = $0; sub(/^ *"[a-z]+": "?/, "", text); sub(/"?,?$/, "", text)
+    gsub(/\\\//, "/", text); return text }
+  function report() { if (clean) for (i = 1; i <= n; i++) if (done[i]) print test[i]; n = 0 }
+  FNR == 1 { report(); clean = 1 }
+  /^  "(failures|errors)": / && value() != "0" { clean = 0 }
+  /^      "name": / { suite = value() }
+  /^          "name": / { test[++n] = suite "." value(); status = ""; done[n] = 0 }
+  /^          "status": / { status = value() }
+  /^          "result": / { done[n] = (status == "RUN" && value() == "COMPLETED") }
+  /^          "failures": / { done[n] = 0 }
+  END { report() }' {} +)
+not_passed=$(printf '%s' "$listed" | PASSED=$passed awk '
+  BEGIN { n = split(ENVIRON["PASSED"], list, "\n"); for (i = 1; i <= n; i++) passed[list[i]]++ }
+  $0 != "" && passed[$0]-- <= 0 { print $0 ": did not run to the end and pass" }')
+if [ -n "$not_passed" ]; then
+  printf '%s\n' "$not_passed"
+  echo 'Each test above must run under ctest and pass. Register every test executable with' >&2
+  echo 'gtest_discover_tests, without extra arguments, and do not end the process in a test.' >&2
+  exit 1
+fi
 
-printf '\nAll checks passed.\n'
+printf '
+All checks passed.
+'
