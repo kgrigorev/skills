@@ -189,44 +189,202 @@ while [ "$dir" != / ]; do
   reject_config "$dir/.cargo/config"
 done
 
+# A small Rust reader, in Perl, for the two code searches below: the search for switched-off
+# checks and the check that every test runs. It drops comments and the text of strings before it
+# matches, so a `]` or a `*/` in a string, a comment between an attribute and its fn, or a
+# comment that names what it warns against cannot change what the search sees. Perl ships with
+# macOS and the Ubuntu runners, so no pinned tool is needed. The code is a sh string in single
+# quotes, so it holds no single quote: \x27 stands for one.
+# shellcheck disable=SC2016 # Perl code: the $ signs are Perl's.
+rust_reader='
+use strict;
+use warnings;
+use File::Find;
+
+# The .rs files of the project, without ./target and ./.git.
+sub rust_files {
+  my @files;
+  find({ no_chdir => 1, wanted => sub {
+    if ($_ eq "./target" || $_ eq "./.git") { $File::Find::prune = 1; return }
+    push @files, substr($_, 2) if /\.rs$/ && -f;
+  } }, ".");
+  return sort @files;
+}
+
+sub slurp {
+  open my $in, "<", $_[0] or die "$_[0]: $!\n";
+  local $/;
+  return scalar <$in>;
+}
+
+# Splits Rust source into two texts with the same line breaks as the source:
+# - code: comments become a space, string literals "", character literals a blank one, and raw
+#   identifiers lose their r# (r#allow is allow).
+# - docs: only the text of doc comments and string literals, which is where doc examples are.
+sub lex {
+  my ($src) = @_;
+  my ($code, $docs) = ("", "");
+  my $breaks = sub { "\n" x ($_[0] =~ tr/\n//) };
+  pos($src) = 0;
+  while (pos($src) < length $src) {
+    if ($src =~ m{\G(?:///(?!/)|//!)([^\n]*)}gc) { $code .= " "; $docs .= $1 }
+    elsif ($src =~ m{\G//[^\n]*}gc) { $code .= " " }
+    elsif ($src =~ m{\G(/\*(?:[^/*]++|/(?!\*)|\*(?!/)|(?1))*+\*/)}gc) {
+      my $text = $1;
+      $code .= " " . $breaks->($text);
+      $docs .= $text =~ m{^/\*(?:\*(?![*/])|!)} ? $text : $breaks->($text);
+    }
+    elsif ($src =~ m{\G[bc]?r(#*)"(.*?)"\1}gcs
+      || $src =~ m{\G[bc]?"((?:[^"\\]|\\.)*)"}gcs) {
+      my $text = defined $2 ? $2 : $1;
+      $code .= q{""} . $breaks->($text);
+      $docs .= $text;
+    }
+    elsif ($src =~ m{\Gb?\x27(?:[^\x27\\\n]|\\(?:u\{[0-9a-fA-F_]*\}|x[0-9a-fA-F]{2}|.))\x27}gc) {
+      $code .= "\x27 \x27";
+    }
+    elsif ($src =~ m{\G(?:r#)?([A-Za-z_][A-Za-z0-9_]*)}gc) { $code .= $1 }
+    elsif ($src =~ m{\G([^"\x27/A-Za-z_]+|.)}gcs) { $code .= $1; $docs .= $breaks->($1) }
+  }
+  return ($code, $docs);
+}
+
+sub line_at { 1 + (substr($_[0], 0, $_[1]) =~ tr/\n//) }
+
+# Splits the inside of an attribute at the commas that are not inside brackets.
+sub split_top {
+  my ($text) = @_;
+  my ($depth, $part, @parts) = (0, "");
+  for my $char (split //, $text) {
+    $depth++ if $char =~ /[([{]/;
+    $depth-- if $char =~ /[)\]}]/;
+    if ($char eq "," && $depth == 0) { push @parts, $part; $part = "" } else { $part .= $char }
+  }
+  return (@parts, $part);
+}
+
+# Names that mean the test attribute: test, and any name a `use ... test as <name>` gives it.
+our %test_names = (test => 1);
+sub learn_test_names { $test_names{$1} = 1 while $_[0] =~ /\btest\s+as\s+(\w+)/g }
+
+# Whether the inside of an attribute makes a test: test, a path that ends in test (such as
+# core::prelude::v1::test), or a cfg_attr whose attributes hold one of them.
+sub is_test_attr {
+  my ($attr) = @_;
+  $attr =~ s/^\s+|\s+$//g;
+  if ($attr =~ /^cfg_attr\s*\((.*)\)$/s) {
+    my (undef, @attrs) = split_top($1);
+    return scalar grep { is_test_attr($_) } @attrs;
+  }
+  return $attr =~ /^(?:::\s*)?(?:\w+\s*::\s*)*(\w+)\s*(?:\(.*\))?$/s && $test_names{$1};
+}
+
+# Finds the tests in lexed code. Returns two array refs: [module path of the test, line] for each
+# test, and [line, reason] for each test the reading cannot be sure of. A test must stand in a
+# module or directly in proptest!, and must be a plain `fn name`.
+sub walk {
+  my ($code) = @_;
+  my (@stack, @tests, @problems);
+  while ($code =~ m~
+      \#\s*!?\s*\[(?<inner>(?:[^\[\]]++|(?&br))*+)\]
+    | \bmod\s+(?<mod>\w+)\s*\{
+    | \b(?!(?:if|while|match|return|in|else|let|mut|for|as|break|loop|move|ref|where)\b)
+      (?<mac>\w+)\s*!\s*(?:\w+\s*)?[{(\[]
+    | (?<open>[{(\[])
+    | (?<close>[})\]])
+    (?(DEFINE)(?<br>\[(?:[^\[\]]++|(?&br))*+\]))
+  ~gx) {
+    if (defined $+{inner}) {
+      next unless is_test_attr($+{inner});
+      my $line = line_at($code, $-[0]);
+      my @outer = grep { $_->[0] ne "mod" && !($_->[0] eq "mac" && $_->[1] eq "proptest") } @stack;
+      if (@outer) {
+        my ($mac) = grep { $_->[0] eq "mac" } @outer;
+        my $where = $mac ? "$mac->[1]!" : "a block";
+        push @problems, [$line, "a test inside $where, which the check cannot follow"];
+        next;
+      }
+      if (substr($code, pos $code) =~ m{
+          ^\s*(?:\#\s*!?\s*(?&br)\s*)*
+          (?:pub\b\s*(?:\([^()]*\))?\s*)?
+          (?:(?:const|async|unsafe|safe|extern)\b\s*(?:""\s*)?)*
+          fn\s+(\w+)
+          (?(DEFINE)(?<br>\[(?:[^\[\]]++|(?&br))*+\]))
+        }x) {
+        my $module = join "", map { $_->[0] eq "mod" ? "$_->[1]::" : "" } @stack;
+        push @tests, ["$module$1", $line];
+      } else {
+        push @problems, [$line, "a test attribute that is not on a plain fn"];
+      }
+    }
+    elsif (defined $+{mod}) { push @stack, ["mod", $+{mod}] }
+    elsif (defined $+{mac}) { push @stack, ["mac", $+{mac}] }
+    elsif (defined $+{open}) { push @stack, ["block"] }
+    else { pop @stack }
+  }
+  return (\@tests, \@problems);
+}
+'
+
 step 'No switched-off checks in the code'
-# Each file is read whole, so an attribute split over lines matches too. Lines holding only a
-# plain // comment are dropped first, so a comment may name what it warns against. Doc comments
-# stay: they hold the doc examples.
+# The reader above reads each .rs file whole, so an attribute split over lines matches too.
+# Comments are dropped, so a comment may name what it warns against. The text of doc comments
+# and strings is searched only for doc examples. Rejected:
 # - #[allow] and #[expect], also inside #[cfg_attr]: they switch a lint off.
-# - An attribute that a macro builds from its input, such as #[$level(...)].
+# - An attribute that a macro builds from its input, such as #[$level(...)], and a # that
+#   starts no attribute, which a macro could join with [test] or [allow(...)].
 # - #[rustfmt::skip], and doc examples marked ignore, no_run or should_panic.
 # - #[path] and include!, which pull in code from outside the scanned .rs files.
 # - #[doc(hidden)], which hides a public item from the missing_docs lint.
 # - proptest settings in the code, such as with_cases(0). The weekly job sets the cases.
-#   A helper may still return proptest::test_runner::TestCaseError.
+#   They need proptest_config, ProptestConfig or a TestRunner. A module named test_runner is fine.
 # - `_ = f();`, which throws away a Result.
-rust_off=$(cat <<'EOF'
-\#\s*!?\s*\[\s*(?:cfg_attr\b[^\]]*?\b)?(?:r\#)?(?:allow|expect)\s*\(
-|\#\s*!?\s*\[[^\]]*\$
-|rustfmt(?:::|_)skip
-|```[^`\n]*\b(?:ignore|no_run|should_panic)\b
-|\#\s*!?\s*\[\s*path\s*=
-|\binclude\s*!
-|\bdoc\s*\(\s*hidden\b
-|\b(?:proptest_config|ProptestConfig|TestRunner)\b
-|\btest_runner\b(?!\s*::\s*TestCase(?:Error|Result)\b)
-|^[ \t]*_\s*=(?![=>])
-EOF
-)
-find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -print |
-  pattern=$rust_off perl -ne '
-    BEGIN { $re = $ENV{pattern}; $re =~ s/\n//g }
-    chomp; $file = $_;
-    open my $in, "<", $file or die "$file: $!\n";
-    local $/; $text = <$in>;
-    $text =~ s{^[ \t]*//(?![/!])[^\n]*}{}mg;
-    while ($text =~ /$re/mg) {
-      $line = 1 + (substr($text, 0, $-[0]) =~ tr/\n//);
-      ($hit) = substr($text, $-[0]) =~ /^([^\n]*)/;
-      print "$file:$line: $hit\n";
-    }' |
-  reject 'The lines above switch off a check. Remove them and fix the cause.'
+# - A test inside a macro other than proptest!, or inside a block, and a test attribute that is
+#   not on a plain `fn name`. The test step below could not follow them: a macro can write a
+#   passing test with the name of a hidden one, or drop a test's body.
+off=$(perl -e "$rust_reader" -e '
+    my $define = q{(?(DEFINE)(?<br>\[(?:[^\[\]]++|(?&br))*+\]))};
+    my @code_rules = (
+      [qr{\#\s*!?\s*\[\s*(?:cfg_attr\b(?:[^\[\]]|(?&br))*?\b)?(?:allow|expect)\s*\($define}x,
+        "#[allow] or #[expect] switches a lint off"],
+      [qr{\#\s*!?\s*\[(?:[^\[\]]|(?&br))*?\$$define}x,
+        "a macro builds this attribute from its input"],
+      [qr{\#(?!\s*!?\s*\[)}, "a # that starts no attribute: a macro could build one from it"],
+      [qr{rustfmt\s*(?:::\s*|_)skip}, "rustfmt::skip switches formatting off"],
+      [qr{\#\s*!?\s*\[\s*(?:cfg_attr\b(?:[^\[\]]|(?&br))*?[(,]\s*)?path\s*=$define}x,
+        "#[path] reads a module from elsewhere"],
+      [qr{\binclude\s*!}, "include! pulls in code from a file this search does not read"],
+      [qr{\bdoc\s*\(\s*hidden\b}, "#[doc(hidden)] hides an item from missing_docs"],
+      [qr{\b(?:proptest_config|ProptestConfig|TestRunner)\b},
+        "proptest settings in the code: the weekly job sets the cases"],
+      [qr{^[ \t]*_\s*=(?![=>])}m, "_ = f(); throws away a Result"],
+      [qr{\bmacro_rules\s*!\s*proptest\b|\bas\s+proptest\b},
+        "only the proptest crate may define proptest!"],
+    );
+    my $doc_rule = qr{```[^`\n]*\b(?:ignore|no_run|should_panic)\b};
+    my @files = rust_files();
+    my %lexed = map { $_ => [lex(slurp($_))] } @files;
+    learn_test_names($_->[0]) for values %lexed;
+    for my $file (@files) {
+      my ($code, $docs) = @{$lexed{$file}};
+      my @source = split /\n/, slurp($file);
+      my @hits;
+      for my $rule (@code_rules) {
+        push @hits, [line_at($code, $-[0]), $rule->[1]] while $code =~ /$rule->[0]/g;
+      }
+      push @hits, [line_at($docs, $-[0]), "a doc example that never runs or may panic"]
+        while $docs =~ /$doc_rule/g;
+      push @hits, @{(walk($code))[1]};
+      for my $hit (sort { $a->[0] <=> $b->[0] } @hits) {
+        my ($line, $why) = @$hit;
+        (my $text = $source[$line - 1] // "") =~ s/^\s+//;
+        print "$file:$line: $text\n  ($why)\n";
+      }
+    }
+')
+printf '%s' "$off" |
+  reject 'The lines above switch off a check, or hide a test from it. Remove them and fix the
+cause.'
 
 # Download every crate Cargo.lock names, for every platform, checked against its checksum.
 # Nothing is downloaded when they are already there. The steps below then run --frozen:
@@ -257,21 +415,53 @@ cargo doc --frozen --workspace --no-deps --all-features --document-private-items
 
 step 'Test (ignored tests run too)'
 cargo-nextest nextest run --frozen --workspace --all-features --run-ignored all --no-tests fail
-# Every #[test] function in the code must run. One that nextest does not list is switched off,
-# for example by a cfg that is never true or a test target that cargo skips. Comments are
-# dropped first. A test that a macro writes is not matched, so it is not checked.
-# --color never: CI sets CARGO_TERM_COLOR=always, and colour codes would hide the names.
-listed=$(cargo-nextest nextest list --frozen --workspace --all-features --run-ignored all \
-  --color never --message-format oneline 2>/dev/null | sed 's/.*[ :]//')
-find . \( -path ./target -o -path ./.git \) -prune -o -name '*.rs' -type f -print |
-  listed=$listed perl -ne '
-    BEGIN { $listed{$_}++ for split /\n/, $ENV{listed} }
-    chomp; $file = $_;
-    open my $in, "<", $file or die "$file: $!\n";
-    local $/; ($text = <$in>) =~ s{//[^\n]*}{}g;
-    while ($text =~ /#\s*\[\s*test\s*\]\s*(?:#\s*\[[^\]]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)/g) {
-      print "$file: $1\n" if --$listed{$1} < 0;
-    }' |
+# Every test in the code must run. Each test binary that nextest lists must list each test in
+# each file compiled into it, at the same module path: tests/common/mod.rs counts once per test
+# file that uses it. A test that nextest does not list is switched off, for example by a cfg
+# that is never true, and a file that no test binary compiles is switched off too. The files of
+# each binary come from the dep-info file the compiler writes next to it.
+tests_json=$(cargo-nextest nextest list --frozen --workspace --all-features --run-ignored all \
+  --cargo-quiet --message-format json)
+never_run=$(printf '%s\n' "$tests_json" | perl -e "$rust_reader" -e '
+    use JSON::PP;
+    my $list = decode_json(do { local $/; <STDIN> });
+    my @files = rust_files();
+    my %code = map { $_ => (lex(slurp($_)))[0] } @files;
+    learn_test_names($_) for values %code;
+    my %tests = map { $_ => (walk($code{$_}))[0] } @files;
+    my (%want, %have, %where, %compiled);
+    for my $suite (values %{$list->{"rust-suites"}}) {
+      my $binary = $suite->{"binary-id"};
+      $have{"$binary $_"}++ for keys %{$suite->{testcases}};
+      # The dep-info file next to each test binary lists the files compiled into it, the crate
+      # root first: "<file>.d: <root> <module files...>".
+      my $info = $suite->{"binary-path"} . ".d";
+      my ($deps) = slurp($info) =~ /^\Q$info\E:[ \t]*([^\n]*)/
+        or die "Cannot read the files of $binary from $info\n";
+      my @deps = map { s/\\(.)/$1/gr } split /(?<!\\)[ \t]+/, $deps;
+      my ($root_dir) = $deps[0] =~ m{^(.*/)} ? $1 : "";
+      for my $file (grep { exists $tests{$_} } @deps) {
+        $compiled{$file} = 1;
+        # The module path from the file name: src/text/mod.rs is text::, src/a/b.rs is a::b::.
+        my $module = $file eq $deps[0] ? "" : substr($file, length $root_dir);
+        $module =~ s{(/mod)?\.rs$}{::}; $module =~ s{/}{::}g;
+        for my $test (@{$tests{$file}}) {
+          my $key = "$binary $module$test->[0]";
+          $want{$key}++;
+          $where{$key} = "$file:$test->[1]";
+        }
+      }
+    }
+    for my $file (grep { @{$tests{$_}} && !$compiled{$_} } @files) {
+      print "$file:$tests{$file}[0][1]: no test binary compiles this file\n";
+    }
+    for my $key (sort keys %want) {
+      next if $want{$key} <= ($have{$key} // 0);
+      my ($binary, $test) = split / /, $key;
+      print "$where{$key}: $test, in $binary\n";
+    }
+')
+printf '%s' "$never_run" |
   reject 'These tests never run. Find the cfg or Cargo.toml setting that hides them.'
 cargo test --frozen --workspace --all-features --doc
 
