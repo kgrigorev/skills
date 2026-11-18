@@ -37,8 +37,9 @@ A reader can follow a module from top to bottom by its docstrings and comments a
   `raise ValueError("negative n")` with the message inline is fine. Never catch `Exception`.
 - `json.loads` and similar APIs return `Any`, which mypy cannot check. Turn such a value into a
   typed one where it enters the program: check it with `isinstance` and build a dataclass.
-- Platform-specific code goes behind one small function or Protocol that tests can replace. Then
-  every branch is type-checked and covered on Linux, where CI runs.
+- Platform-specific code goes behind one small function or Protocol that tests can replace, and
+  asks `platform.system()`, not `sys.platform` (banned: mypy skips the other branch). Then every
+  branch is type-checked and covered on Linux, where CI runs.
 
 ## Functions and names
 
@@ -58,3 +59,4 @@ A new entry in `dependencies` in `pyproject.toml` needs the owner's approval.
 - Tests are plain functions, one behaviour each, with names that describe the behaviour.
 - Use a Hypothesis property test when a rule holds for all inputs.
 - Every test asserts something. Coverage cannot see a test without an assertion; the reviewer can.
+- Tests in folders are fine (`tests/unit/test_core.py`); file names may repeat across folders.

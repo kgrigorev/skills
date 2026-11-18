@@ -91,11 +91,17 @@ ban-relative-imports = "all"
 "warnings.simplefilter".msg = "A warning is a failure. Fix its cause."
 "warnings.catch_warnings".msg = "A warning is a failure. Fix its cause. pytest.warns tests an expected warning."
 "hypothesis.settings".msg = "Hypothesis settings live in the profiles in tests/conftest.py."
+# mypy decides sys.platform and sys.version_info checks before it type-checks, and skips the
+# other branch. A test that sets sys.platform covers that branch, so nothing checks its types.
+# platform.system() is an ordinary call: mypy checks every branch. .python-version pins one
+# Python, so a version check has nothing to choose between.
+"sys.platform".msg = "mypy never type-checks the other branch. Use platform.system()."
+"sys.version_info".msg = ".python-version pins the Python version. Write code for that version."
 
 [tool.mypy]
 # strict turns on every optional check, including no untyped definitions and no implicit Any.
 strict = true
-# Check sys.platform branches as CI (Linux) does, so macOS and CI give the same result.
+# Read the standard library's types as CI (Linux) does, so macOS and CI give the same result.
 platform = "linux"
 warn_unreachable = true
 # Any switches the type checker off for a value. Use object, a Protocol or a TypedDict.
@@ -116,6 +122,10 @@ enable_error_code = [
   "unused-awaitable",    # a coroutine or Task that is never awaited
 ]
 files = ["src", "tests"]
+# Module names from the folders: tests/unit/test_core.py is tests.unit.test_core, so two test
+# files with the same name in different folders do not clash. src holds the package.
+mypy_path = "src"
+explicit_package_bases = true
 
 [tool.pytest]
 minversion = "9.2"
@@ -123,7 +133,17 @@ testpaths = ["tests"]
 # strict: unknown config keys and markers are errors, and an xfail test that passes fails.
 strict = true
 # importlib: tests import the installed package, never a copy found through sys.path.
-addopts = ["--import-mode=importlib", "-ra"]
+# --disable-plugin-autoload: pytest loads no plugin from an installed package's entry point, so
+# a plugin that drops tests or reports a failure as a pass cannot slip in through
+# [project.entry-points] or a new dependency. -p loads the one plugin the checks use. A new
+# test plugin goes here, with the owner's approval.
+addopts = [
+  "--import-mode=importlib",
+  "-ra",
+  "--disable-plugin-autoload",
+  "-p",
+  "_hypothesis_pytestplugin",
+]
 # A warning is a failure. uv.lock fixes the dependencies, so the set of warnings is the same everywhere.
 filterwarnings = ["error"]
 
