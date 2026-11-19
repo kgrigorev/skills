@@ -1,7 +1,9 @@
 # expect: red syntax tree
+# expect-Linux: red Build
 # The property fails on every non-empty input. A second project library defines main, which calls
 # the property 100000 times with no input, and the property test links it whole, so libFuzzer's
 # main never runs. A library defines no main and no libFuzzer hook.
+# On Linux, GNU ld already refuses the link: the library's main clashes with libFuzzer's.
 perl -0pi -e 's/(    if \(size == 0\) \{)/    if (size > 0) {\n        abort();\n    }\n$1/' test/sample_tool_property.c
 grep -q 'size > 0' test/sample_tool_property.c
 cat > src/fuzz_driver.c <<'X'

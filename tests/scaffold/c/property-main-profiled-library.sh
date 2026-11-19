@@ -1,5 +1,7 @@
 # expect: red syntax tree
+# expect-Linux: red Build
 # property-main-from-library, with the library built with -fprofile-instr-generate like a test.
+# On Linux, GNU ld already refuses the link: the library's main clashes with libFuzzer's.
 perl -0pi -e 's/(    if \(size == 0\) \{)/    if (size > 0) {\n        abort();\n    }\n$1/' test/sample_tool_property.c
 grep -q 'size > 0' test/sample_tool_property.c
 cat > src/fuzz_driver.c <<'X'
