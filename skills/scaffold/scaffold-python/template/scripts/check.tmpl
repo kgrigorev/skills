@@ -12,7 +12,7 @@ uv_required=$(sed -n 's/^required-version = "==\(.*\)"$/\1/p' pyproject.toml)
 uv_found=$(uv --version 2>/dev/null | cut -d ' ' -f 2) || uv_found=''
 if [ "$uv_found" != "$uv_required" ] && [ -z "${CHECK_UNDER_MISE:-}" ] &&
   command -v mise >/dev/null 2>&1; then
-  CHECK_UNDER_MISE=1 exec mise --quiet exec -- "$0" "$@"
+  CHECK_UNDER_MISE=1 exec mise --quiet exec -- scripts/check "$@"
 fi
 
 # The result must depend only on the commit, not on the caller's shell. These variables change
@@ -28,6 +28,10 @@ for name in $(env | sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' |
 done
 # The same hash seed everywhere, so set iteration order cannot differ between runs.
 export PYTHONHASHSEED=0
+# Hypothesis runs the code that installed packages register under its "hypothesis" entry point
+# when it is imported, before tests/conftest.py. pytest's --disable-plugin-autoload does not
+# cover that, so a [project.entry-points] table could change Hypothesis's settings.
+export HYPOTHESIS_NO_PLUGINS=1
 # git reads only the repository's own config: a global core.excludesFile or core.attributesFile
 # must not hide files from the searches below. quotePath=false: git prints a non-ASCII file name
 # as it is, not quoted, so the layout check below can match it.
@@ -50,20 +54,21 @@ run ruff check
 
 step 'No switched-off checks'
 # Comments that switch off ruff (also in its flake8: form), mypy, other type checkers, the
-# formatter (fmt:, and yapf:, which ruff format honours too) or coverage; casts that
-# overrule the type checker; skipped, expected-to-fail, uncollected or deselected tests; silenced
-# warnings; Hypothesis settings that run fewer examples; pytest hooks and plugins, also bound by
-# assignment. ruff's banned-api (pyproject.toml) catches the same APIs under an alias.
+# formatter (fmt:, and yapf:, which ruff format honours too) or coverage; skipped,
+# expected-to-fail, uncollected or deselected tests; silenced warnings; Hypothesis settings that
+# run fewer examples; pytest hooks and plugins, also bound by assignment. ruff's banned-api
+# (pyproject.toml) catches the same APIs under an alias, and casts.
 # tests/conftest.py is a gate file and is exempt: it holds the Hypothesis profiles and the hooks
 # that fail skipped, dropped and uncollected tests. It is the only conftest.py: the layout check
-# below rejects any other.
-switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|flake8:|fmt:|yapf:|isort:|pragma[:[:space:]]*no)|no_type_check|(^|[^[:alnum:]_.])cast\(|typing\.cast\(|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|collect_ignore|__test__'
+# below rejects any other. .agents/ holds vendored agent skills (SKILL.md, step 4): no code of
+# this project, nothing imports it, and the gates skip it.
+switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|flake8:|fmt:|yapf:|isort:|pragma[:[:space:]]*no)|no_type_check|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|collect_ignore|__test__'
 # git grep reads the working tree, skips deleted and ignored files, and has one regex engine
 # everywhere. -i: the tools accept `# NOQA` and `# PRAGMA NO COVER`. -a: a .gitattributes that
 # marks code as binary must not hide it. Exit 1 means no match; any other non-zero exit is an
 # error, not a pass.
 rc=0
-git grep -naiE --untracked -e "$switch_off" -- '*.py' ':!tests/conftest.py' || rc=$?
+git grep -naiE --untracked -e "$switch_off" -- '*.py' ':!tests/conftest.py' ':!.agents/' || rc=$?
 case $rc in
   0) echo 'The lines above switch off a check. Remove them and fix the cause.' >&2; exit 1 ;;
   1) ;;
@@ -76,12 +81,31 @@ esac
 #   never type-checked. mypy treats any name MYPY the same way.
 # - A name assert_never that is not typing.assert_never: coverage skips the line
 #   `assert_never(x)` (pyproject.toml), so another function under that name hides real code.
+# - Code under `if TYPE_CHECKING:` other than imports: coverage skips the block and mypy reads
+#   it, so a declaration there can stand in for the code that runs (a stub in place).
 # - Tests that expect or catch AssertionError, Exception or BaseException: a failing assert
-#   raises AssertionError, so the test passes because of the bug.
+#   raises AssertionError, so the test passes because of the bug. tests/conftest.py also fails
+#   a passing test that caught an AssertionError, whatever caught it. So no test can expect
+#   one, and library code raises a specific exception instead.
+# - Imports from Hypothesis's private modules (hypothesis._settings, hypothesis.internal):
+#   ruff's banned-api does not see hypothesis.settings under those paths.
+# - Control characters, which most diffs do not show, and coverage's own pragma comments as
+#   coverage reads them (Python's \s also matches Unicode spaces, which the search above
+#   does not).
 ast_check=$(cat <<'PY'
 import ast
+import os
+import re
 import sys
 
+from coverage.config import DEFAULT_EXCLUDE, DEFAULT_PARTIAL
+
+# Coverage's own patterns for its pragma comments. The others (if TYPE_CHECKING:, a `...` body)
+# hide no code that runs.
+PRAGMA = re.compile(
+    "|".join(pattern for pattern in DEFAULT_EXCLUDE + DEFAULT_PARTIAL if "pragma" in pattern)
+)
+CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
 BROAD = {"AssertionError", "Exception", "BaseException"}
 
 
@@ -96,6 +120,24 @@ def name_of(node):
 def broad(node):
     items = node.elts if isinstance(node, ast.Tuple) else [node]
     return any(name_of(item) in BROAD for item in items)
+
+
+def type_checking(node):
+    return isinstance(node, ast.If) and name_of(node.test) == "TYPE_CHECKING"
+
+
+def private_hypothesis(node):
+    if isinstance(node, ast.Import):
+        modules = [alias.name for alias in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        modules = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
+    else:
+        return False
+    return any(
+        module.split(".")[0] == "hypothesis"
+        and any(part.startswith("_") or part == "internal" for part in module.split(".")[1:])
+        for module in modules
+    )
 
 
 def bound_names(node):
@@ -117,24 +159,39 @@ def bound_names(node):
 
 failed = False
 for path in sys.argv[1:]:
+    # git still lists a file that was deleted but not yet staged.
+    if not os.path.exists(path):
+        continue
     with open(path, encoding="utf-8") as file:
-        tree = ast.parse(file.read(), path)
+        text = file.read()
+    tree = ast.parse(text, path)
     in_tests = path.startswith("tests/")
-    raises = {"raises", "RaisesExc"}
+    raises = {"raises", "RaisesExc", "RaisesGroup"}
     allowed = {
         id(node.test)
         for node in ast.walk(tree)
         if isinstance(node, ast.If) and not node.orelse
     }
     found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if CONTROL.search(line):
+            found.append((number, "a control character, which a diff does not show"))
+        if PRAGMA.search(line):
+            found.append((number, "a coverage pragma"))
     for node in ast.walk(tree):
         line = getattr(node, "lineno", 0)
         if name_of(node) == "TYPE_CHECKING" and id(node) not in allowed:
             found.append((line, "TYPE_CHECKING only as `if TYPE_CHECKING:`, with no else"))
         if isinstance(node, ast.Name) and node.id == "MYPY":
             found.append((line, "mypy treats the name MYPY as always true"))
-        if name_of(node) == "AssertionError":
+        if name_of(node) == "AssertionError" and path != "tests/conftest.py":
             found.append((line, "AssertionError: a failing assert raises it"))
+        if type_checking(node) and not all(
+            isinstance(child, (ast.Import, ast.ImportFrom)) for child in node.body
+        ):
+            found.append((line, "only imports under `if TYPE_CHECKING:`"))
+        if private_hypothesis(node):
+            found.append((line, "a private Hypothesis module: use the public API"))
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 bound = alias.asname or alias.name
@@ -167,7 +224,7 @@ for path in sys.argv[1:]:
 sys.exit(1 if failed else 0)
 PY
 )
-if ! git ls-files -z --cached --others --exclude-standard -- '*.py' |
+if ! git ls-files -z --cached --others --exclude-standard -- '*.py' ':!.agents/' |
   xargs -0 uv run --no-sync python -I -c "$ast_check"; then
   echo 'The lines above hide code from the type checker or coverage, or make a failing check' \
     'pass. Write them another way: see the comment in scripts/check.' >&2
@@ -177,7 +234,7 @@ fi
 # tests/test_*.py. Python anywhere else would be linted but never type-checked, measured or run.
 # A .pyi stub beside a module makes mypy read the stub instead of the code; the package ships
 # py.typed, so it needs none.
-misplaced=$(git ls-files --cached --others --exclude-standard -- '*.py' '*.pyi' |
+misplaced=$(git ls-files --cached --others --exclude-standard -- '*.py' '*.pyi' ':!.agents/' |
   grep -vE '^src/{{module}}/.*\.py$|^tests/(.*/)?test_[^/]*\.py$|^tests/conftest\.py$' || true)
 if [ -n "$misplaced" ]; then
   printf '%s\n' "$misplaced"
@@ -194,10 +251,13 @@ if [ -n "$ignored" ]; then
   echo 'git ignores the files above. Commit them or delete them.' >&2
   exit 1
 fi
-# ruff uses the nearest config file, and mypy and pytest prefer their own files over
-# pyproject.toml. Any of these would quietly replace the settings there.
-overrides=$(find . \( -path ./.venv -o -path ./.git \) -prune -o \( \
-  -name ruff.toml -o -name .ruff.toml -o -name mypy.ini -o -name .mypy.ini \
+# ruff uses the nearest config file, mypy and pytest prefer their own files over
+# pyproject.toml, and uv prefers uv.toml over [tool.uv]. Any of these would quietly replace the
+# settings there. A conftest.py other than tests/conftest.py is a pytest plugin; find also sees
+# one that git ignores, which the searches above skip.
+overrides=$(find . \( -path ./.venv -o -path ./.git -o -path ./.agents \) -prune -o \( \
+  -name ruff.toml -o -name .ruff.toml -o -name mypy.ini -o -name .mypy.ini -o -name uv.toml \
+  -o \( -name conftest.py ! -path ./tests/conftest.py \) \
   -o -name pytest.toml -o -name .pytest.toml -o -name pytest.ini -o -name .pytest.ini \
   -o -name tox.ini -o -name setup.cfg -o -name .coveragerc \
   -o -name sitecustomize.py -o -name usercustomize.py \

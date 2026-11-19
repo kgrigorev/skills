@@ -57,6 +57,7 @@ A new entry in `dependencies` in `pyproject.toml` needs the owner's approval.
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
 - Tests are plain functions, one behaviour each, with names that describe the behaviour.
-- Use a Hypothesis property test when a rule holds for all inputs.
+- Use a Hypothesis property test when a rule holds for all inputs. Run a state machine from a
+  plain test with `run_state_machine_as_test(Machine)`, not as `Machine.TestCase`.
 - Every test asserts something. Coverage cannot see a test without an assertion; the reviewer can.
 - Tests in folders are fine (`tests/unit/test_core.py`); file names may repeat across folders.

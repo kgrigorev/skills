@@ -1,7 +1,8 @@
-# expect: red Tests
+# expect: red No switched-off checks
 # Hypothesis settings from the private module hypothesis._settings, which ruff's banned-api does
-# not resolve, that run only the one explicit example: the false property passes. The conftest
-# check sees the settings the test really runs with.
+# not resolve, that run only the one explicit example: the false property passes. The ast check
+# in scripts/check rejects the private import; the conftest check would also see the settings
+# the test really runs with.
 cat >tests/test_core.py <<'PY'
 """Tests for the library."""
 

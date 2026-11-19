@@ -72,6 +72,18 @@ sys.exit(keyword.iskeyword(name) or keyword.issoftkeyword(name)
          or name in sys.stdlib_module_names or name in taken)' "$module" ||
   fail "package \"$package\": the module name \"$module\" is a Python keyword or the name of a standard or dev tool module. Pick another name."
 
+# A package that the dev tools need, such as pluggy for pytest, cannot also be the project: uv
+# would pick an old tool version that does without it.
+dev_tools='coverage hypothesis mypy pytest ruff'
+# shellcheck disable=SC2086 # one word per tool
+needed=$(printf '%s\n' $dev_tools |
+  uv pip compile --quiet --no-header --no-annotate --universal \
+    --python-version "$python_version" - |
+  sed -n 's/^\([A-Za-z0-9._-]*\)==.*/\1/p' | tr 'A-Z._' 'a-z--')
+if printf '%s\n' "$needed" | grep -qx -e "$package"; then
+  fail "package \"$package\": the dev tools need a package of that name. Pick another name."
+fi
+
 # --- Render -------------------------------------------------------------------------------------
 
 set_var package "$package"
@@ -96,7 +108,8 @@ chmod 644 mise.lock
 
 # The newest dev tools today, written as exact pins and locked in uv.lock. They stay until
 # someone bumps them on purpose.
-uv add --quiet --dev --bounds exact coverage hypothesis mypy pytest ruff
+# shellcheck disable=SC2086 # one word per tool
+uv add --quiet --dev --bounds exact $dev_tools
 
 # Ruff sorts imports, and the sections depend on the module name.
 uv run --quiet --no-sync ruff check --quiet --select I --fix
