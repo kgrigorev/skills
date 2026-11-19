@@ -63,8 +63,9 @@ The checks enforce these rules:
   test reaches them (`tests/setup.ts` fails it; code under `src/` may read them), and no
   fast-check seed, `numRuns`, time limit or plugin other than in `tests/setup.ts`. Use
   `fc.assert`, not `fc.check`. Fake timers start at 0. `vi.setConfig` may change only timeouts
-  and mock settings. No skipped, conditional, expected-to-fail or retried tests. A missing
-  snapshot fails; write it on purpose with `vitest run -u`.
+  and mock settings. No test changes how stack traces are captured, patches built-ins such as
+  `Array.prototype`, or reaches into vitest's internals. No skipped, conditional, expected-to-fail
+  or retried tests. A missing snapshot fails; write it on purpose with `vitest run -u`.
 - Every promise is awaited or handled with `.catch`; `void promise` does not count.
 - No unused parameter or variable, also not one named `_name`. A parameter before a used one may
   stay unused (`(_, index) => index`).

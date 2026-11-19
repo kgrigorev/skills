@@ -1,6 +1,6 @@
-# expect: red Test (vitest)
-# Error.stackTraceLimit = 1 leaves only the frames of tests/setup.ts in the stack, so no caller
-# was found under tests/.
+# expect: red No switched-off checks
+# Error.stackTraceLimit = 1 would leave only the frames of tests/setup.ts in the stack. The search
+# names the plain spelling; test-clock-stack-trace-frozen covers a computed one at run time.
 cat >tests/extra.test.ts <<'Y'
 import { expect, it } from "vitest";
 

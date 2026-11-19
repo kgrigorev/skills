@@ -51,14 +51,16 @@ if command -v mise >/dev/null 2>&1; then
     fail "mise loads these files: $extra_config. Remove them: only mise.toml sets the tools and their settings."
 fi
 
+step 'No pnpmfile'
 # pnpm loads a .pnpmfile.cjs in every command, `pnpm exec` included, and runs its code before any
-# gate below could reject it. Ignored by git or not, it must not exist.
-for file in .pnpmfile.*; do
+# gate below could reject it. Ignored by git or not, it must not exist. Any case: on macOS,
+# .PNPMFILE.cjs is the same file.
+for file in .[Pp][Nn][Pp][Mm][Ff][Ii][Ll][Ee].*; do
   [ ! -e "$file" ] || fail "pnpm would run the code in $file before the checks. Remove it."
 done
-printf 'node %s, pnpm %s\n' "$(node --version)" "$(pnpm --version)"
 
 step 'Dependencies match pnpm-lock.yaml'
+printf 'node %s, pnpm %s\n' "$(node --version)" "$(pnpm --version)"
 # --frozen-lockfile fails when package.json and the lockfile disagree, instead of re-resolving.
 # --trust-lockfile skips the supply-chain policy check: it needs the registry and its verdict can
 # change with the date, so it runs in its own CI job (lockfile-policy in ci.yml).
@@ -113,9 +115,10 @@ search() {
   [ "$status" -le 1 ] || fail "git grep failed with status $status."
   [ "$status" -eq 0 ]
 }
-# Comments that switch off the linter, the type checker, the formatter, coverage or knip. The knip
-# tags count inside a JSDoc comment only, so an address such as "ops@beta.example.com" passes.
-switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|(/\*\*|^[[:space:]]*\*).*@(public|beta|alias)([^[:alnum:]_]|$)'
+# Comments that switch off the linter, the type checker, the formatter, coverage or knip. A knip
+# tag starts a line or follows a space, "*" or "{" (a JSDoc line may leave out its "*"), so an
+# address such as "ops@beta.example.com" passes.
+switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|(^|[[:space:]*{])@(public|beta|alias)([^[:alnum:]_]|$)'
 # vitest options that skip a test, searched in tests/ only. The reporter in vitest.config.ts fails
 # the run on a skipped, expected-to-fail (.fails) or retried test wherever its options come from;
 # this names the line first. `fails` and `retry` are left to the reporter: as words they also
@@ -140,6 +143,12 @@ fi
 # another seed or run count, however the options reached it; this names the plain spellings first.
 if search 'configureGlobal|numRuns|interruptAfterTimeLimit|skipAllAfterTimeLimit' '*.ts' ':!tests/setup.ts' ':!vitest.config.ts'; then
   fail 'The lines above change the fast-check seed, run count or time limit. tests/setup.ts sets them.'
+fi
+# tests/setup.ts reads stack traces to find who called the clock, and vitest keeps its settings in
+# its worker state. Code that changes either could hide a test's calls or switch off a check.
+# tests/setup.ts fails closed on most such changes; this names the plain spellings first.
+if search 'captureStackTrace|prepareStackTrace|stackTraceLimit|__vitest_' '*.ts' ':!tests/setup.ts'; then
+  fail 'The lines above change how stack traces are captured or reach into vitest. Remove them.'
 fi
 # Date["now"] and Math["random"] count, a Date[] type does not. The names are whole words, so a
 # `randomIntegers` arbitrary passes. tests/setup.ts fails a test that reaches these functions in
