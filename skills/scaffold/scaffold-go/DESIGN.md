@@ -40,10 +40,14 @@ Every other gate states its reason in a comment in its own file.
 - golangci-lint's `govet` runs every vet analyzer, so there is no separate `go vet` step.
 - `GOENV=off` in `scripts/check` ignores settings saved with `go env -w`, such as a private
   `GOPRIVATE` or a company `GOPROXY`, and it clears the same module settings, the C compiler
-  settings (`CC`, `CGO_*`), `GORACE` and `MISE_ENV` from the caller's shell before mise
-  starts. Such settings go in the `[env]` table of `mise.toml`, which mise applies after.
-  Module settings change where modules come from, not what they hold: `go.sum` still checks
-  them.
+  settings (`CC`, `CGO_*`), `GORACE`, `GOCACHEPROG` and `MISE_ENV` from the caller's shell
+  before mise starts. Such settings go in the `[env]` table of `mise.toml`, which mise applies
+  after. Module settings change where modules come from, not what they hold: `go.sum` still
+  checks them.
+- The Modules step runs `go mod verify`. go compares `go.sum` with the module cache's hash
+  files, but never hashes the cached source again, and the sandbox lets an agent write to the
+  cache. An edited file there passed every local gate. `GOMODCACHE` is not cleared: the
+  verification covers any cache, and a custom one is a common machine setting.
 - Files hidden by a build tag or a platform file name are rejected unless listed in
   `allowed_hidden` in `scripts/check`. Otherwise a `_linux.go` file would pass Linux CI and
   never be checked on macOS, so the result would depend on the machine.
@@ -55,31 +59,56 @@ Every other gate states its reason in a comment in its own file.
   includes files git ignores. Every Go file git sees must be in that list, and every package of
   the module that the code imports must be in `./...`. Otherwise code under `_x/`, `.x/`,
   `testdata/` or a nested module is built or kept without any check.
-- A package "runs tests" when `go test -v` prints at least one `=== RUN` line for it. That
-  also finds a `TestMain` that never calls `m.Run`, which still prints `ok`.
+- A package "runs tests" when `go test -v` prints at least one `=== RUN` line for it and does
+  not report `[no tests to run]`. Test code may print with `fmt.Print*` (examples need it), so a
+  `=== RUN` line alone could be printed by the test code itself, for example from a blank
+  variable in a package without tests.
+- A `TestMain` needs the owner's approval: list its file in `allowed_testmain` in
+  `scripts/check`. It runs before every test of its package and decides whether they run: it
+  can skip `m.Run`, print a fake `=== RUN` line, or change `-test.run` or `-rapid.checks`
+  first. An approved `TestMain` that never calls `m.Run` is still found by the `=== RUN` count.
 - golangci-lint skips files with a `Code generated ... DO NOT EDIT.` header by default. The
   template turns that off: such a header is one line any file can carry. A real generated file
   needs the owner's approval and an exclusion rule for its path.
-- Test skips (`Skip`, `Skipf`, `SkipNow` on any `testing` type, rapid's `t.Skip`, and
-  `testing.Short`) are found by forbidigo with `analyze-types`, which matches what a name
-  refers to. So a `*testing.T` named `x`, a `testing.TB` helper parameter, a method expression
-  and a method value (`skip := t.Skip`) are all found, and a reader type with its own `Skip`
-  method is not. A text search on `.Skip(` could do neither.
-- Only a command reads the environment (`os.Getenv` and friends are forbidden elsewhere, tests
-  included). A setting read in the library is a hidden input, and a test that reads one can
-  skip itself (`if os.Getenv("SLOW") == "" { return }`), the same as `testing.Short`.
+- Test skips (`Skip`, `Skipf`, `SkipNow` on any `testing` type, rapid's `t.Skip`,
+  `testing.Short` and `testing.Verbose`) are found by forbidigo with `analyze-types`, which
+  matches what a name refers to. So a `*testing.T` named `x`, a `testing.TB` helper parameter,
+  a method expression and a method value (`skip := t.Skip`) are all found, and a reader type
+  with its own `Skip` method is not. A text search on `.Skip(` could do neither.
+  `testing.Verbose` counts because `scripts/check` always passes `-v`: a test that returns
+  under it skips itself in every gate run and runs only in a plain `go test`.
+- forbidigo checks `Example` functions like other test code (`exclude-godoc-examples: false`).
+  By default it skips them, and an example without an `Output` comment is never run as one, so
+  it is a plain function any test code could call to print or read the environment. Test files
+  may use `fmt.Print*`, which examples need; `os.Stdout`, `os.Stderr` and `println` stay
+  forbidden.
+- Only a command reads the environment (`os.Getenv` and friends, and `exec.Cmd.Environ`, are
+  forbidden elsewhere, tests and examples included). A setting read in the library is a hidden
+  input, and a test that reads one can skip itself (`if os.Getenv("SLOW") == "" { return }`),
+  the same as `testing.Short`. The command line is a hidden input in the same way, so
+  `os.Args`, `os.Executable` and the global flag set (`flag.Parse`, `flag.Set`, ...) are a
+  command's too. `flag.Set` in a test could also set `-rapid.checks` to 0. A `flag.FlagSet`
+  made with `flag.ContinueOnError` stays allowed.
+- `testing.Testing` is forbidden everywhere: code that asks whether it runs under test lets a
+  test check something production never runs.
 - "A command" is package main directly in `cmd/<name>/`, without its tests. Only its files may
   print, exit, panic, read the environment or make raw system calls, and only it may run no
-  tests. Packages below it (`cmd/<name>/internal/`) are library code: otherwise logic moved
-  there would skip every library rule. A package directly in `cmd/` must be package main.
+  tests, as long as it declares no function or method but `main` and `run`. funlen and gocognit
+  keep those two short; any other function is logic, so the command then needs a test, or the
+  whole feature could sit in package main untested. Packages below it (`cmd/<name>/internal/`)
+  are library code: otherwise logic moved there would skip every library rule. A package
+  directly in `cmd/` must be package main.
   The path in `.golangci.yml` spells out "not `_test.go`", because Go regexps have no
   lookahead and golangci-lint does not allow `path` and `path-except` in one rule.
 - `syscall` and `golang.org/x/sys` are forbidden outside a command: raw system calls write to
   file descriptor 1 or kill the process past every name forbidigo lists. So are `os.NewFile`
-  (a terminal by file descriptor) and `os.FindProcess` (a handle on the program's own process).
+  (a terminal by file descriptor), `os.Stdin` (on a terminal, file descriptor 0 is open for
+  writing) and `os.FindProcess` (a handle on the program's own process).
 - Assembly, C, C++, Objective-C, Fortran, SWIG and `.syso` files are rejected unless listed in
   `allowed_foreign` in `scripts/check`. `go list` names them, so no file list is kept here. A Go
   function without a body can run any assembly, and no linter or test reads it.
+- `//go:norace` is rejected: it turns the race detector off for one function. So is
+  `//godoclint:disable`, which switches the doc comment rule off for a file.
 - Line directives (`//line`, `/*line*/`) are rejected. They change the file and line that
   golangci-lint reports, so a library function could claim to sit in `cmd/` and escape the
   library rules.
@@ -103,16 +132,22 @@ review must look for. `tests/scaffold/go` holds no case for them, since each wou
   that reads its own config can be edited along with it. A project with several reviewers can
   add a `CODEOWNERS` file for them.
 - A test that asserts nothing (`_ = Double(2)`), or that returns early on a condition other than
-  the environment and `-short`. The check sees that a test ran, not what it checked. A
-  deleted test case, and a `TestMain` that narrows which tests run, the same.
+  the environment, `-short` and `-v`. The check sees that a test ran, not what it checked. A
+  deleted test case, an approved `TestMain` that narrows which tests run, and a fuzz target
+  without seeds (`f.Add`), which counts as run but never calls its body, the same.
 - An error turned into a zero value in a function with no error result
   (`if err != nil { return nil }`). `nilerr` only covers functions that return an error, and
   "nil means not found" is sometimes the right design.
 - Work at import time through a blank variable (`var _ = setLang()`). `gochecknoinits` only
   sees `func init`, and `gochecknoglobals` skips `_`. Telling it from the idiomatic
   `var _ Interface = (*T)(nil)` needs type information that no enabled linter uses.
-- A skip through a helper type that embeds `*testing.T` (forbidigo sees the helper's type), or
-  through `reflect` in a test (tests may import `reflect` for `DeepEqual`).
+- A skip through a type declared in the module: a helper type that embeds `*testing.T`, an
+  interface (`var s interface{ Skip(...any) } = t`) or a type parameter
+  (`func later[T interface{ SkipNow() }](t T)`). forbidigo names the call after that type, not
+  after `testing`. Or a skip through `reflect` in a test (tests may import `reflect` for
+  `DeepEqual`).
+- An edited build cache (`~/.cache/go-build`): go trusts what it finds under a key. Only CI,
+  which starts from its own cache, sees it.
 - Printing or exiting through a path or another program: `os.OpenFile("/dev/stdout")`, or
   `os/exec` running `kill`. A path is a string built at run time.
 
@@ -134,9 +169,12 @@ review must look for. `tests/scaffold/go` holds no case for them, since each wou
   depguard does not match `import "C"` itself. `any`, type switches and slice indexing stay
   allowed: they are ordinary Go, and the reviewer judges them.
 - `forbidigo` names every way the library could print, log to a global logger or end the
-  process (`fmt.Print*`, `os.Stdout`, `os.NewFile`, `log`, `slog`'s package functions,
-  `os.Exit`, `os.FindProcess`, `syscall`, `runtime.Goexit`, `panic`). `log.Fatal` exits, so it
-  counts too. With `analyze-types`, an import alias does not hide a name.
+  process that does not go through a path or another program (`fmt.Print*`, `os.Stdin`,
+  `os.Stdout`, `os.Stderr`, `os.NewFile`, the `log` and `slog` package functions, `os.Exit`,
+  `os.FindProcess`, `syscall`, `runtime.Goexit`, `panic`, and the `Fatal` and `Panic` methods of
+  a `*log.Logger`). `log.Fatal` exits, so it counts too. A `*slog.Logger` or `*log.Logger`
+  passed in as a parameter is allowed: that is how the library logs. With `analyze-types`, an
+  import alias does not hide a name.
 - errcheck lets a command's own files drop the error of `fmt.Fprint*`: a command that reports a
   failure on stderr has nowhere left to report a failed write, and the idiomatic
   `run(args, stdout, stderr io.Writer) int` would otherwise need a contortion.

@@ -21,8 +21,8 @@ Paths below are relative to this skill's folder unless they start with `<target>
 1. **Inputs.** Get four values. Take them from the request and ask once for the missing ones.
    - Target folder. It may exist, for example a fresh `gh repo clone`; the script never
      overwrites a file.
-   - Package name: lower-case words joined by `-`. Offer the folder name as the default. It
-     also names the library file: `my-tool` becomes `src/my-tool.ts`.
+   - Package name: lower-case words joined by `-`, not `main`. Offer the folder name as the
+     default. It also names the library file: `my-tool` becomes `src/my-tool.ts`.
    - Synopsis: one noun phrase, capitalised, no final period, for example
      `A tool that renames photos`. It goes into `package.json`, `README.md`, `AGENTS.md` and the
      stub's banner.

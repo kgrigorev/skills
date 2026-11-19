@@ -81,9 +81,9 @@ jobs:
 
       # actionlint checks GitHub workflow files and runs shellcheck on their scripts. A broken
       # workflow template would give every new project a red CI. shellcheck also covers the
-      # scaffold and the project's own scripts and hooks. This step runs from the repository
-      # root: the sample's mise.toml sets locked = true, and its mise.lock has no entry for these
-      # two tools.
+      # scaffold, the attack runner and its attacks, and the project's own scripts and hooks.
+      # This step runs from the repository root: the sample's mise.toml sets locked = true, and
+      # its mise.lock has no entry for these two tools.
       - name: Lint the scaffold and the sample project's workflows and scripts
         run: |
           lint() { mise exec shellcheck@0.11.0 actionlint@1.7.12 -- "$@"; }
@@ -91,6 +91,8 @@ jobs:
           lint actionlint "$sample"/.github/workflows/*.yml
           lint shellcheck "$sample"/scripts/* "$sample"/.githooks/* "$sample"/.claude/hooks/*
           lint shellcheck -x -P SCRIPTDIR "$SKILL/scripts/scaffold"
+          lint shellcheck scripts/test-scaffold scripts/sync-scaffold-shared
+          lint shellcheck -s sh tests/scaffold/haskell/*.sh
 
       # The cabal store holds the built dependencies, such as hspec. Restoring it saves most of
       # the build time. Ask cabal where the store is, since the runner image may set it up.

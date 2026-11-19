@@ -1,11 +1,13 @@
 #!/bin/sh
 # Formats the Haskell sources and the .cabal files the way scripts/check expects.
 # It runs the tools pinned in mise.toml, so a Homebrew copy of Ormolu cannot format differently.
-set -eu
+set -euf # no globbing: a file named bench/[a]/Main.hs stays that name
 cd "$(dirname "$0")/.."
-hs_files=$(git ls-files --cached --others --exclude-standard -- '*.hs')
-# shellcheck disable=SC2086 # file names have no spaces
+# Each name starts with ./, so a file named like an option (-o-x.hs) stays a file.
+files() { git -c core.quotePath=false ls-files --cached --others --exclude-standard -- "$1" | sed 's|^|./|'; }
+hs_files=$(files '*.hs')
+# shellcheck disable=SC2086 # file names have no spaces: scripts/check rejects them
 mise exec -- ormolu --mode inplace $hs_files
-for f in $(git ls-files --cached --others --exclude-standard -- '*.cabal'); do
+for f in $(files '*.cabal'); do
   mise exec -- cabal-gild "$f" # formats the file in place
 done

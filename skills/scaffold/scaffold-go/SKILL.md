@@ -22,8 +22,9 @@ Paths below are relative to this skill's folder unless they start with `<target>
      rename before anyone imports the module. So for a GitHub project, clone the empty
      repository first.
    - Package name: lower-case words joined by `-`. Offer the folder name as the default. The Go
-     package name drops the dashes: `my-tool` becomes `mytool`. It must not be a Go keyword or
-     `main`.
+     package name drops the dashes: `my-tool` becomes `mytool`. It must not be a Go keyword, a
+     built-in name such as `len` or `error`, `main`, or a package the template imports (`fmt`, `strings`, `testing`, `rapid`). The
+     package name must not be `testdata` or `vendor`, which go treats as special folders.
    - Synopsis: one noun phrase, capitalised, no final period, for example
      `A Go tool that renames photos`. It goes into `README.md`, `AGENTS.md`, the package comment
      and the stub's banner.

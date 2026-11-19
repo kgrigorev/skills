@@ -39,6 +39,7 @@
     "skipLibCheck": true
   },
   // Every .ts file in the repository (node_modules is excluded by default), so a script in a
-  // new folder is type-checked too. scripts/check rejects .mts, .cts, .tsx and .js files.
+  // new folder is type-checked too. "**" skips folders whose names start with ".", so
+  // scripts/check rejects .ts files there, and .mts, .cts, .tsx and .js files anywhere.
   "include": ["**/*.ts"]
 }
