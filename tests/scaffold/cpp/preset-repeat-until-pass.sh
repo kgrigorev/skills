@@ -1,4 +1,4 @@
-# expect: red Test (sanitizers on
+# expect: red No switched-off checks
 # The test preset retries a failing test until it passes; the test fails on its first run only.
 . "$(dirname "$0")/lib/attack"
 perl -0pi -e 's|"execution": \{ "noTestsAction": "error" \}|"execution": { "noTestsAction": "error", "repeat": { "mode": "until-pass", "count": 3 } }|' CMakePresets.json

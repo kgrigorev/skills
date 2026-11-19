@@ -14,5 +14,6 @@ int extra(int value) { return vcast(value); }
 
 } // namespace sample_tool
 C
+# shellcheck disable=SC2016 # CMake expands it
 cmake_append 'target_include_directories(sample_tool_lib SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/_deps/vendor-src)'
 fmt

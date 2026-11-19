@@ -12,5 +12,6 @@ int extra(int value) { return value + 1; }
 } // namespace sample_tool
 C
 extra_overflow_test
+# shellcheck disable=SC2016 # CMake expands it
 cmake_append 'target_compile_options(sample_tool_lib PRIVATE -c "@${CMAKE_SOURCE_DIR}/flags.rsp")'
 fmt

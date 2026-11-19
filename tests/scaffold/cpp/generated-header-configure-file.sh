@@ -13,7 +13,9 @@ SAMPLE_TOOL_FAST int extra(int value) { return value + 1; }
 
 } // namespace sample_tool
 C
+# shellcheck disable=SC2016 # CMake expands it
 cmake_append 'configure_file(src/attrs.hpp.in ${CMAKE_BINARY_DIR}/gen/attrs.hpp COPYONLY)'
+# shellcheck disable=SC2016 # CMake expands it
 cmake_append 'target_include_directories(sample_tool_lib PUBLIC ${CMAKE_BINARY_DIR}/gen)'
 extra_overflow_test
 fmt

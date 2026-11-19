@@ -14,5 +14,6 @@ int extra(int value) { return vcast(value); }
 
 } // namespace sample_tool
 C
+# shellcheck disable=SC2016 # CMake expands it
 cmake_append 'target_include_directories(sample_tool_lib PRIVATE ${CMAKE_SOURCE_DIR}/build/attack-gen)'
 fmt
