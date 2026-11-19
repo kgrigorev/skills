@@ -1,6 +1,6 @@
 ---
 name: test-design
-description: "Test evidence: a test counts once you have seen it fail, and checks outcomes and properties. Use when writing tests, fixing a bug, adding tests to code that already works, choosing between mocks, stubs and fakes, or chasing a coverage target."
+description: "Test evidence: a test counts once you have seen it fail, and checks outcomes and properties. Use before writing any test, new test files included, when fixing a bug, adding tests to code that already works, choosing between mocks, stubs and fakes, or chasing a coverage target."
 ---
 
 # Test Evidence
