@@ -35,8 +35,9 @@ runs:
     - id: paths
       shell: bash
       run: |
-        echo "index=$(cabal path --remote-repo-cache)" >> "$GITHUB_OUTPUT"
-        echo "store=$(cabal path --store-dir)" >> "$GITHUB_OUTPUT"
+        # Without a user config, cabal path first prints a line that it writes a default one.
+        echo "index=$(cabal path --remote-repo-cache | tail -n 1)" >> "$GITHUB_OUTPUT"
+        echo "store=$(cabal path --store-dir | tail -n 1)" >> "$GITHUB_OUTPUT"
 
     # The Hackage index is about 20 s to download. cabal.project pins index-state, so a cached
     # index resolves the same versions. Download it only when cabal.project changes.
