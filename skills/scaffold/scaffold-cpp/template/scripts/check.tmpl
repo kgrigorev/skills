@@ -75,13 +75,14 @@ if [ -z "${SCRIPTS_CHECK_IN_MISE:-}" ]; then
     exec mise exec --locked -- scripts/check "$@"
 fi
 
-# Settings from the caller's shell must not change the result. GoogleTest reads GTEST_* (a
-# filter, disabled tests, repeats), CMake and ctest read CMAKE_* and CTEST_*, the sanitizers
-# read *SAN_OPTIONS, and the loader reads LD_* and DYLD_*. clang reads the flag variables, CCC_*
+# Settings from the caller's shell must not change the result. GoogleTest reads GTEST_* and
+# TESTBRIDGE_TEST_ONLY (a filter, disabled tests, repeats), CMake and ctest read CMAKE_* and
+# CTEST_*, the sanitizers read *SAN_OPTIONS, and the loader reads LD_* and DYLD_*. clang reads
+# the flag variables, CCC_*
 # (CCC_OVERRIDE_OPTIONS edits its command line), COMPILER_PATH and GCC_EXEC_PREFIX (where it
 # finds the linker), the include path variables and SDKROOT.
 # CI starts with none of them, so a local run must too.
-for name in $(env | sed -nE 's/^((GTEST|CMAKE|CTEST|CCC|[A-Z]*SAN|LD|DYLD)_[A-Za-z0-9_]*)=.*/\1/p'); do
+for name in $(env | sed -nE 's/^((GTEST|TESTBRIDGE|CMAKE|CTEST|CCC|[A-Z]*SAN|LD|DYLD)_[A-Za-z0-9_]*)=.*/\1/p'); do
   unset "$name"
 done
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS COMPILER_PATH GCC_EXEC_PREFIX CPATH C_INCLUDE_PATH \
@@ -280,15 +281,19 @@ fi
 # Flagged: any use of std::abort, ::std::abort or ::abort (a call or its address, with spaces or
 # a comment around ::), a call of plain abort(...) after an operator, a bracket, a statement
 # start or return (inside a class too: call a member as this->abort()), and any call in a
-# #define. A member function of that name (void abort(), job.abort(), Job::abort()) is fine. A
-# namespace alias of std would hide std:: from the search, so it is rejected.
+# #define. A member function of that name (void abort(), job.abort(), Job::abort()) is fine. The
+# address of a plain abort (&abort, = abort;) is flagged too. A namespace alias of std
+# (namespace sys = std;) and `using namespace std;` would hide std:: from the search (in
+# sys::terminate()), so both are rejected; `using namespace std::literals;` is fine.
 ends='(abort|terminate|quick_exit|_Exit|_exit)'
-if grep -E "(^|[^A-Za-z0-9_])namespace[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(::[[:space:]]*)?std[[:space:]]*;" "$code"; then
+if grep -E -e "(^|[^A-Za-z0-9_])namespace[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(::[[:space:]]*)?std[[:space:]]*;" \
+  -e "(^|[^A-Za-z0-9_])using[[:space:]]+namespace[[:space:]]+(::[[:space:]]*)?std[[:space:]]*;" "$code"; then
   echo 'The lines above alias the std namespace, which hides std:: names from the checks. Write std::.' >&2
   failed=1
 fi
 if grep -E -e "(^|[^A-Za-z0-9_:])(::[[:space:]]*)?(std[[:space:]]*)?::[[:space:]]*${ends}([^A-Za-z0-9_]|\$)" \
   -e "(([^:]|^):|[][;{}(),=?!&|+*/%<^~-]|(^|[^A-Za-z0-9_])(return|co_return|else|do))[[:space:]]*${ends}[[:space:]]*\(" \
+  -e "(&|=)[[:space:]]*${ends}[[:space:]]*[;,)]" \
   -e "^[^:]*:[0-9]+: [[:space:]]*(#|%:)[[:space:]]*define[[:space:]].*[^A-Za-z0-9_.>]${ends}[[:space:]]*\(" \
   "$code"; then
   echo 'The lines above end the process. Return an error or throw instead.' >&2
@@ -392,17 +397,39 @@ step 'Dependencies pinned by URL and SHA-256, no code run by CMake'
 # case (CMake ignores it there; keywords such as URL are case-sensitive).
 # shellcheck disable=SC2086
 cmake_scripts=$(printf '%s\n' $cmake_files | grep -v '\.json$')
-# The functions and macros the project defines may be called too; the scan reads their bodies.
+# The CMake commands, read-only file() modes and modules that project CMake files may use. This
+# scan reads the files as written; the trace after the configure step checks what CMake ran.
+cmake_commands='cmake_minimum_required cmake_policy project set unset option list string math
+if elseif else endif foreach endforeach while endwhile break continue return block endblock
+function endfunction macro endmacro message include include_guard add_subdirectory
+enable_testing add_library add_executable target_sources target_link_libraries
+target_include_directories target_compile_definitions target_compile_features
+target_compile_options target_link_options set_target_properties set_source_files_properties
+set_property get_property get_target_property get_directory_property get_filename_component
+cmake_path cmake_parse_arguments separate_arguments mark_as_advanced source_group find_package
+file add_compile_options add_compile_definitions add_link_options include_directories
+add_dependencies target_link_directories add_test set_tests_properties get_test_property
+set_directory_properties install fetchcontent_declare fetchcontent_makeavailable
+gtest_discover_tests'
+file_modes='READ STRINGS GLOB GLOB_RECURSE RELATIVE_PATH TO_CMAKE_PATH TO_NATIVE_PATH REAL_PATH
+READ_SYMLINK SIZE TIMESTAMP MD5 SHA1 SHA224 SHA256 SHA384 SHA512 SHA3_224 SHA3_256 SHA3_384
+SHA3_512'
+cmake_modules='FetchContent GoogleTest GNUInstallDirs CMakeDependentOption CMakePrintHelpers'
+# The functions and macros the project defines may be called too; the scan reads their bodies. A
+# function named like a CMake command does not count: defined after a real call of that command,
+# it would let the call through.
 # shellcheck disable=SC2086
-defined=$(sed -nE 's/^[[:space:]]*([Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn]|[Mm][Aa][Cc][Rr][Oo])[[:space:]]*\([[:space:]]*([A-Za-z0-9_]+).*/\2/p' $cmake_scripts)
+defined=$(sed -nE 's/^[[:space:]]*([Ff][Uu][Nn][Cc][Tt][Ii][Oo][Nn]|[Mm][Aa][Cc][Rr][Oo])[[:space:]]*\([[:space:]]*([A-Za-z0-9_]+).*/\2/p' $cmake_scripts |
+  tr '[:upper:]' '[:lower:]' | grep -vxF "$(cmake --help-command-list | tr '[:upper:]' '[:lower:]')" || true)
 # shellcheck disable=SC2086
-unpinned=$(CMAKE_FILES=$cmake_files DEFINED=$defined awk '
+unpinned=$(CMAKE_FILES=$cmake_files DEFINED=$defined CMAKE_COMMANDS=$cmake_commands \
+  FILE_MODES=$file_modes CMAKE_MODULES=$cmake_modules awk '
   function end_word() {
     if (word == "" && !quoted) return
     if (depth == 0) name = word; else args[++count] = word
     word = ""; quoted = 0
   }
-  function command(   i, url, hash, path, dir, extra) {
+  function command(   i, url, hash, path, dir, extra, other) {
     if (name ~ /^(externalproject_|fetchcontent_populate$|cpm)/ ||
       (name == "include" && args[1] ~ /^(ExternalProject|CPM)/) ||
       (name == "file" && args[1] == "DOWNLOAD") ||
@@ -422,15 +449,18 @@ unpinned=$(CMAKE_FILES=$cmake_files DEFINED=$defined awk '
       if (name == "include" || name == "add_subdirectory") {
         # A path is read as written: CMake splits an unquoted ; into more arguments, and a
         # variable can hold anything, so only these path prefixes may be variables.
-        path = args[1]; dir = FILENAME; if (!sub(/\/[^\/]*$/, "/", dir)) dir = ""
-        if (sub(/^\$\{CMAKE_CURRENT_(LIST|SOURCE)_DIR\}\//, "", path)) path = dir path
-        else if (sub(/^\$\{(CMAKE|PROJECT)_SOURCE_DIR\}\//, "", path)) path = path
+        # A relative path is read from the folder of the CMakeLists.txt that runs it, which for
+        # an included file is not the folder of that file, so either one may hold the file.
+        path = args[1]; dir = FILENAME; if (!sub(/\/[^\/]*$/, "/", dir)) dir = ""; other = path
+        if (sub(/^\$\{CMAKE_CURRENT_LIST_DIR\}\//, "", path)) { path = dir path; other = path }
+        else if (sub(/^\$\{CMAKE_CURRENT_SOURCE_DIR\}\//, "", path)) { other = path; path = dir path }
+        else if (sub(/^\$\{(CMAKE|PROJECT)_SOURCE_DIR\}\//, "", path)) other = path
         else if (name == "add_subdirectory" || path ~ /\//) path = dir path
         extra = 0
         for (i = 2; i <= count; i++) if (name != "add_subdirectory" || args[i] !~ /^(EXCLUDE_FROM_ALL|SYSTEM)$/) extra = 1
-        if (extra || path ~ /[$;]|(^|\/)\.\.(\/|$)|^\// ||
-          (name == "include" && !(path in modules) && !(path in project)) ||
-          (name == "add_subdirectory" && !((path "/CMakeLists.txt") in project)))
+        if (extra || (path ~ /[$;]|(^|\/)\.\.(\/|$)|^\// && other ~ /[$;]|(^|\/)\.\.(\/|$)|^\//) ||
+          (name == "include" && !(path in modules) && !(path in project) && !(other in project)) ||
+          (name == "add_subdirectory" && !((path "/CMakeLists.txt") in project) && !((other "/CMakeLists.txt") in project)))
           print FILENAME ":" start ": " name "(" args[1] ") must name a project file or one of the modules in scripts/check"
         return
       }
@@ -447,26 +477,9 @@ unpinned=$(CMAKE_FILES=$cmake_files DEFINED=$defined awk '
       print FILENAME ":" start ": FetchContent_Declare needs URL https://... and URL_HASH SHA256=... only"
   }
   BEGIN {
-    split("cmake_minimum_required cmake_policy project set unset option list string math " \
-      "if elseif else endif foreach endforeach while endwhile break continue return block " \
-      "endblock function endfunction macro endmacro message include include_guard " \
-      "add_subdirectory enable_testing add_library add_executable target_sources " \
-      "target_link_libraries target_include_directories target_compile_definitions " \
-      "target_compile_features target_compile_options target_link_options " \
-      "set_target_properties set_source_files_properties set_property get_property " \
-      "get_target_property get_directory_property get_filename_component cmake_path " \
-      "cmake_parse_arguments separate_arguments mark_as_advanced source_group find_package file " \
-      "add_compile_options add_compile_definitions add_link_options include_directories " \
-      "add_dependencies target_link_directories add_test set_tests_properties get_test_property " \
-      "set_directory_properties install fetchcontent_declare fetchcontent_makeavailable " \
-      "gtest_discover_tests", list, " ")
-    for (i in list) allowed[list[i]] = 1
-    split("READ STRINGS GLOB GLOB_RECURSE RELATIVE_PATH TO_CMAKE_PATH TO_NATIVE_PATH " \
-      "REAL_PATH READ_SYMLINK SIZE TIMESTAMP MD5 SHA1 SHA224 SHA256 SHA384 SHA512 " \
-      "SHA3_224 SHA3_256 SHA3_384 SHA3_512", list, " ")
-    for (i in list) read_only[list[i]] = 1
-    split("FetchContent GoogleTest GNUInstallDirs CMakeDependentOption CMakePrintHelpers", list, " ")
-    for (i in list) modules[list[i]] = 1
+    n = split(ENVIRON["CMAKE_COMMANDS"], list, /[ \n]+/); for (i = 1; i <= n; i++) allowed[list[i]] = 1
+    n = split(ENVIRON["FILE_MODES"], list, /[ \n]+/); for (i = 1; i <= n; i++) read_only[list[i]] = 1
+    n = split(ENVIRON["CMAKE_MODULES"], list, " "); for (i = 1; i <= n; i++) modules[list[i]] = 1
     n = split(ENVIRON["CMAKE_FILES"], list, "\n"); for (i = 1; i <= n; i++) project[list[i]] = 1
     n = split(tolower(ENVIRON["DEFINED"]), list, "\n"); for (i = 1; i <= n; i++) defined[list[i]] = 1
   }
@@ -520,9 +533,90 @@ if [ -n "$unpinned" ]; then
 fi
 
 step 'Configure (CMakePresets.json, preset dev)'
-# The build tool is given on each run: a value that a CMake file once forced into the cache
-# would outlive that file, and cmake --build would run it.
-cmake --preset dev --log-level=WARNING -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"
+# Each run starts from an empty CMake cache: a value that a CMake file once forced into it (a
+# launcher, CMAKE_PROJECT_INCLUDE, a build tool) would outlive that file. The build tool is
+# given here too. The downloaded dependencies and the compiled objects stay.
+# The trace records each command CMake runs and the file it comes from, for the check below.
+# -Wno-author: a fresh configure would print GoogleTest's CMake policy warnings on every run.
+rm -f build/dev/CMakeCache.txt
+mkdir -p build/dev
+if cmake --preset dev --log-level=WARNING -Wno-author -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  --trace-expand --trace-format=json-v1 --trace-redirect=build/dev/trace.json >build/dev/configure.log 2>&1; then
+  configured=1
+else
+  configured=''
+fi
+sed '/^Put cmake in trace mode/d; /^Trace will be written to/d' build/dev/configure.log
+if [ -z "$configured" ]; then exit 1; fi
+# What CMake ran. The scan above reads CMake files as written, but CMake can build commands and
+# file names while it runs (CMAKE_PROJECT_INCLUDE, a variable, a function defined after a
+# call). So each command it ran must come from a tracked project CMake file, CMake's own
+# modules, the files CMake writes into build/dev/CMakeFiles, or GoogleTest and rapidcheck. A
+# command from a project file must be on the list above (or call a function the project
+# defined before it), use a read-only file() mode, enable no language but C++, and leave the
+# GoogleTest and rapidcheck targets alone. The gate files cmake/strict.cmake and
+# cmake/toolchain.cmake may run any command.
+trace_problems=$(CMAKE_FILES=$cmake_scripts CMAKE_COMMANDS=$cmake_commands FILE_MODES=$file_modes \
+  awk -v root="$root/" -v cmake_dir="$(mise where cmake)/" '
+  BEGIN {
+    n = split(ENVIRON["CMAKE_FILES"], list, "\n"); for (i = 1; i <= n; i++) project[list[i]] = 1
+    n = split(ENVIRON["CMAKE_COMMANDS"], list, /[ \n]+/); for (i = 1; i <= n; i++) allowed[list[i]] = 1
+    n = split(ENVIRON["FILE_MODES"], list, /[ \n]+/); for (i = 1; i <= n; i++) read_only[list[i]] = 1
+    n = split("gtest gtest_main gmock gmock_main GTest::gtest GTest::gtest_main GTest::gmock " \
+      "GTest::gmock_main rapidcheck rapidcheck_gtest", list, " ")
+    for (i = 1; i <= n; i++) trusted[list[i]] = 1
+  }
+  # The JSON strings of the args array, unescaped, into arg[1..count].
+  function parse(text,   i, c, value, inside) {
+    count = 0; inside = 0
+    for (i = 1; i <= length(text); i++) {
+      c = substr(text, i, 1)
+      if (!inside) { if (c == "\"") { inside = 1; value = "" }; continue }
+      if (c == "\\") { c = substr(text, ++i, 1); value = value (c == "n" ? "\n" : c == "t" ? "\t" : c); continue }
+      if (c == "\"") { arg[++count] = value; inside = 0; continue }
+      value = value c
+    }
+  }
+  function bad(why) { print where ": " why }
+  /^\{"version"/ { next }
+  {
+    if (!match($0, /\],"cmd":"[^"]*","file":"[^"]*","/)) { print "trace line not understood: " substr($0, 1, 120); next }
+    head = substr($0, RSTART, RLENGTH); command = head; file = head
+    sub(/^\],"cmd":"/, "", command); sub(/".*/, "", command)
+    sub(/^.*"file":"/, "", file); sub(/","$/, "", file)
+    if (index(file, cmake_dir) == 1 || index(file, root "build/dev/CMakeFiles/") == 1) next
+    if (index(file, root "build/dev/_deps/googletest-src/") == 1 || index(file, root "build/dev/_deps/rapidcheck-src/") == 1) next
+    relative = (index(file, root) == 1) ? substr(file, length(root) + 1) : ""
+    if (relative == "" || relative ~ /^build\// || !(relative in project)) {
+      if (!(file in reported)) print "CMake ran " file ", a file that no gate reads"
+      reported[file] = 1; next }
+    if (relative == "cmake/strict.cmake" || relative == "cmake/toolchain.cmake") next
+    match($0, /"line":[0-9]+/); where = relative ":" substr($0, RSTART + 7, RLENGTH - 7)
+    # The args array runs from {"args":[ to the first ],"cmd":" (a quote inside an argument is
+    # escaped, so that text cannot occur in one).
+    parse(substr($0, 10, index($0, "],\"cmd\":\"") - 10))
+    name = tolower(command)
+    if (name == "function" || name == "macro") { defined[tolower(arg[1])] = 1; next }
+    if (!(name in allowed) && !(name in defined)) { bad("CMake ran " command ", which is not on the list of CMake commands in scripts/check"); next }
+    if (name == "file" && !(arg[1] in read_only)) bad("CMake ran file(" arg[1] "), which is not a read-only mode")
+    # Without LANGUAGES, project() enables C too. LANGUAGES comes last.
+    if (name == "project") { languages = 0
+      for (i = 2; i <= count; i++) { if (arg[i] == "LANGUAGES") languages = i
+        else if (languages && arg[i] != "CXX") bad("project() enables the language " arg[i] "; the project is C++ only") }
+      if (!languages || languages == count) bad("project() must end with LANGUAGES CXX") }
+    if (name ~ /^target_/ && (arg[1] in trusted)) bad(command " changes the target " arg[1] ", which is GoogleTest or rapidcheck")
+    if (name == "set_target_properties")
+      for (i = 1; i <= count && arg[i] != "PROPERTIES"; i++) if (arg[i] in trusted) bad(command " changes the target " arg[i] ", which is GoogleTest or rapidcheck")
+    if (name == "set_property" && arg[1] == "TARGET")
+      for (i = 2; i <= count && arg[i] !~ /^(APPEND|APPEND_STRING|PROPERTY)$/; i++) if (arg[i] in trusted) bad(command " changes the target " arg[i] ", which is GoogleTest or rapidcheck")
+    if (name ~ /^(set_property|set_source_files_properties)$/)
+      for (i = 1; i <= count; i++) if (arg[i] ~ /^(DIRECTORY|TARGET_DIRECTORY)$/ && arg[1] != "DIRECTORY") bad(command " sets source properties in another folder")
+  }' build/dev/trace.json | sort -u)
+if [ -n "$trace_problems" ]; then
+  printf '%s\n' "$trace_problems"
+  echo 'Use only the CMake commands listed in scripts/check, in tracked CMake files. Others go in a gate file under cmake/.' >&2
+  exit 1
+fi
 # The objects of the gtest, gtest_main and rapidcheck targets, the only code that keeps its own
 # flags. They are known by target, not by folder: a project target can name any output folder,
 # but not a target name that GoogleTest or rapidcheck already uses.
@@ -567,7 +661,30 @@ bad_commands=$(CPP_FILES=$cpp_files awk -v root="$root/" -v compiler="$(mise whe
     line = command; sub(/^ *"command": "/, "", line); sub(/",?$/, "", line)
     n = split(line, word, " ")
     output = ""; for (i = 2; i < n; i++) if (word[i] == "-o") output = word[i + 1]
-    if (file ~ /^@\/build\/dev\/_deps\/(googletest|rapidcheck)-src\// && output ~ deps) next
+    # GoogleTest and rapidcheck keep their own warnings, standard and optimisation, but get the
+    # sanitizer and hardening flags too, and nothing that could change their code: no -include,
+    # no response file, no macro but their own, no header folder outside their sources.
+    if (file ~ /^@\/build\/dev\/_deps\/(googletest|rapidcheck)-src\// && output ~ deps) {
+      if (index(word[1], compiler) != 1) bad("is compiled by " word[1] ", not the pinned clang++")
+      delete seen
+      for (i = 2; i <= n; i++) {
+        w = word[i]; seen[w] = 1
+        if (w == "-c" || w == file) continue
+        if (w == "-o" || w == "-arch" || w == "-MT" || w == "-MF") { i++; continue }
+        if (w == "-isystem" || w == "-I") { i++; w = "-I" word[i] }
+        if (w ~ /^-I/) {
+          if (w !~ /^-I@\/build\/dev\/_deps\/(googletest|rapidcheck)-src\// || w ~ /(^|\/)\.\.(\/|$)/)
+            bad("(a GoogleTest or rapidcheck file) reads headers from " substr(w, 3))
+          continue }
+        if (w == "-isysroot") { i++; if (index(word[i], "@/") == 1) bad("uses " word[i] " as the SDK"); continue }
+        if (w in allowed || w == resource || w ~ /^-W[a-z]?[a-z0-9=+-]*$/ || w ~ /^-std=c\+\+[0-9a-z]+$/ ||
+          w ~ /^-stdlib=lib(c|stdc)\+\+$/ || w == "-fexceptions" || w ~ /^-DGTEST_HAS_PTHREAD=[01]$/ ||
+          w ~ /^-mmacosx-version-min=|^-O[0-3sgz]?$/) continue
+        bad("(a GoogleTest or rapidcheck file) gets " w ", which is not on the list for them in scripts/check")
+      }
+      for (w in required) if (w != "-std=c++23" && w !~ /^-W/ && !(w in seen)) bad("(a GoogleTest or rapidcheck file) is compiled without " w)
+      next
+    }
     if (index(file, "@/") != 1 || !(substr(file, 3) in checked) || file !~ /\.cpp$/)
       bad("is compiled, but it is not a .cpp file of the project that the gates above read")
     if (index(word[1], compiler) != 1) bad("is compiled by " word[1] ", not the pinned clang++")
@@ -630,7 +747,10 @@ bad_rules=$(awk -v cxx="$(mise where conda:clangxx)/bin/clang++" -v toolchain="$
     step[ranlib " $TARGET_FILE"] = 1
   }
   /^rule / { name = $2; next }
-  !/^  command = / || name !~ /^CXX_/ { next }
+  !/^  command = / { next }
+  # The rules CMake itself writes. Any other rule, such as a C rule, is not one the checks read.
+  name ~ /^(CUSTOM_COMMAND|RERUN_CMAKE|CLEAN|HELP|phony)$/ { next }
+  name !~ /^CXX_/ { print "rule " name " is not a rule the check knows: " substr($0, 13); next }
   { command = $0; sub(/^  command = /, "", command) }
   name ~ /^CXX_COMPILER__/ {
     if (command != "${LAUNCHER}${CODE_CHECK}" cxx " $DEFINES $INCLUDES $FLAGS -MD -MT $out -MF $DEP_FILE -o $out -c $in" &&
@@ -664,17 +784,35 @@ fi
 # or .a would be code that no gate reads. Every object the build compiles must be in
 # compile_commands.json, which the flag check above reads (EXPORT_COMPILE_COMMANDS OFF would
 # hide one). A static library gets no extra archiver arguments (STATIC_LIBRARY_OPTIONS).
-bad_graph=$(awk '
+bad_graph=$(awk -v root="$root/" '
+  BEGIN {
+    n = split("-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer " \
+      "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG -D_GLIBCXX_ASSERTIONS -g -pthread " \
+      "-fPIC -fPIE -fcolor-diagnostics -fdiagnostics-color=always", list, " ")
+    for (i = 1; i <= n; i++) link_flag[list[i]] = 1
+  }
   FNR == 1 { part++ }
+  part == 3 && FNR == 1 {
+    in_all["all"] = 1; grown = 1
+    while (grown) { grown = 0
+      for (parent in children) if (parent in in_all) {
+        m = split(children[parent], child, " ")
+        for (j = 1; j <= m; j++) if (!(child[j] in in_all)) { in_all[child[j]] = 1; grown = 1 } } }
+  }
   part == 1 { if (/"command":/) { n = split($0, w, " "); for (i = 1; i < n; i++) if (w[i] == "-o") listed[w[i + 1]] = 1 }; next }
   /^build / { out = $2; sub(/:$/, "", out); rule = $3 }
   part == 2 && /^build / {
     if (rule ~ /^CXX_COMPILER__/) compiled[out] = 1
     if (rule ~ /^CXX_STATIC_LIBRARY_LINKER__/) archives[out] = 1
+    # The default build: "all", and the "all" of each folder it lists (the targets of a subfolder).
+    if (rule == "phony" && out ~ /(^|\/)all$/) for (i = 4; i <= NF; i++) children[out] = children[out] " " $i
     next }
   part == 2 { next }
   /^build / {
     linking = (rule ~ /^CXX_(EXECUTABLE|STATIC_LIBRARY)_LINKER__/); archiving = (rule ~ /^CXX_STATIC_LIBRARY_LINKER__/)
+    executable = (rule ~ /^CXX_EXECUTABLE_LINKER__/)
+    # An executable that the default build skips (EXCLUDE_FROM_ALL) would keep an old binary.
+    if (executable && !(out in in_all)) print out ": is not built by default (EXCLUDE_FROM_ALL), so its binary can be stale"
     if (rule ~ /^CXX_(SCAN|DYNDEP)__/) print out ": is built by " rule ", but C++ modules are off"
     if (rule ~ /^CXX_COMPILER__/ && !(out in listed)) print out ": is compiled, but compile_commands.json does not list it"
     if (linking) for (i = 4; i <= NF && $i != "|" && $i != "||"; i++)
@@ -682,6 +820,14 @@ bad_graph=$(awk '
     next }
   linking && /^  LINK_LIBRARIES = / {
     for (i = 3; i <= NF; i++) if ($i !~ /^-/ && !($i in archives)) print out ": links " $i ", which is not built here" }
+  # The link step gets the compile flags of its folder too ($FLAGS), which no compile command
+  # shows when the executable has no source of its own (it links an object library). They may
+  # hold only the flags every compile gets.
+  executable && /^  FLAGS = / {
+    for (i = 3; i <= NF; i++) {
+      if ($i in link_flag || $i ~ /^-mmacosx-version-min=|^-O[0-3sgz]?$/) continue
+      if (($i == "-arch" && $(i + 1) ~ /^(arm64|x86_64)$/) || ($i == "-isysroot" && index($(i + 1), root) != 1)) { i++; continue }
+      print out ": links with the compile flag " $i ", which is not on the list for link steps in scripts/check" } }
   archiving && /^  LINK_FLAGS = ./ { print out ": gets archiver arguments: " $0 }
   ' build/dev/compile_commands.json build/dev/build.ninja build/dev/build.ninja)
 if [ -n "$bad_graph" ]; then
@@ -710,13 +856,19 @@ step 'Every project file is compiled, and the compiler reads only checked files'
 # nothing compiles is never linted or tested.
 not_checked=$(ninja -C build/dev -t deps | CPP_FILES=$cpp_files awk -v root="$root/" -v deps="$deps_objects" '
   BEGIN { n = split(ENVIRON["CPP_FILES"], list, "\n"); for (i = 1; i <= n; i++) checked[list[i]] = 1 }
-  /^[^ ]/ { own = ($0 !~ deps); next }
+  # The first project file listed for an object is its source (sanitizer lists and the SDK come
+  # first). GoogleTest and rapidcheck objects may read
+  # only their own sources, and project objects outside tests/ may not read them at all.
+  /^[^ ]/ { object = $0; sub(/:.*/, "", object); own = (object !~ deps); first = 1; next }
   # A relative path is under the build folder. Outside the project are the compiler and the SDK.
-  own && /^    / { path = $0; sub(/^    /, "", path)
+  /^    / { path = $0; sub(/^    /, "", path)
     if (path !~ /^\//) path = root "build/dev/" path
     if (index(path, root) != 1) next
     path = substr(path, length(root) + 1)
-    if (path ~ /^build\/dev\/_deps\/(googletest|rapidcheck)-src\//) next
+    if (first) { source = path; first = 0 }
+    library = (path ~ /^build\/dev\/_deps\/(googletest|rapidcheck)-src\//)
+    if (!own) { if (!library) print object ": GoogleTest or rapidcheck reads " path ", which no gate reads"; next }
+    if (library) { if (source !~ /^tests\//) print source ": reads " path ", but only files under tests/ may use GoogleTest or rapidcheck"; next }
     read[path] = 1
     if (!(path in checked)) print path ": the compiler reads it, but the gates above do not" }
   END { for (path in checked) if (!(path in read))
@@ -838,8 +990,9 @@ done
 rm -rf build/dev/gtest
 mkdir build/dev/gtest
 unset CTEST_PARALLEL_LEVEL
-# --repeat until-fail:1 runs each test once, whatever the preset says: a retry would hide a
-# crash, which writes no report.
+# --repeat until-fail:1 runs each test once: a retry would hide a crash, which writes no report.
+# A preset with "repeat" is rejected above; one that comes in by "include" stops ctest with an
+# error instead.
 GTEST_OUTPUT="json:$root/build/dev/gtest/" ctest --preset dev --repeat until-fail:1 --output-log build/dev/ctest.log
 # ctest passes when a test is skipped or disabled; here that is a failure.
 if grep -A 1000 'tests did not run' build/dev/ctest.log; then

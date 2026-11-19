@@ -1,5 +1,5 @@
-# expect: red Test (sanitizers on
-# GoogleTest's archives renamed, so a scan for libgtest*.a finds no test executable; then a failing test that execs /usr/bin/true looks like a pass.
+# expect: red Configure (CMakePresets.json
+# GoogleTest's archives renamed, so a scan for libgtest*.a finds no test executable; then a failing test that execs /usr/bin/true looks like a pass. CMake code may not touch the GoogleTest targets now, so it stops at configure.
 . "$(dirname "$0")/lib/attack"
 perl -pi -e 's|^#include <string>$|#include <array>\n$&\n#include <unistd.h>|' tests/sample_tool_test.cpp
 add_tests <<'C'

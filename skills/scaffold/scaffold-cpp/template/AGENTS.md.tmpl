@@ -43,12 +43,16 @@ The checks enforce C++23 without compiler extensions, include what you use
 helpers. They also reject in code (comments and strings are not searched): pragmas other than
 `#pragma once`, token pasting (`##`), `asm`, names outside ASCII, `#define` or `#undef` of a
 reserved name, `#if` on any macro except `__APPLE__`, `__linux__`, `__cplusplus`, `__cpp_*` and
-`__has_include(<header>)`, `#include` by macro, an alias of the `std` namespace, and
-`std::abort`, `std::terminate` and `_Exit` (call a member of that name as `this->abort()`).
+`__has_include(<header>)`, `#include` by macro, an alias of the `std` namespace or
+`using namespace std;`, and `std::abort`, `std::terminate` and `_Exit` (call a member of that
+name as `this->abort()`).
 CMake files may use only the commands on the list in `scripts/check` (the usual project, target
 and test commands; not `execute_process`, `add_custom_command`, `configure_file` or writing
 `file()` modes), `include` only named modules and project `.cmake` files, and `add_subdirectory`
-only project folders. The compiler may read nothing from `build/` but GoogleTest and rapidcheck.
+only project folders. A trace of what CMake ran is checked the same way, so a file or command
+built at run time counts too. `project()` says `LANGUAGES CXX`, and CMake code leaves the
+GoogleTest and rapidcheck targets alone. The compiler may read nothing from `build/` but
+GoogleTest and rapidcheck, and only files under `tests/` may use them.
 Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call Apple's
 clang.
 
