@@ -16,8 +16,9 @@ if [ -z "${CHECK_UNDER_MISE:-}" ]; then
   # Printed here, before mise starts: a mise.lock that lacks a pinned version fails inside mise.
   printf '==> Tools (the versions in mise.toml, and no other mise config)\n'
   # Only mise.toml may set these, not the caller: where modules come from, the C compiler and
-  # its flags, race detector options, and which extra mise config files load.
-  unset GOPROXY GOSUMDB GONOSUMDB GONOPROXY GOPRIVATE GOINSECURE GOVCS GOAUTH \
+  # its flags, race detector options, which extra mise config files load, and GOCACHEPROG, a
+  # program that would hand go any compiled package or test binary it likes.
+  unset GOPROXY GOSUMDB GONOSUMDB GONOPROXY GOPRIVATE GOINSECURE GOVCS GOAUTH GOCACHEPROG \
     CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_FFLAGS CGO_LDFLAGS GORACE \
     MISE_ENV MISE_OVERRIDE_CONFIG_FILENAMES MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES
   # MISE_LOCKED=1: install only what mise.lock records, with its URL and checksum. It is not
@@ -110,8 +111,15 @@ fi
 step 'Format (gofumpt, gci). Fix: golangci-lint fmt'
 golangci-lint fmt --config .golangci.yml --diff
 
-step 'Modules (go.mod and go.sum are tidy). Fix: go mod tidy'
+step 'Modules (go.mod and go.sum are tidy, the module cache is unchanged). Fix: go mod tidy'
 go mod tidy -diff
+# go checks go.sum only when it downloads a module, and against the hash file in the module
+# cache when it builds, but it never reads the cached source files again. An edit to them (an
+# agent may write to the cache) would change what is built. go mod verify hashes them.
+go mod verify || {
+  echo 'A module in the cache differs from what was downloaded. Run: go clean -modcache' >&2
+  exit 1
+}
 
 step 'Lint (golangci-lint, rules in .golangci.yml)'
 golangci-lint run --config .golangci.yml
@@ -160,6 +168,13 @@ if [ -n "$not_main" ]; then
   echo 'The packages above sit directly in cmd/ but are not package main. Move them under internal/.' >&2
   exit 1
 fi
+# A command may run no tests only while it declares no function but main and run, which funlen
+# and gocognit keep short. Any other function or method is logic, so the Test step below needs a
+# test for that command too. Format has already run, so a declaration starts its line as "func ".
+# shellcheck disable=SC2016 # $0 is awk's, not the shell's.
+sed -n 's/^F //p' "$work/listed" | grep -E '^cmd/[^/]+/[^/]+\.go$' | grep -v '_test\.go$' |
+  tr '\n' '\0' | xargs -0 awk '/^func / && !/^func (main|run)\(/ { print FILENAME }' |
+  sed "s#/[^/]*\$##; s#^#$module/#" | sort -u >"$work/commands_with_logic"
 # Files left out of the build on this machine are never linted, built or tested here. Rejecting
 # them also makes macOS and Linux check the same files.
 hidden=$(sed -n 's/^I //p' "$work/listed" | while IFS= read -r file; do
@@ -239,7 +254,7 @@ done
 step 'Build'
 go build ./...
 
-step 'Test (race detector on; every package except a command in cmd/<name>/ runs tests)'
+step 'Test (race detector on; every package runs tests, except a command with only main and run)'
 # -count=1: Go's test cache does not know rapid's settings, so a result cached by another
 # `go test` run with other settings must not count. -v prints a "=== RUN" line per test, which
 # shows whether a package ran any; only the summary is shown unless a test fails.
@@ -253,15 +268,16 @@ grep -E '^(ok|\?)[[:space:]]' "$work/test"
 # A package passes with no test run when it has no _test.go ("?"), when its _test.go has no test
 # ("[no tests to run]"), or when a TestMain never calls m.Run. Test code can print, so a "=== RUN"
 # line alone proves nothing when go test also says "[no tests to run]". Only a command (package
-# main directly in cmd/) may run no tests: packages below it, such as cmd/<name>/internal/, hold
-# logic and need tests.
-empty=$(awk -v cmd="$module/cmd/" '
+# main directly in cmd/) with no function but main and run may run no tests: packages below it,
+# such as cmd/<name>/internal/, and a command's other functions hold logic and need tests.
+empty=$(awk -v cmd="$module/cmd/" -v logic="$work/commands_with_logic" '
+  BEGIN { while ((getline line < logic) > 0) has_logic[line] = 1 }
   /^=== RUN / { runs++ }
   $1 == "ok" { if (runs == 0 || index($0, "[no tests to run]")) print $2; runs = 0 }
-  $1 == "?" { if (index($2, cmd) != 1 || substr($2, length(cmd) + 1) ~ /\//) print $2; runs = 0 }' "$work/test")
+  $1 == "?" { if (index($2, cmd) != 1 || substr($2, length(cmd) + 1) ~ /\// || ($2 in has_logic)) print $2; runs = 0 }' "$work/test")
 if [ -n "$empty" ]; then
   printf '%s\n' "$empty"
-  echo 'The packages above run no tests. Add a test to each.' >&2
+  echo 'The packages above run no tests. Add a test to each (a command needs one once it declares a function other than main and run).' >&2
   exit 1
 fi
 

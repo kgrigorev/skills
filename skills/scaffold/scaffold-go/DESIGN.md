@@ -40,10 +40,14 @@ Every other gate states its reason in a comment in its own file.
 - golangci-lint's `govet` runs every vet analyzer, so there is no separate `go vet` step.
 - `GOENV=off` in `scripts/check` ignores settings saved with `go env -w`, such as a private
   `GOPRIVATE` or a company `GOPROXY`, and it clears the same module settings, the C compiler
-  settings (`CC`, `CGO_*`), `GORACE` and `MISE_ENV` from the caller's shell before mise
-  starts. Such settings go in the `[env]` table of `mise.toml`, which mise applies after.
-  Module settings change where modules come from, not what they hold: `go.sum` still checks
-  them.
+  settings (`CC`, `CGO_*`), `GORACE`, `GOCACHEPROG` and `MISE_ENV` from the caller's shell
+  before mise starts. Such settings go in the `[env]` table of `mise.toml`, which mise applies
+  after. Module settings change where modules come from, not what they hold: `go.sum` still
+  checks them.
+- The Modules step runs `go mod verify`. go compares `go.sum` with the module cache's hash
+  files, but never hashes the cached source again, and the sandbox lets an agent write to the
+  cache. An edited file there passed every local gate. `GOMODCACHE` is not cleared: the
+  verification covers any cache, and a custom one is a common machine setting.
 - Files hidden by a build tag or a platform file name are rejected unless listed in
   `allowed_hidden` in `scripts/check`. Otherwise a `_linux.go` file would pass Linux CI and
   never be checked on macOS, so the result would depend on the machine.
@@ -89,8 +93,11 @@ Every other gate states its reason in a comment in its own file.
   test check something production never runs.
 - "A command" is package main directly in `cmd/<name>/`, without its tests. Only its files may
   print, exit, panic, read the environment or make raw system calls, and only it may run no
-  tests. Packages below it (`cmd/<name>/internal/`) are library code: otherwise logic moved
-  there would skip every library rule. A package directly in `cmd/` must be package main.
+  tests, as long as it declares no function or method but `main` and `run`. funlen and gocognit
+  keep those two short; any other function is logic, so the command then needs a test, or the
+  whole feature could sit in package main untested. Packages below it (`cmd/<name>/internal/`)
+  are library code: otherwise logic moved there would skip every library rule. A package
+  directly in `cmd/` must be package main.
   The path in `.golangci.yml` spells out "not `_test.go`", because Go regexps have no
   lookahead and golangci-lint does not allow `path` and `path-except` in one rule.
 - `syscall` and `golang.org/x/sys` are forbidden outside a command: raw system calls write to
@@ -139,6 +146,8 @@ review must look for. `tests/scaffold/go` holds no case for them, since each wou
   (`func later[T interface{ SkipNow() }](t T)`). forbidigo names the call after that type, not
   after `testing`. Or a skip through `reflect` in a test (tests may import `reflect` for
   `DeepEqual`).
+- An edited build cache (`~/.cache/go-build`): go trusts what it finds under a key. Only CI,
+  which starts from its own cache, sees it.
 - Printing or exiting through a path or another program: `os.OpenFile("/dev/stdout")`, or
   `os/exec` running `kill`. A path is a string built at run time.
 

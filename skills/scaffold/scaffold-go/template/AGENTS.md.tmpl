@@ -5,9 +5,10 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 
 ## Checks
 
-`scripts/check` runs every gate: gofumpt and import order, tidy `go.mod` and `go.sum`,
-golangci-lint (which includes `go vet`), a search for files no check sees and for switched-off
-checks, the build, and the tests with the race detector. The git hook and CI run it too.
+`scripts/check` runs every gate: gofumpt and import order, tidy `go.mod` and `go.sum`, an
+unchanged module cache, golangci-lint (which includes `go vet`), a search for files no check
+sees and for switched-off checks, the build, and the tests with the race detector. The git hook
+and CI run it too.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
@@ -48,7 +49,8 @@ Test files may print only with `fmt.Print*`, which examples need for their `Outp
 
 Only a command, package main directly in `cmd/<name>/` (not its tests), may print, log through
 the `log` or `slog` package functions, exit, panic, read the environment (`os.Getenv`) or the
-command line (`os.Args`, `flag.Parse`) or use `syscall`, and only a command may have no tests.
+command line (`os.Args`, `flag.Parse`) or use `syscall`, and only a command may have no tests,
+while it declares no function but `main` and `run`.
 The library logs on a `*slog.Logger` or `*log.Logger` it is given. No code asks whether it runs
 under test (`testing.Testing`). Every other package, `cmd/<name>/internal/` included, runs at least one test.
 
