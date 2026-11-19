@@ -43,7 +43,8 @@ Paths below are relative to this skill's folder unless they start with `<target>
      home folder). If the user's ghcup lives under another prefix, set that variable and retry.
      Otherwise the script prints a `ghcup install ghc` command. It downloads 1 to 2 GB, so run it
      only after the user agrees, then retry.
-   - A file exists: report it and stop. The user's files stay untouched.
+   - A file exists: report it and stop. The script changes only the files it writes, and in an
+     existing clone it also sets `core.hooksPath` to `.githooks`.
 
    Done when the script prints `Created ...` and the file list.
 

@@ -28,10 +28,9 @@ template=$(cd "$(dirname "$0")/../template" && pwd)
 ghc_version=9.14.1
 
 check_inputs "$package" "$synopsis" "$reader"
-# These names clash with a module (Prelude, Main) or a dependency of the template.
+# These names clash with a module: Prelude, or an executable's Main.
 case $package in
-prelude | main | base | text | hspec | hspec-discover)
-  fail "package \"$package\": the name clashes with a module or a dependency. Pick another." ;;
+prelude | main) fail "package \"$package\": its module would clash with Prelude or Main. Pick another name." ;;
 esac
 # cabal freeze writes this file after rendering. It is not a template file, so check it here.
 [ ! -e "$target/cabal.project.freeze" ] || fail "$target/cabal.project.freeze exists. Nothing was written."
@@ -82,6 +81,11 @@ latest() {
 
 base_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field base version --simple-output)")
 text_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field text version --simple-output)")
+# A local package with the name of a Hackage package clashes when that package is a dependency,
+# such as random for QuickCheck, and cabal freeze then fails after every file is written.
+on_hackage=$(pinned cabal list --simple-output "$package" 2>/dev/null |
+  awk -v p="$package" 'tolower($1) == tolower(p) { print $1; exit }')
+[ -z "$on_hackage" ] || fail "package \"$package\": Hackage has a package $on_hackage. Pick another name."
 hspec_latest=$(latest hspec)
 quickcheck_latest=$(latest QuickCheck)
 [ -n "$hspec_latest" ] && [ -n "$quickcheck_latest" ] ||

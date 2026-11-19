@@ -1,4 +1,5 @@
 # expect: red No switched-off checks
+# expect-output: import GHC.IO (unsafeUnmask)
 # A file that no component builds claims the module name GHC.IO, so the scan would treat base's
 # GHC.IO as one of the project's own modules. Only the .cabal module lists count.
 mkdir -p docs

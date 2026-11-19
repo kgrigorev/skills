@@ -1,4 +1,5 @@
 # expect: red No switched-off checks
+# expect-output: COMPLETE Red
 # A COMPLETE pragma that names one of two constructors switches off -Wincomplete-patterns for
 # the type, so a function that crashes on the other one builds.
 perl -0pi -e 's/\(banner, tidyName\)/(Colour (..), banner, colourName, tidyName)/' src/SampleTool.hs

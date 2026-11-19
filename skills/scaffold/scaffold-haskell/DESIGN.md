@@ -54,9 +54,12 @@ Every other gate states its reason in a comment in its own file.
 - The format, lint and switch-off steps take their file lists from git, so a new component
   folder, such as `bench/`, is covered. `cabal.project` sets `benchmarks: True`, because
   `cabal build all` skips benchmarks otherwise. The lists are split at whitespace with globbing
-  off, so a folder named `bench/[a]` stays that name, and the check rejects `.hs` and cabal file
-  names with spaces, control characters or double quotes, which git prints quoted or the split
-  breaks. Such a file would drop out of every list. GHC also compiles `.lhs`, `.hsc`, `.hs-boot`, `.hsig`,
+  off, so a folder named `bench/[a]` stays that name, and every name starts with `./`, so a file
+  named `-o-optP.hs` is not read as an option (HLint took it as `--only` and checked nothing).
+  The check rejects `.hs` and cabal file names with spaces, control characters or double quotes,
+  which git prints quoted or the split breaks, and an upper-case `.HS`, which GHC finds on a
+  macOS disk. Such a file would drop out of every list. The other Haskell extensions are matched
+  in any case. GHC also compiles `.lhs`, `.hsc`, `.hs-boot`, `.hsig`,
   Alex, Happy and c2hs sources, which Ormolu and HLint do not read, so `scripts/check` rejects
   them, and git-ignored `.hs` files outside `dist-newstyle/`, which pass locally and are missing
   in CI.
@@ -64,9 +67,10 @@ Every other gate states its reason in a comment in its own file.
   or an `HLINT ignore` comment split over several lines. It first splits the file the way GHC
   lexes it: nested block comments, line comments, string and character literals. A regex over
   the raw text read `"--"` or `"{-"` in a string as a comment start and skipped real code after
-  it, and read a word in a string as code. The file is read as UTF-8 and every Unicode symbol
-  is an operator character, as in GHC: read as bytes, `'λ'` paired the quotes after it wrongly,
-  and `∘--` read as a comment. Pragmas are searched for in comments only, code rules in code
+  it, and read a word in a string as code. The file is read as UTF-8 and characters are
+  classed as GHC's lexer classes them, not as perl's `\w`: symbols and connector, dash and other
+  punctuation are operator characters, so `∘--` and `‿--` are operators, not comments, and
+  letters, marks and digits make names. Read as bytes, `'λ'` paired the quotes after it wrongly. Pragmas are searched for in comments only, code rules in code
   only. `ANN`, `OPTIONS` and `COMPLETE` count only as pragmas (`{-#`), so a comment such as
   `{- Annual totals -}` passes. `COMPLETE` tells `-Wincomplete-patterns` that some constructors
   cover a type. `OPTIONS_HADDOCK` changes only the docs and is allowed; for Ormolu only
@@ -77,10 +81,12 @@ Every other gate states its reason in a comment in its own file.
   used through the qualifier of another package's module (`IO.unsafeIOToST`). HLint bans only
   exact names, and base re-exports unsafe functions from many modules (`GHC.IO`, `GHC.Exts`).
   `-Wmissing-import-lists` makes every other import name what it brings in, also with `hiding`,
-  so these three cover them all. The project's own modules, the ones a `.cabal` file lists, are
-  exempt: a local `unsafeChars` or a `SampleTool.Internal` module is fine. A `module` line in a
-  file that no component builds does not count, or `docs/Example.hs` with `module GHC.IO` would
-  exempt base's `GHC.IO`.
+  so these three cover them all. The project's own modules are exempt: a local `unsafeChars` or a
+  `SampleTool.Internal` module is fine. They are the modules that the `.cabal` files of
+  `cabal.project`'s `packages` list outside an `if` block. A `module` line in a file that no
+  component builds does not count, or `docs/Example.hs` with `module GHC.IO` would exempt
+  base's `GHC.IO`; nor does a list under `if false`. A `.cabal` file that no `packages` entry
+  names is rejected: no build reads it.
 - `foreign import` is rejected: GHC2024 turns on the FFI, and a C function with a pure type is
   an `unsafePerformIO` that no step reads.
 - `module M (module M)` is rejected: it exports every name, so `-Wunused-top-binds` never sees
@@ -118,21 +124,27 @@ Every other gate states its reason in a comment in its own file.
 - Every test suite's `main-is` must be exactly the hspec-discover driver line, and its
   `other-modules` must be `*Spec` modules under the driver's folder (hspec-discover runs only
   those) or modules that another module imports. A hand-written `Main` or a spec module with
-  another name would run only some tests, or none. A `SpecHook.hs` is rejected: hspec-discover
-  applies its hook to every spec in the folder, and the hook can replace them. The test step
-  passes `--failure-report`, which hspec writes only once every example has run, and expects a
-  report for every `test-suite`. Counting the summary lines in the output did not work: a test
-  can print a summary and exit with code 0 before the other examples run.
+  another name would run only some tests, or none. A `SpecHook.hs` under a driver's folder is
+  rejected: hspec-discover applies its hook to every spec in the folder, and the hook can
+  replace them. The test step passes `--failure-report`, which hspec writes at the end of a run,
+  and expects a report for every `test-suite`. Counting the summary lines in the output did not
+  work: a test can print a summary and exit with code 0 before the other examples run. The
+  report path is on the test's own command line, so HLint bans the ways a test reaches it and
+  stops hspec early with base and hspec alone: `runIO`, `hspec*`, `GHC.Environment`, and
+  `getArgs` and `withArgs` outside `Main`.
 - HLint bans the settings that make a test check less or invert it: `expectFailure`, `once`,
   `withMaxSuccess`, `withNumTests` and the other `with*` and `modify*` settings, hspec's
   `Test.Hspec.Core.*` and `Test.Hspec.Runner` modules, which can turn a suite into a dry run,
   the `around*` hooks, which decide whether an example runs at all (`before` and `after` stay
-  allowed), and `Test.QuickCheck.Property`, whose `mapTotalResult` turns a failure into a pass.
+  allowed), `Test.QuickCheck.Property`, whose `mapTotalResult` turns a failure into a pass,
+  `mapSize`, and the `quickCheck*` runners, which print a failure and return `()`.
 - HLint bans by module where a name is total elsewhere: `Data.Text.index` and
   `Data.List.NonEmpty.fromList` are banned, `Data.List.NonEmpty.head` is allowed although
   `head` is banned. `System.Exit` and `GHC.IO.Exception` (which also exports `ExitCode`) are
   allowed only in `Main` modules, so the library returns an `Either` and no test exits early.
-  `decodeUtf8` is banned like the partial functions: it throws on invalid input. `throw` and `assert` are banned like `error`; `throwIO` stays allowed.
+  The kind of an IO error comes from `System.IO.Error`, such as `isResourceVanishedError`.
+  `decodeUtf8` and `strictDecode` are banned like the partial functions: they throw on invalid
+  input. `throw` and `assert` are banned like `error`; `throwIO` stays allowed.
 - `scripts/check` clears every `HSPEC_*` variable and passes `--ignore-dot-hspec`, because either
   can skip tests or turn every test into a dry run.
 - QuickCheck runs with a fixed seed, so the gate never fails by chance. The weekly
@@ -157,6 +169,9 @@ Every other gate states its reason in a comment in its own file.
     CPP` or a flag in the common stanza, or a variable in `mise.toml`'s `[env]`, changes the
     build. Only the owner's review of every change guards them. CODEOWNERS adds nothing in a
     one-owner repository, because GitHub does not let the author approve their own PR.
+  - Test code that runs arbitrary IO, such as reading `/proc/self/cmdline` and starting a
+    process, can still write the failure report and stop the run. The bans close the ways that
+    need only base and hspec.
   - Test content: a test without an assertion (`it "x" True`, `seq` instead of `shouldBe`),
     `when False`, a generator that yields one value (`forAll (pure "")`) or deleted tests pass.
     Only review catches them. Pattern hints for each form would be one more list to dodge.

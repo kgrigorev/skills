@@ -1,4 +1,5 @@
 # expect: red Haskell sources are plain .hs files
+# expect-output: bench x/Main.hs
 # A source folder with a space: the file lists split at spaces, so no step would read the file.
 mkdir -p 'bench x'
 printf -- '-- | Bench.\nmodule Main (main) where\n\n-- | Runs.\nmain :: IO ()\nmain = pure ()\n' >'bench x/Main.hs'

@@ -1,4 +1,5 @@
 # expect: red Lint
+# expect-output: bench/[a]/Main.hs
 # A source folder named bench/[a]: an unquoted, globbed file list turned it into the clean
 # decoy bench/a, so the format, lint and switch-off steps read the decoy and cabal the real file.
 mkdir -p 'bench/[a]' bench/a

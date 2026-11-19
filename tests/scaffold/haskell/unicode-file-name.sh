@@ -1,4 +1,5 @@
 # expect: red Lint
+# expect-output: src/Ä.hs
 # A module whose file name is not ASCII: git prints the name quoted, so it dropped out of every
 # file list, and its OPTIONS_GHC -w, head and unsafePerformIO went unseen.
 perl -0pi -e 's/  exposed-modules: SampleTool\n/  exposed-modules:\n    SampleTool\n    \x{c3}\x{84}\n\n/' sample-tool.cabal

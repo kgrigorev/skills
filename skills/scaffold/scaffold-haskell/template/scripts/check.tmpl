@@ -28,11 +28,13 @@ step() { printf '\n==> %s\n' "$1"; }
 # Every Haskell and cabal file git tracks or would add, wherever it lives, so a new component
 # folder cannot slip past the format, lint and switch-off steps. git prints other names quoted
 # ("src/\303\204.hs"), which are no file; the "plain .hs files" step rejects those names.
+# Each name starts with ./, so a file named -o-optP.hs is a file to Ormolu and HLint, not an
+# option.
 tracked() {
   git -c core.quotePath=false ls-files --cached --others --exclude-standard -- "$@" |
-    while IFS= read -r f; do if [ -f "$f" ]; then echo "$f"; fi; done
+    while IFS= read -r f; do if [ -f "$f" ]; then echo "./$f"; fi; done
 }
-hs_files=$(tracked ':(icase)*.hs') # GHC finds Foo.HS on a macOS disk
+hs_files=$(tracked '*.hs')
 cabal_files=$(tracked '*.cabal')
 project_files=$(tracked 'cabal.project*')
 tmp=$(mktemp -d)
@@ -59,6 +61,7 @@ my $mode = shift @ARGV;
 my $driver = "{-# OPTIONS_GHC -F -pgmF hspec-discover #-}\n";
 my (@hs, @cabal, @project);
 for (@ARGV) {
+  s{^\./}{};
   if (/\.hs$/) { push @hs, $_ } elsif (/\.cabal$/) { push @cabal, $_ } else { push @project, $_ }
 }
 
@@ -87,10 +90,13 @@ sub line_of { my ($text, $n) = @_; return (split /\n/, $text, -1)[$n - 1] // "" 
 # and character literals. Returns the code without comments and with empty literals, newlines
 # kept so line numbers stay, and the comments with their offsets. A regex over the raw text
 # would read "--" or "{-" inside a string as a comment, and a word in a string as code.
-# As in GHC, every Unicode symbol or punctuation character is an operator character except
-# (),;[]`{}_"', so "∘--" is an operator, not a comment; and an upper-case letter is any
-# Unicode capital, so "Ä.unsafeIOToST" is a qualified name.
-my $symbol = qr{(?![(),;\[\]`{}_"'])[\p{S}\p{P}]};
+# The character classes are GHC's (GHC.Parser.Lexer, adj_c), not perl's \w: symbols and
+# connector, dash and other punctuation are operator characters, except (),;[]`{}_"', so "∘--"
+# and "‿--" are operators, not comments; brackets and quotes such as « are neither. Letters,
+# non-spacing marks, digits, _ and ' make names, and a capital starts a module name, so
+# "Ä.unsafeIOToST" is a qualified name.
+my $symbol = qr{(?![(),;\[\]`{}_"'])[\p{Pc}\p{Pd}\p{Po}\p{Sm}\p{Sc}\p{Sk}\p{So}]};
+my $idchar = qr{[\p{L}\p{Mn}\p{N}_']};
 my $large = qr{[\p{Lu}\p{Lt}]};
 sub lex_haskell {
   my ($text) = @_;
@@ -113,7 +119,7 @@ sub lex_haskell {
     } elsif ($text =~ /\G'(?:[^'\\\n]|\\[^\n][^'\n]*)'/gc) {
       $code .= "' '";
     } else {
-      $text =~ /\G(?:\w[\w']*|$symbol+|.)/gcs;
+      $text =~ /\G(?:[\p{L}\p{Mn}\p{N}_]$idchar*|$symbol+|.)/gcs;
       $code .= $&;
     }
   }
@@ -124,7 +130,7 @@ sub lex_haskell {
 sub imports {
   my ($code) = @_;
   my @found;
-  while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?("[^"\n]*"\s+)?($large[\w'.]*)(?:\s+qualified)?(?:\s+as\s+($large[\w'.]*))?(\s+hiding)?/gm) {
+  while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?("[^"\n]*"\s+)?($large(?:$idchar|\.)*)(?:\s+qualified)?(?:\s+as\s+($large(?:$idchar|\.)*))?(\s+hiding)?/gm) {
     my %import = (at => $-[0], package => defined $1, module => $2, alias => $3 // $2, hiding => defined $4, list => "");
     $import{list} = $1 if $code =~ /\G\s*(\((?:[^()]++|(?1))*\))/gc;
     push @found, \%import;
@@ -141,10 +147,11 @@ for my $file (@hs) {
 }
 
 # Reads a .cabal or cabal.project file into fields: line, stanza number and header, indent,
-# name and value. A value includes its continuation lines, which are indented deeper.
+# name, value, and whether an if or else block holds the field (cond). A value includes its
+# continuation lines, which are indented deeper.
 sub fields {
   my ($file) = @_;
-  my (@fields, @stanzas, $field);
+  my (@fields, @stanzas, @conds, $field);
   my ($n, $header) = (0, "");
   for my $line (split /\n/, slurp($file)) {
     $n++;
@@ -152,25 +159,44 @@ sub fields {
     my $indent = length(($line =~ /^(\s*)/)[0]);
     if ($field && $indent > $field->{indent}) { $field->{value} .= "\n$line"; next }
     $field = undef;
-    if ($line =~ /^\s*([A-Za-z][\w-]*)\s*:(.*)$/) {
-      $field = {line => $n, indent => $indent, name => lc $1, value => $2,
+    pop @conds while @conds && $indent <= $conds[-1];
+    if ($indent > 0 && $line =~ /^\s*(?:if|elif|else)(?:\s|$)/i) {
+      push @conds, $indent;
+    } elsif ($line =~ /^\s*([A-Za-z][\w-]*)\s*:(.*)$/) {
+      $field = {line => $n, indent => $indent, name => lc $1, value => $2, cond => scalar @conds,
         stanza => $indent ? $#stanzas : -1, header => $indent ? $header : ""};
       push @fields, $field;
     } elsif ($indent == 0) {
       ($header = $line) =~ s/\s+$//;
       push @stanzas, {line => $n, header => $header};
+      @conds = ();
     }
   }
   return (\@fields, \@stanzas);
 }
 sub words_of { my ($value) = @_; return map { s/^"(.*)"$/$1/sr } $value =~ /"[^"]*"|[^\s,]+/g }
 
-# The project's own modules: the ones a .cabal file lists. A module line in a file that no
-# component builds, such as docs/Example.hs with "module GHC.IO", does not count.
+# The .cabal files that cabal reads: the ones in the folders that cabal.project's packages
+# field names. Another .cabal file is a decoy that no build reads.
+use File::Glob qw(bsd_glob);
+my %package;
+for my $field (grep { $_->{name} eq "packages" && $_->{header} eq "" } @{(fields("cabal.project"))[0]}) {
+  for my $entry (map { bsd_glob($_) } words_of($field->{value})) {
+    for my $file ($entry =~ /\.cabal$/ ? $entry : bsd_glob("$entry/*.cabal")) {
+      (my $path = $file) =~ s{/+}{/}g;
+      $path =~ s{^(?:\./)+}{};
+      $package{$path} = 1;
+    }
+  }
+}
+
+# The project's own modules: the ones that those .cabal files list outside an if block. A
+# module line in a file that no component builds, such as docs/Example.hs with
+# "module GHC.IO", does not count, and neither does a list under "if false".
 my %home;
-for my $file (@cabal) {
+for my $file (grep { $package{$_} } @cabal) {
   my ($fields) = fields($file);
-  for my $field (grep { $_->{name} =~ /^(?:exposed|other|autogen|virtual)-modules$|^signatures$/ } @$fields) {
+  for my $field (grep { !$_->{cond} && $_->{name} =~ /^(?:exposed|other|autogen|virtual)-modules$|^signatures$/ } @$fields) {
     $home{$_} = 1 for words_of($field->{value});
   }
 }
@@ -202,26 +228,26 @@ if ($mode eq "switches") {
       $outside{$import->{alias}} ||= $foreign;
       next unless $foreign;
       if ($import->{module} =~ /(?:^|\.)(?:Unsafe|Internal)(?:\.|$)/
-        || (!$import->{hiding} && $import->{list} =~ /(?<![\w'])unsafe$large/)) {
+        || (!$import->{hiding} && $import->{list} =~ /(?<!$idchar)unsafe$large/)) {
         my $n = line_at($code, $import->{at});
         report($file, $n, line_of($text, $n));
       }
     }
-    while ($code =~ /(?<![\w'.])((?:$large[\w']*\.)+)unsafe$large/g) {
+    while ($code =~ /(?<!$idchar)(?<!\.)((?:$large$idchar*\.)+)unsafe$large/g) {
       my $alias = substr($1, 0, -1);
       next if exists $outside{$alias} && !$outside{$alias};
       my $n = line_at($code, $-[0]);
       report($file, $n, line_of($text, $n));
     }
     # A foreign import can give an impure C function a pure type, like unsafePerformIO.
-    while ($code =~ /^[ \t]*foreign\s+(?:import|export)(?![\w'])/gm) {
+    while ($code =~ /^[ \t]*foreign\s+(?:import|export)(?!$idchar)/gm) {
       my $n = line_at($code, $-[0]);
       report($file, $n, line_of($text, $n) . " (foreign import: calls C code that no check reads)");
     }
     # module M (module M) exports every name, so -Wunused-top-binds never sees dead code.
-    if ($code =~ /^module\s+($large[\w'.]*)\s*(\((?:[^()]++|(?2))*\))/m) {
+    if ($code =~ /^module\s+($large(?:$idchar|\.)*)\s*(\((?:[^()]++|(?2))*\))/m) {
       my ($name, $exports, $start) = ($1, $2, $-[2]);
-      if ($exports =~ /(?<![\w'.])module\s+\Q$name\E(?![\w'.])/) {
+      if ($exports =~ /(?<!$idchar)(?<!\.)module\s+\Q$name\E(?!$idchar|\.)/) {
         my $n = line_at($code, $start + $-[0]);
         report($file, $n, line_of($text, $n) . " (exports the whole module)");
       }
@@ -278,9 +304,8 @@ if ($mode eq "switches") {
       report($file, $line, "$name: git ignores $path, so no check reads it");
     }
   };
-  # hspec-discover applies a SpecHook.hs to every spec in its folder, so it could replace them.
-  for my $file (grep { m{(?:^|/)SpecHook\.hs$}i } @hs) {
-    report($file, 1, "SpecHook.hs: hspec-discover runs it around the specs, and it can replace them. Remove it.");
+  for my $file (grep { !$package{$_} } @cabal) {
+    report($file, 1, "cabal does not read this file: cabal.project's packages do not name its folder. Remove it.");
   }
   for my $file (@cabal) {
     my ($fields, $stanzas) = fields($file);
@@ -289,7 +314,7 @@ if ($mode eq "switches") {
       my ($name, $header, $line) = @$field{qw(name header line)};
       my @values = words_of($field->{value});
       if ($header eq "common common") {
-        $common{$_} = 1 for $name eq "ghc-options" ? @values : ();
+        $common{$_} = 1 for $name eq "ghc-options" && !$field->{cond} ? @values : ();
       } elsif ($name =~ /^(?:default-extensions|other-extensions|extensions|default-language|language)$/) {
         report($file, $line, "$name: set extensions and the language only in \"common common\"");
       }
@@ -327,6 +352,13 @@ if ($mode eq "switches") {
           next;
         }
         (my $folder = $path) =~ s{/[^/]*$}{};
+        $folder =~ s{/+$}{};
+        $folder =~ s{^(?:\./)+}{};
+        # hspec-discover applies a SpecHook.hs to every spec in its folder, so it can replace them.
+        my $prefix = $folder eq "." || $folder eq "" ? "" : "$folder/";
+        for my $hook (grep { m{^\Q$prefix\E(?:.*/)?SpecHook\.hs$}i } @hs) {
+          report($hook, 1, "SpecHook.hs: hspec-discover runs it around the specs, and it can replace them. Remove it.");
+        }
         for my $module (map { words_of($_->{value}) } grep { $_->{name} eq "other-modules" } @in) {
           if ($module =~ /Spec$/) {
             my $spec = "$folder/" . ($module =~ s{\.}{/}gr) . ".hs";
@@ -399,16 +431,19 @@ step 'Haskell sources are plain .hs files git can see'
 # and the switch-off step read only .hs, so the others are not allowed. A git-ignored .hs file
 # would pass here and be missing in CI. A name with a space, a control character or a double
 # quote would drop out of the file lists above, so no step would read the file.
+# GHC also finds Foo.HS or Foo.LHS for module Foo on a macOS disk, so the extensions are matched
+# in any case, and .hs must be lower case.
 odd=$(git -c core.quotePath=false ls-files --cached --others --exclude-standard -- \
-  ':(icase)*.hs' '*.cabal' 'cabal.project*' | grep -E '^"|[[:space:]]' || true)
+  ':(icase)*.hs' '*.cabal' 'cabal.project*' | grep -E '^"|[[:space:]]|\.(HS|Hs|hS)$' || true)
 if [ -n "$odd" ]; then
   printf '%s\n' "$odd" >&2
-  echo 'Rename these files: no spaces, control characters or double quotes.' >&2
+  echo 'Rename these files: no spaces, control characters or double quotes, and a lower-case .hs.' >&2
   exit 1
 fi
-others=$(git ls-files --cached --others -- '*.lhs' '*.hsc' '*.hs-boot' '*.lhs-boot' '*.hsig' \
-  '*.lhsig' '*.x' '*.y' '*.ly' '*.chs' '*.gc' '*.cpphs' ':!:dist-newstyle/')
-ignored=$(git ls-files --others --ignored --exclude-standard -- '*.hs' ':!:dist-newstyle/')
+others=$(git ls-files --cached --others -- ':(icase)*.lhs' ':(icase)*.hsc' ':(icase)*.hs-boot' \
+  ':(icase)*.lhs-boot' ':(icase)*.hsig' ':(icase)*.lhsig' ':(icase)*.x' ':(icase)*.y' \
+  ':(icase)*.ly' ':(icase)*.chs' ':(icase)*.gc' ':(icase)*.cpphs' ':!:dist-newstyle/')
+ignored=$(git ls-files --others --ignored --exclude-standard -- ':(icase)*.hs' ':!:dist-newstyle/')
 if [ -n "$others$ignored" ]; then
   printf '%s\n' "$others" "$ignored" | grep . >&2
   echo 'Write these as .hs files that git tracks, or remove them.' >&2
@@ -455,9 +490,12 @@ step 'Dependency versions match cabal.project.freeze. Fix: scripts/freeze'
 # steps from here on run cabal with a config of their own: the Hackage repository, and the
 # user's index and store folders, as the user's config names them.
 unset CABAL_CONFIG
-# Without a user config, cabal path first prints a line that it writes a default one.
-index=$(cd "$tmp" && cabal path --remote-repo-cache | tail -n 1)
-store=$(cd "$tmp" && cabal path --store-dir | tail -n 1)
+# Without a user config, cabal path first prints a line that it writes a default one, so take
+# the last line. Without a pipe, so a failing cabal path stops the check.
+index=$(cd "$tmp" && cabal path --remote-repo-cache)
+index=$(printf '%s\n' "$index" | tail -n 1)
+store=$(cd "$tmp" && cabal path --store-dir)
+store=$(printf '%s\n' "$store" | tail -n 1)
 # shellcheck disable=SC2016 # $ncpus is cabal's word for the number of CPUs
 printf 'repository hackage.haskell.org\n  url: http://hackage.haskell.org/\n\nremote-repo-cache: %s\nstore-dir: %s\njobs: $ncpus\n' \
   "$index" "$store" >"$tmp/cabal.config"

@@ -1,4 +1,5 @@
 # expect: red Build settings
+# expect-output: SpecHook.hs: hspec-discover runs it
 # A SpecHook.hs, which hspec-discover applies to every spec in its folder, replaces the specs
 # with one passing example, so a broken test never runs.
 perl -0pi -e 's/`shouldBe` "Ada Lovelace"/`shouldBe` "Ada  Lovelace"/' test/SampleToolSpec.hs

@@ -11,6 +11,8 @@
 #   # expect: green        scripts/check passes (good code the gates must not reject)
 #   # expect-<OS>: ...     optional: replaces the expect line where `uname -s` prints <OS>, for an
 #                          attack that the platform itself stops at another step
+#   # expect-output: <text>  optional, repeatable: the output of scripts/check also contains
+#                          <text>, so a red case fails for its own reason, not another one
 #   # env: NAME=value      optional, repeatable: set for scripts/check only
 # The rest of the file is a sh script that changes the project (cwd is the project root).
 set -eu
@@ -106,6 +108,12 @@ for file in $files; do
         *"$want"*) result=ok ;;
         *) result="red at the wrong step: $step (want: $want)" ;;
         esac
+        if [ "$result" = ok ]; then
+          missing=$(sed -n 's/^# expect-output: //p' "$file" | while IFS= read -r text; do
+            grep -qF -- "$text" "$work/out" || printf '%s\n' "$text"
+          done)
+          [ -z "$missing" ] || result="red for another reason: the output lacks \"$missing\""
+        fi
       fi
       ;;
     esac
