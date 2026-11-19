@@ -7,13 +7,17 @@ on:
     paths:
       - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
+      - tests/scaffold/haskell/**
+      - scripts/test-scaffold
   push:
     branches: [main]
     paths:
       - skills/scaffold/scaffold-haskell/**
       - .github/workflows/scaffold-haskell.yml
-  # The scaffold takes the newest hspec from Hackage, so a new release can break the template
-  # without a change here. A weekly run catches that.
+      - tests/scaffold/haskell/**
+      - scripts/test-scaffold
+  # The scaffold takes the newest hspec and QuickCheck from Hackage, so a new release can break
+  # the template without a change here. A weekly run catches that.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
@@ -26,78 +30,89 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The scaffold pins the tool versions it finds on PATH. Keep these equal to the versions you
-  # scaffold with, so CI tests the project you would get.
-  GHC_VERSION: "9.14.1"
-  CABAL_VERSION: "3.18.2.0"
-  ORMOLU_VERSION: "0.9.0.0"
-  HLINT_VERSION: "3.10"
-  ACTIONLINT_VERSION: "1.7.12"
+  SKILL: skills/scaffold/scaffold-haskell
+  SAMPLE: sample-tool
 
 jobs:
   scaffold-haskell:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      # Installs GHC and cabal with ghcup, as the template's own CI does, and runs cabal update.
-      # The scaffold needs the fresh index to find the newest hspec.
-      - id: setup
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ env.GHC_VERSION }}
-          cabal-version: ${{ env.CABAL_VERSION }}
+      # The runner image sets GHCUP_INSTALL_BASE_PREFIX=/usr/local and preinstalls a GHC. Use our
+      # own prefix, as the template's setup-haskell action does, so the image never decides.
+      - run: echo "GHCUP_INSTALL_BASE_PREFIX=$RUNNER_TEMP/ghcup" >> "$GITHUB_ENV"
 
-      # The same step as in template/.github/workflows/ci.yml.tmpl. Change both together.
-      # GitHub release downloads sometimes fail with 5xx errors. Cache the tools, so most runs
-      # download nothing, and retry the download on a cache miss.
-      - id: tools
+      # Only mise itself here. The scaffold installs the tools from the template's mise.lock.
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.8
+          install: false
+
+      # The scaffold pins this GHC; the template's mise.toml pins ghcup.
+      - id: versions
+        run: |
+          echo "ghc=$(sed -n 's/^ghc_version=//p' "$SKILL/scripts/scaffold")" >> "$GITHUB_OUTPUT"
+          echo "ghcup=$(sed -n 's/^ghcup = "\(.*\)"$/\1/p' "$SKILL/template/mise.toml.tmpl")" >> "$GITHUB_OUTPUT"
+
+      - id: ghc-cache
         uses: actions/cache@v6
         with:
-          path: ~/tools
-          key: tools-${{ runner.os }}-ormolu-${{ env.ORMOLU_VERSION }}-hlint-${{ env.HLINT_VERSION }}
+          path: ${{ env.GHCUP_INSTALL_BASE_PREFIX }}/.ghcup
+          key: ghcup-${{ runner.os }}-${{ steps.versions.outputs.ghc }}-${{ steps.versions.outputs.ghcup }}
 
-      - name: Download Ormolu and HLint
-        if: steps.tools.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "$HOME/tools"
-          cd "$HOME/tools"
-          get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$1" "$2"; }
-          get ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
-          get hlint.tar.gz "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz"
-          unzip -q ormolu.zip
-          tar xzf hlint.tar.gz
-          rm ormolu.zip hlint.tar.gz
+      - if: steps.ghc-cache.outputs.cache-hit != 'true'
+        run: mise exec "ghcup@${{ steps.versions.outputs.ghcup }}" -- ghcup install ghc "${{ steps.versions.outputs.ghc }}"
 
-      - name: Put Ormolu and HLint on the PATH
-        run: |
-          echo "$HOME/tools" >> "$GITHUB_PATH"
-          echo "$HOME/tools/hlint-$HLINT_VERSION" >> "$GITHUB_PATH"
-
-      # The cabal store holds the built dependencies, such as hspec. Restoring it saves most of
-      # the build time. The cache never replaces a saved key, and the dependencies change without
-      # a template change. So each run saves under its own key and restores the newest one.
-      - uses: actions/cache@v6
-        with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: cabal-store-${{ runner.os }}-${{ env.GHC_VERSION }}-${{ github.run_id }}
-          restore-keys: cabal-store-${{ runner.os }}-${{ env.GHC_VERSION }}-
-
+      # The scaffold runs cabal update, installs the pinned tools and writes the freeze file.
       - name: Render the template
         run: |
-          sh skills/scaffold/scaffold-haskell/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+          sh "$SKILL/scripts/scaffold" "$RUNNER_TEMP/$SAMPLE" "$SAMPLE" \
             "A sample project that tests the template" "a Go developer new to Haskell"
+          git -C "$RUNNER_TEMP/$SAMPLE" add -A
 
-      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
-      # ci.yml.tmpl would give every new project a red CI.
-      - name: Lint the sample project's CI workflow
+      # The shipped mise.lock must be what `mise lock` writes for the shipped mise.toml.
+      - name: The template's mise.lock is current
+        working-directory: ${{ runner.temp }}/${{ env.SAMPLE }}
         run: |
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/actionlint.tar.gz" \
-            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" "$RUNNER_TEMP/sample-tool/.github/workflows/ci.yml"
+          mise lock --platform linux-x64,macos-arm64
+          git diff --exit-code mise.lock
+
+      # actionlint checks GitHub workflow files and runs shellcheck on their scripts. A broken
+      # workflow template would give every new project a red CI. shellcheck also covers the
+      # scaffold, the attack runner and its attacks, and the project's own scripts and hooks.
+      # This step runs from the repository root: the sample's mise.toml sets locked = true, and
+      # its mise.lock has no entry for these two tools.
+      - name: Lint the scaffold and the sample project's workflows and scripts
+        run: |
+          lint() { mise exec shellcheck@0.11.0 actionlint@1.7.12 -- "$@"; }
+          sample=$RUNNER_TEMP/$SAMPLE
+          lint actionlint "$sample"/.github/workflows/*.yml
+          lint shellcheck "$sample"/scripts/* "$sample"/.githooks/* "$sample"/.claude/hooks/*
+          lint shellcheck -x -P SCRIPTDIR "$SKILL/scripts/scaffold"
+          lint shellcheck scripts/test-scaffold scripts/sync-scaffold-shared
+          lint shellcheck -s sh tests/scaffold/haskell/*.sh
+
+      # The cabal store holds the built dependencies, such as hspec. Restoring it saves most of
+      # the build time. Ask cabal where the store is, since the runner image may set it up.
+      - id: store
+        working-directory: ${{ runner.temp }}/${{ env.SAMPLE }}
+        run: echo "dir=$(mise exec -- cabal path --store-dir)" >> "$GITHUB_OUTPUT"
+
+      # The scaffold resolves today's versions, so each run saves under its own key and
+      # restores the newest one.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.store.outputs.dir }}
+          key: cabal-store-${{ runner.os }}-${{ steps.versions.outputs.ghc }}-${{ github.run_id }}
+          restore-keys: cabal-store-${{ runner.os }}-${{ steps.versions.outputs.ghc }}-
 
       - name: Run the sample project's checks
         run: |
-          "$RUNNER_TEMP/sample-tool/scripts/check"
+          "$RUNNER_TEMP/$SAMPLE/scripts/check"
+
+      # Replays the attacks in tests/scaffold/haskell on the rendered project: each bad change
+      # must turn scripts/check red at its step, and each good one must stay green.
+      - name: Replay the attacks on the sample project
+        run: scripts/test-scaffold haskell --project "$RUNNER_TEMP/$SAMPLE"

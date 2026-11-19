@@ -33,7 +33,9 @@ A reader can follow a module from top to bottom by its comments alone.
 
 - Use `Text` for text. `String` only where a library forces it.
 - Expected failures are values: return `Either` with the module's error type. Exceptions are for
-  the unexpected only, such as a full disk.
+  the unexpected only, such as a full disk, and are thrown with `throwIO` in IO. Only `Main` exits
+  the program.
+- Do not catch an exception and drop it (`void (try ...)`). Handle it or let it reach `Main`.
 
 ## Functions and names
 
@@ -51,3 +53,9 @@ A new entry in `build-depends` in `{{package}}.cabal` needs the owner's approval
 
 - New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
 - Test names describe behaviour.
+- When a rule holds for every input, write it as a QuickCheck property with `prop`, for example
+  "formatting twice gives the same text". Keep example tests for the cases a reader should see.
+- `scripts/check` runs properties with one fixed seed, so a run never fails by chance. A weekly CI
+  job tries random seeds; a failure there prints the seed to reproduce it.
+- Every test checks a result (`shouldBe`, `===`), and a generator yields varied inputs.
+  `scripts/check` cannot see a test that checks nothing.

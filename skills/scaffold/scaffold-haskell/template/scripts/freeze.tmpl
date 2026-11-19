@@ -1,0 +1,8 @@
+#!/bin/sh
+# Rewrites cabal.project.freeze from cabal.project and the .cabal file. Run it after a dependency
+# change the owner approved, or after bumping index-state, and commit the result.
+# scripts/check fails while the freeze file is out of date.
+set -eu
+cd "$(dirname "$0")/.."
+mise exec -- cabal update
+mise exec -- cabal freeze

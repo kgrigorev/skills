@@ -7,36 +7,38 @@
 Install [Homebrew](https://brew.sh), then run in the repository:
 
 ```sh
-brew bundle
-export PATH="$HOME/.ghcup/bin:$PATH"   # add this line to ~/.zshrc too
-ghcup install ghc {{ghc_version}}
-ghcup install cabal latest
-ghcup install hls latest
-cabal update
+brew bundle                                   # mise and the GitHub CLI
+mise trust && mise install                    # cabal, ghcup, Ormolu, cabal-gild, HLint
+mise exec -- ghcup install ghc {{ghc_version}}
+mise exec -- ghcup install hls 2.15.0.0       # editor support
+mise exec -- cabal update
 git config core.hooksPath .githooks
-gh extension install github/gh-stack   # optional: stacked PRs
+gh extension install github/gh-stack          # optional: stacked PRs
 ```
 
-Homebrew installs ghcup, Ormolu, HLint and the GitHub CLI. ghcup installs GHC, cabal and HLS into
-`~/.ghcup/bin`. Homebrew does not put that folder on `PATH`. The `export` line puts it first, so
-ghcup's GHC and cabal win over any copy from Homebrew. The git hook runs the checks before each
-push. `gh stack` is optional: it helps to open and update stacked PRs.
+`mise.toml` pins every tool except GHC, and `mise.lock` holds their checksums. ghcup installs GHC
+and HLS into `~/.ghcup/bin`. `with-compiler` in `cabal.project` names the GHC version, so cabal,
+HLS, `scripts/check` and CI all use the same one. `scripts/check` accepts only ghcup's GHC: another
+build of the same version rebuilds every dependency.
 
-`with-compiler` in `cabal.project` names the GHC version, so cabal and HLS use it even when other
-versions are installed. CI reads the same line and pins the other tools in
-`.github/workflows/ci.yml`.
+Copies of GHC, cabal, Ormolu or HLint from Homebrew may stay installed. The scripts and the
+commands below run the pinned versions through mise. The git hook runs the checks before each
+push. `gh stack` is optional: it helps to open and update stacked PRs.
 
 ## Commands
 
 ```sh
-scripts/check        # every quality gate: format, lint, build, test
-cabal build all
-cabal test all
-cabal repl lib:{{package}}
-ormolu --mode inplace $(find app src test -name '*.hs')
-cabal install --enable-optimization   # release build: cabal.project builds with -O0
+scripts/check        # every quality gate: format, lint, lock, build, test
+scripts/format       # format the .hs and .cabal files
+scripts/freeze       # after a dependency change: re-lock the versions
+mise exec -- cabal build all
+mise exec -- cabal test all
+mise exec -- cabal repl lib:{{package}}
+mise exec -- cabal install --enable-optimization   # release build: cabal.project builds with -O0
 ```
 
-`scripts/check` is the single list of gates. The git hook and CI run it too.
+`scripts/check` is the single list of gates. The git hook and CI run it too. A weekly CI job,
+`.github/workflows/scheduled.yml`, tries random QuickCheck seeds and reports newer dependency
+versions. It never blocks a merge.
 
 AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

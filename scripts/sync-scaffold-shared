@@ -1,0 +1,56 @@
+#!/bin/sh
+# Copies the shared scaffold files from skills/scaffold/_shared into every scaffold-<stack> skill.
+# Each skill installs on its own with `npx skills add`, so each needs its own copy.
+# Usage: scripts/sync-scaffold-shared [--check] [scaffold-<stack>...]
+#   --check  fails when a copy differs, and writes nothing (CI runs this)
+#   names    limit the run to these skills; the default is every skill
+set -eu
+cd "$(dirname "$0")/.."
+
+mode='write'
+if [ "${1:-}" = --check ]; then
+  mode=--check
+  shift
+fi
+shared=skills/scaffold/_shared
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/sync-scaffold.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+stale=''
+
+# Usage: put <expected content file> <destination>
+put() {
+  if [ "$mode" = --check ]; then
+    cmp -s "$1" "$2" || stale="$stale $2"
+  else
+    mkdir -p "$(dirname "$2")"
+    cp "$1" "$2"
+  fi
+}
+
+if [ "$#" -gt 0 ]; then
+  skills=$(for name in "$@"; do printf 'skills/scaffold/%s\n' "$name"; done)
+else
+  skills=$(find skills/scaffold -mindepth 1 -maxdepth 1 -type d -name 'scaffold-*' | sort)
+fi
+[ -n "$skills" ] || { echo 'No scaffold-* skills found.' >&2; exit 1; }
+
+for skill in $skills; do
+  put "$shared/scripts/scaffold-lib.sh" "$skill/scripts/scaffold-lib.sh"
+  for file in $(cd "$shared/template" && find . -type f | sed 's#^\./##' | sort); do
+    put "$shared/template/$file" "$skill/template/$file"
+  done
+  # AGENTS.md: the stack's own part, then the shared part from "## Writing" to the end.
+  agents=$skill/template/AGENTS.md.tmpl
+  grep -q '^## Writing$' "$agents" || { echo "$agents has no \"## Writing\" heading." >&2; exit 1; }
+  sed '/^## Writing$/,$d' "$agents" >"$tmp/agents"
+  cat "$shared/AGENTS.tail.md" >>"$tmp/agents"
+  put "$tmp/agents" "$agents"
+done
+
+if [ -n "$stale" ]; then
+  echo "Out of sync with $shared:$stale" >&2
+  echo 'Run scripts/sync-scaffold-shared and commit the result.' >&2
+  exit 1
+fi
+[ "$mode" = --check ] && echo 'Scaffold shared files are in sync.'
+exit 0

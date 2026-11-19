@@ -4,7 +4,6 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 
 | Skill | What it does |
 | --- | --- |
-| `scaffold-haskell` | Creates a Haskell project with agent rules and quality gates. |
 | `commit` | Writes short conventional commits without attribution. |
 | `pull-request` | Opens small PRs with short bodies from the repo's template, stacks them, and merges them. |
 | `mise` | Pins tools, env vars and tasks with mise; knows what belongs in mise vs other runners. |
@@ -14,11 +13,23 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 | `audit` | Splits a large codebase into batches and audits them in parallel. |
 | `archive-project` | Imports a finished repo into your archive repo, checks the push, then retires the original on your word. |
 
+### Scaffolding
+
+The skills in `skills/scaffold/` each create a new project that agents can work in safely. Every
+project gets one `scripts/check` that holds all quality gates, with pinned tool versions, so the
+same commit gives the same result on every machine. The git hook, CI and the Claude Code Stop hook
+all run it.
+
+| Skill | Stack |
+| --- | --- |
+| `scaffold-haskell` | Haskell: cabal, Ormolu, HLint, hspec, QuickCheck. |
+
 ## Install
 
 ```sh
 npx skills add kgrigorev/skills -g                    # every skill, for every project
 npx skills add kgrigorev/skills -s pull-request -g    # one skill
+npx skills add https://github.com/kgrigorev/skills/tree/main/skills/scaffold -g    # all scaffolds
 npx skills update
 ```
 
@@ -28,3 +39,6 @@ While you change a skill, link it from your clone instead, so edits take effect 
 ln -s ~/src/skills/skills/pull-request ~/.claude/skills/pull-request
 ln -s ~/src/skills/skills/scaffold/scaffold-haskell ~/.claude/skills/scaffold-haskell    # scaffolds sit one level down
 ```
+
+The scaffold skills share some files. Edit them in `skills/scaffold/_shared`, then run
+`scripts/sync-scaffold-shared` to copy them into each skill.

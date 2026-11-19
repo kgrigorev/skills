@@ -1,0 +1,25 @@
+# Tool versions for {{package}}. scripts/check, the git hook and CI all use exactly these.
+# mise.lock holds their download URLs and checksums. Agents: change this file only with the
+# owner's approval. After a version change, run `mise lock` and commit both files.
+# GHC is not here: cabal.project pins it (with-compiler), and ghcup installs it.
+
+min_version = "2026.11.8"
+
+[settings]
+# Install only what mise.lock records, so every machine gets the same binaries.
+lockfile = true
+locked = true
+
+[tools]
+cabal = "3.18.2.0"
+ghcup = "0.2.6.2"
+ormolu = "0.9.0.0"
+"github:tfausak/cabal-gild" = "1.8.4.2"
+# HLint's release asset named x86_64-osx holds an arm64 binary, so Apple Silicon uses it.
+# Linux gets the x86_64-linux asset.
+hlint = { version = "3.10", platforms = { macos-arm64 = { asset_pattern = "hlint-3.10-x86_64-osx.tar.gz" } } }
+
+[env]
+# ghcup installs GHC under $GHCUP_INSTALL_BASE_PREFIX (default: your home folder). This line lets
+# shells without mise activation, such as agents and git hooks, find it too.
+_.path = ['{{ get_env(name="GHCUP_INSTALL_BASE_PREFIX", default=env.HOME) }}/.ghcup/bin']

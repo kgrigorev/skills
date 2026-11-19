@@ -1,8 +1,10 @@
 name: ci
 
+# Runs scripts/check, the same gates as the git hook and the agent's Stop hook.
+# pr-title.yml checks the PR title on its own.
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
 
@@ -14,91 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The GHC version comes from with-compiler in cabal.project.
-  CABAL_VERSION: "{{cabal_version}}"
-  ORMOLU_VERSION: {{ormolu_version}}
-  HLINT_VERSION: "{{hlint_version}}"
+  # mise refuses a config file it has not been told to trust.
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
-      # A block (run: |) keeps YAML from reading the ": " in the sed pattern as a key.
-      - id: ghc
-        run: |
-          echo "version=$(sed -n 's/^with-compiler: *ghc-//p' cabal.project)" >> "$GITHUB_OUTPUT"
-
-      - id: setup
-        uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ steps.ghc.outputs.version }}
-          cabal-version: ${{ env.CABAL_VERSION }}
-          cabal-update: false
-
-      # The Hackage index is about 20 s to download. cabal.project pins index-state, so a cached
-      # index resolves the same versions. Download it only when cabal.project changes.
-      - id: index-path
-        run: echo "dir=$(cabal path --remote-repo-cache)" >> "$GITHUB_OUTPUT"
-
-      - id: index
-        uses: actions/cache@v6
-        with:
-          path: ${{ steps.index-path.outputs.dir }}
-          key: hackage-index-${{ hashFiles('cabal.project') }}
-
-      - if: steps.index.outputs.cache-hit != 'true'
-        run: cabal update
-
-      # GitHub release downloads sometimes fail with 5xx errors. Cache the tools, so most runs
-      # download nothing, and retry the download on a cache miss.
-      - id: tools
-        uses: actions/cache@v6
-        with:
-          path: ~/tools
-          key: tools-${{ runner.os }}-ormolu-${{ env.ORMOLU_VERSION }}-hlint-${{ env.HLINT_VERSION }}
-
-      - name: Download Ormolu and HLint
-        if: steps.tools.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "$HOME/tools"
-          cd "$HOME/tools"
-          get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$1" "$2"; }
-          get ormolu.zip "https://github.com/tweag/ormolu/releases/download/$ORMOLU_VERSION/ormolu-x86_64-linux.zip"
-          get hlint.tar.gz "https://github.com/ndmitchell/hlint/releases/download/v$HLINT_VERSION/hlint-$HLINT_VERSION-x86_64-linux.tar.gz"
-          unzip -q ormolu.zip
-          tar xzf hlint.tar.gz
-          rm ormolu.zip hlint.tar.gz
-
-      - name: Put Ormolu and HLint on the PATH
-        run: |
-          echo "$HOME/tools" >> "$GITHUB_PATH"
-          echo "$HOME/tools/hlint-$HLINT_VERSION" >> "$GITHUB_PATH"
-
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ${{ steps.setup.outputs.cabal-store }}
-            dist-newstyle
-          key: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-${{ hashFiles('{{package}}.cabal', 'cabal.project') }}
-          restore-keys: cabal-${{ runner.os }}-${{ steps.ghc.outputs.version }}-
-
+      - uses: ./.github/actions/setup-haskell
       - run: scripts/check
-
-  title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: PR title is a conventional commit of at most 72 characters
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          pattern='^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([a-z0-9-]+\))?!?: [^ ].*$'
-          if ! printf '%s' "$TITLE" | grep -Eq "$pattern" || [ "${#TITLE}" -gt 72 ]; then
-            echo "Bad PR title: $TITLE" >&2
-            echo 'Use "type(scope): what changed", at most 72 characters, for example "feat(parser): read quoted lists".' >&2
-            exit 1
-          fi

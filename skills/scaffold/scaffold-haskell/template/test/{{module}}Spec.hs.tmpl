@@ -1,13 +1,25 @@
--- | Tests for the {{module}} module.
+-- | Tests for the {{module}} module: examples and one property.
 module {{module}}Spec (spec) where
 
 import Data.Text qualified as Text
-import Test.Hspec (Spec, describe, it, shouldSatisfy)
-import {{module}} (banner)
+import {{module}} (banner, tidyName)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck ((===))
 
 -- | The tests. hspec-discover finds this name in every *Spec module.
 spec :: Spec
-spec =
+spec = do
   describe "banner"
     $ it "names the program"
     $ banner `shouldSatisfy` Text.isPrefixOf "{{package}}"
+
+  describe "tidyName" $ do
+    it "keeps one space between words"
+      $ tidyName "  Ada   Lovelace " `shouldBe` "Ada Lovelace"
+
+    -- A property must hold for every input. QuickCheck tries 100 random strings and,
+    -- on a failure, shrinks the input to a small example.
+    prop "changes nothing the second time" $ \name ->
+      let once = tidyName (Text.pack name)
+       in tidyName once === once
