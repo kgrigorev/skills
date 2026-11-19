@@ -67,10 +67,13 @@ Every other gate states its reason in a comment in its own file.
   or an `HLINT ignore` comment split over several lines. It first splits the file the way GHC
   lexes it: nested block comments, line comments, string and character literals. A regex over
   the raw text read `"--"` or `"{-"` in a string as a comment start and skipped real code after
-  it, and read a word in a string as code. The file is read as UTF-8 and characters are
-  classed as GHC's lexer classes them, not as perl's `\w`: symbols and connector, dash and other
-  punctuation are operator characters, so `∘--` and `‿--` are operators, not comments, and
-  letters, marks and digits make names. Read as bytes, `'λ'` paired the quotes after it wrongly. Pragmas are searched for in comments only, code rules in code
+  it, and read a word in a string as code. The file is read as UTF-8, and names and operators
+  must be ASCII; strings, characters and comments may hold any text, except the first word of a
+  block comment, where pragma names go. perl and GHC class other characters differently, and
+  each attempt to match GHC's classes left a gap: read as bytes, `'λ'` paired the quotes after
+  it wrongly; `∘--` and `‿--` are operators to GHC and comments to perl's `\w`; GHC 9.14 knows
+  symbols from newer Unicode versions than perl (`⿼--`); and GHC lower-cases `İ` to `i` in
+  `OPTİONS_GHC`, which perl's case folding does not match. Pragmas are searched for in comments only, code rules in code
   only. `ANN`, `OPTIONS` and `COMPLETE` count only as pragmas (`{-#`), so a comment such as
   `{- Annual totals -}` passes. `COMPLETE` tells `-Wincomplete-patterns` that some constructors
   cover a type. `OPTIONS_HADDOCK` changes only the docs and is allowed; for Ormolu only
@@ -82,11 +85,15 @@ Every other gate states its reason in a comment in its own file.
   exact names, and base re-exports unsafe functions from many modules (`GHC.IO`, `GHC.Exts`).
   `-Wmissing-import-lists` makes every other import name what it brings in, also with `hiding`,
   so these three cover them all. The project's own modules are exempt: a local `unsafeChars` or a
-  `SampleTool.Internal` module is fine. They are the modules that the `.cabal` files of
-  `cabal.project`'s `packages` list outside an `if` block. A `module` line in a file that no
-  component builds does not count, or `docs/Example.hs` with `module GHC.IO` would exempt
-  base's `GHC.IO`; nor does a list under `if false`. A `.cabal` file that no `packages` entry
-  names is rejected: no build reads it.
+  `SampleTool.Internal` module is fine. GHC resolves module names per component, so the
+  exemption does too: a file may use the modules of the components whose source folders hold
+  it, and the libraries' exposed modules. Only components of the `.cabal` files that
+  `cabal.project`'s `packages` name count, with the common stanzas they import, outside `if`
+  blocks. So a `module` line in a file that no component builds (`docs/Example.hs` with
+  `module GHC.IO`), a list under `if false`, in an unused common stanza, outside every stanza or
+  in another component does not exempt base's module. A `.cabal` file that no `packages` entry
+  names is rejected: no build reads it. `mixins` and `reexported-modules` may not rename a
+  module: `Data.Text.Unsafe as SampleTool.Fast` would hide the `Unsafe` name.
 - `foreign import` is rejected: GHC2024 turns on the FFI, and a C function with a pure type is
   an `unsafePerformIO` that no step reads.
 - `module M (module M)` is rejected: it exports every name, so `-Wunused-top-binds` never sees
@@ -123,7 +130,10 @@ Every other gate states its reason in a comment in its own file.
   switches between `cabal build` and `scripts/check`.
 - Every test suite's `main-is` must be exactly the hspec-discover driver line, and its
   `other-modules` must be `*Spec` modules under the driver's folder (hspec-discover runs only
-  those) or modules that another module imports. A hand-written `Main` or a spec module with
+  those) or modules that test code imports with a non-empty list (`import M ()` brings in
+  nothing). A module may be in only one source folder of a component: GHC compiles the first
+  one it finds, so a passing copy in another folder would replace the spec that hspec-discover
+  found. A hand-written `Main` or a spec module with
   another name would run only some tests, or none. A `SpecHook.hs` under a driver's folder is
   rejected: hspec-discover applies its hook to every spec in the folder, and the hook can
   replace them. The test step passes `--failure-report`, which hspec writes at the end of a run,

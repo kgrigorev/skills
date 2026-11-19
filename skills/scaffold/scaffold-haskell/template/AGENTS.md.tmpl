@@ -44,7 +44,7 @@ hooks (use `before` and `after`) and `runIO` (read fixtures inside the example).
 name, so names like `read`, `last` and `error` are taken: call your own `readConfig` or
 `lastValue`. Only `Main` modules may import `System.Exit`. Modules of other packages with
 `Unsafe` or `Internal` in their name, their `unsafe*` functions and `foreign import` are not
-allowed.
+allowed. Names and operators are ASCII; strings and comments may hold any text.
 
 ## Layout
 

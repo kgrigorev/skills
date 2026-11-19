@@ -112,8 +112,10 @@ sub lex_haskell {
       my $comment = substr($text, $at, pos($text) - $at);
       push @comments, [$at, $comment];
       $code .= $comment =~ tr/\n//cdr;
-    } elsif ($text =~ /\G--+(?!$symbol)[^\n]*/gc) {
+    } elsif ($text =~ /\G--+(?![^\x00-\x7F]|$symbol)[^\n]*/gc) {
       # Two or more dashes start a comment unless they are part of an operator, such as -->.
+      # A non-ASCII character after them counts as part of an operator, so it stays in the code
+      # and the ASCII rule below sees it: perl's Unicode tables may not know the character.
     } elsif ($text =~ /\G"(?:[^"\\\n]|\\\s+\\|\\.)*"?/gc) {
       $code .= '"' . ($& =~ tr/\n//cdr) . '"';
     } elsif ($text =~ /\G'(?:[^'\\\n]|\\[^\n][^'\n]*)'/gc) {
@@ -138,12 +140,11 @@ sub imports {
   return @found;
 }
 
-my (%lexed, %imported);
+my %lexed;
 for my $file (@hs) {
   my $text = slurp($file);
   my ($code, $comments) = lex_haskell($text);
   $lexed{$file} = [$text, $code, $comments];
-  $imported{$_->{module}} = 1 for imports($code);
 }
 
 # Reads a .cabal or cabal.project file into fields: line, stanza number and header, indent,
@@ -190,15 +191,52 @@ for my $field (grep { $_->{name} eq "packages" && $_->{header} eq "" } @{(fields
   }
 }
 
-# The project's own modules: the ones that those .cabal files list outside an if block. A
-# module line in a file that no component builds, such as docs/Example.hs with
-# "module GHC.IO", does not count, and neither does a list under "if false".
-my %home;
+# The components that cabal builds, from those .cabal files: kind, source folders and modules,
+# with the fields of the common stanzas that each one imports. A field under an if block,
+# outside every stanza, or in a common stanza that no component imports does not count.
+my @components;
 for my $file (grep { $package{$_} } @cabal) {
-  my ($fields) = fields($file);
-  for my $field (grep { !$_->{cond} && $_->{name} =~ /^(?:exposed|other|autogen|virtual)-modules$|^signatures$/ } @$fields) {
-    $home{$_} = 1 for words_of($field->{value});
+  my ($fields, $stanzas) = fields($file);
+  (my $base = $file) =~ s{[^/]*$}{};
+  my %common = map { $stanzas->[$_]{header} =~ /^common\s+(\S+)/ ? ($1 => $_) : () } 0 .. $#$stanzas;
+  for my $id (0 .. $#$stanzas) {
+    my $stanza = $stanzas->[$id];
+    next unless $stanza->{header} =~ /^(library|executable|test-suite|benchmark|foreign-library)(?:\s|$)/;
+    my $kind = $1;
+    my @own = grep { $_->{stanza} == $id && !$_->{cond} } @$fields;
+    my %ids = map { $_ => 1 } $id, map { $common{$_} // () } map { words_of($_->{value}) } grep { $_->{name} eq "import" } @own;
+    my @in = grep { $ids{$_->{stanza}} && !$_->{cond} } @$fields;
+    my @dirs = map { words_of($_->{value}) } grep { $_->{name} eq "hs-source-dirs" } @in;
+    @dirs = (".") unless @dirs;
+    for my $dir (@dirs) {
+      $dir = "$base$dir";
+      $dir =~ s{/+}{/}g;
+      $dir =~ s{^(?:\./)+}{};
+      $dir =~ s{/+$}{};
+      $dir =~ s{(?:^|/)\.$}{};
+    }
+    my @modules = map { words_of($_->{value}) } grep { $_->{name} =~ /^(?:exposed|other|autogen|virtual)-modules$|^signatures$/ } @in;
+    my @exposed = map { words_of($_->{value}) } grep { $_->{name} eq "exposed-modules" } @in;
+    push @components, {file => $file, header => $stanza->{header}, line => $stanza->{line}, kind => $kind,
+      dirs => [@dirs], modules => \@modules, exposed => \@exposed};
   }
+}
+sub in_dir { my ($file, $dir) = @_; return $dir eq "" || index($file, "$dir/") == 0 }
+sub components_of {
+  my ($file) = @_;
+  return grep { my $c = $_; grep { in_dir($file, $_) } @{$c->{dirs}} } @components;
+}
+
+# The project's own modules, as a file sees them: the modules of the components whose source
+# folders hold the file, and the libraries' exposed modules. GHC resolves a module name per
+# component, so a module that another component lists does not count, and neither does a
+# module line in a file that no component builds, such as docs/Example.hs with "module GHC.IO".
+my %library = map { $_ => 1 } map { @{$_->{exposed}} } grep { $_->{kind} eq "library" } @components;
+sub home_of {
+  my ($file) = @_;
+  my %home = %library;
+  $home{$_} = 1 for map { @{$_->{modules}} } components_of($file);
+  return \%home;
 }
 
 my @warnings = split " ", $ENV{WARNINGS} // "";
@@ -207,6 +245,20 @@ if ($mode eq "switches") {
   for my $file (@hs) {
     my ($text, $code, $comments) = @{$lexed{$file}};
     next if $text eq $driver;
+    # Names and operators are ASCII. perl and GHC class other characters differently: GHC maps
+    # İ to i in OPTİONS_GHC, and knows symbols from newer Unicode versions than perl, so the
+    # scan would read a comment where GHC reads an operator. Strings, characters and comments
+    # may hold any text, except the first word of a block comment, where pragma names go.
+    while ($code =~ /[^\x00-\x7F]/g) {
+      my $n = line_at($code, $-[0]);
+      report($file, $n, line_of($text, $n) . " (not ASCII: names and operators must be ASCII)");
+    }
+    for my $comment (@$comments) {
+      my ($at, $body) = @$comment;
+      next unless $body =~ /^\{-\#?\s*(\S*)/ && $1 =~ /[^\x00-\x7F]/;
+      my $n = line_at($text, $at);
+      report($file, $n, line_of($text, $n) . " (not ASCII: the first word of a block comment must be ASCII)");
+    }
     # Pragmas and comments that switch off HLint, Ormolu or GHC checks, also split over lines.
     # ANN, OPTIONS and COMPLETE only work as pragmas, so a plain {- Annual ... -} comment stays
     # allowed. COMPLETE tells -Wincomplete-patterns that some constructors cover a type.
@@ -223,8 +275,9 @@ if ($mode eq "switches") {
     # and base re-exports unsafe functions from many modules. Names defined in this project,
     # such as a local unsafeChars, are fine.
     my %outside;
+    my $home = home_of($file);
     for my $import (imports($code)) {
-      my $foreign = $import->{package} || !$home{$import->{module}};
+      my $foreign = $import->{package} || !$home->{$import->{module}};
       $outside{$import->{alias}} ||= $foreign;
       next unless $foreign;
       if ($import->{module} =~ /(?:^|\.)(?:Unsafe|Internal)(?:\.|$)/
@@ -307,6 +360,21 @@ if ($mode eq "switches") {
   for my $file (grep { !$package{$_} } @cabal) {
     report($file, 1, "cabal does not read this file: cabal.project's packages do not name its folder. Remove it.");
   }
+  # A module in two source folders of one component: GHC compiles the first one it finds, so
+  # the other file, such as a spec that hspec-discover found, never builds.
+  for my $c (@components) {
+    for my $module (@{$c->{modules}}) {
+      my $path = ($module =~ s{\.}{/}gr) . ".hs";
+      my @found = grep { -f } map { $_ eq "" ? $path : "$_/$path" } @{$c->{dirs}};
+      report($c->{file}, $c->{line}, "$module is in more than one source folder of \"$c->{header}\": @found") if @found > 1;
+    }
+  }
+  # Modules that test code imports with a non-empty list or a qualifier. "import M ()" brings in
+  # nothing, so the tests in M would never run.
+  my %imported;
+  for my $file (grep { my $f = $_; grep { $_->{kind} eq "test-suite" } components_of($f) } @hs) {
+    $imported{$_->{module}} = 1 for grep { $_->{list} !~ /^\(\s*\)$/ } imports($lexed{$file}[1]);
+  }
   for my $file (@cabal) {
     my ($fields, $stanzas) = fields($file);
     my %common;
@@ -319,6 +387,11 @@ if ($mode eq "switches") {
         report($file, $line, "$name: set extensions and the language only in \"common common\"");
       }
       report($file, $line, "buildable: every component must build. Remove the field.") if $name eq "buildable";
+      # A rename gives another package's module, such as Data.Text.Unsafe, a name that the
+      # escape-hatch rule does not look for.
+      if ($name =~ /^(?:mixins|reexported-modules)$/ && $field->{value} =~ /(?<![\w-])as(?![\w-])/) {
+        report($file, $line, "$name: a rename hides which module of another package is used. Import it by its own name.");
+      }
       report($file, $line, "build-type must be Simple") if $name eq "build-type" && "@values" ne "Simple";
       if ($name eq "hs-source-dirs") { $visible->($file, $line, $name, $_) for @values }
       report($file, $line, "main-is: @values is outside the source folder") if $name eq "main-is" && "@values" =~ m{^/|\.\.};

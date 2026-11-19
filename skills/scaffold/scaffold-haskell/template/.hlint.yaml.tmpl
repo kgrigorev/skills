@@ -23,7 +23,7 @@
   - {name: [decodeUtf8, decodeUtf16LE, decodeUtf16BE, decodeUtf32LE, decodeUtf32BE, strictDecode], within: [], message: "Throws on bytes that are not valid text. Use decodeUtf8' (returns Either) or decodeUtf8Lenient."}
   # Crashes from pure code. In IO, throwIO is fine for the unexpected, such as a full disk.
   - {name: [error, errorWithoutStackTrace, undefined, throw, Control.Exception.assert, Control.Exception.Base.assert, GHC.Base.assert], within: [], message: "Return a Maybe or an Either instead."}
-  - {name: [unsafePerformIO, unsafeDupablePerformIO, unsafeInterleaveIO, unsafeCoerce], within: [], message: "Unsafe. Not allowed."}
+  - {name: [unsafePerformIO, unsafeDupablePerformIO, unsafeInterleaveIO, unsafeCoerce, inlinePerformIO, accursedUnutterablePerformIO], within: [], message: "Unsafe. Not allowed."}
   - {name: [trace, traceShow, traceShowId, traceM, traceShowM, traceId], within: [], message: "Debug output. Remove it."}
   - {name: [xit, xspecify, xdescribe, xcontext, pending, pendingWith], within: [], message: "Do not skip tests. Fix or delete them with the owner's approval."}
   - {name: [fit, fspecify, fdescribe, fcontext, focus], within: [], message: "Do not commit focused tests."}
