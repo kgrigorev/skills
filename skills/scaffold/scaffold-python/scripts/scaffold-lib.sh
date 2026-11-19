@@ -87,11 +87,17 @@ render_template() {
 }
 
 # Run inside the target after render_template: sets the executable bits, rejects leftover
-# placeholders, runs git init when needed and points git at the project's hooks.
+# placeholders, runs git init when needed and points git at the project's hooks. It reads and
+# changes only the rendered files, so the files of an existing clone stay as they are.
 finish_project() {
-  # Set by path, because some installers drop the executable bits of the template files.
-  chmod +x scripts/* .githooks/* .claude/hooks/*
-  if grep -rnE '\{\{[a-z][a-z0-9_]*\}\}' --exclude-dir=.git --exclude-dir=third_party .; then
+  for file in $rendered_files; do # template paths have no spaces
+    case $file in
+    # Set by path, because some installers drop the executable bits of the template files.
+    scripts/* | .githooks/* | .claude/hooks/*) chmod +x "$file" ;;
+    esac
+  done
+  # shellcheck disable=SC2086 # template paths have no spaces
+  if grep -nE '\{\{[a-z][a-z0-9_]*\}\}' $rendered_files; then
     fail 'the lines above still hold a placeholder. Fix the template.'
   fi
   [ -e .git ] || git init --quiet --initial-branch=main
