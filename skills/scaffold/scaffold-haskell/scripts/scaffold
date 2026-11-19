@@ -28,6 +28,13 @@ template=$(cd "$(dirname "$0")/../template" && pwd)
 ghc_version=9.14.1
 
 check_inputs "$package" "$synopsis" "$reader"
+# These names clash with a module (Prelude, Main) or a dependency of the template.
+case $package in
+prelude | main | base | text | hspec | hspec-discover)
+  fail "package \"$package\": the name clashes with a module or a dependency. Pick another." ;;
+esac
+# cabal freeze writes this file after rendering. It is not a template file, so check it here.
+[ ! -e "$target/cabal.project.freeze" ] || fail "$target/cabal.project.freeze exists. Nothing was written."
 require_hidden "$template"
 require_tools mise git
 
@@ -103,8 +110,9 @@ mise trust --quiet "$PWD/mise.toml"
 
 # cabal-gild sorts build-depends and Ormolu sorts imports. The order depends on the names.
 mise exec -- cabal-gild "$package.cabal"
-# shellcheck disable=SC2046 # file names have no spaces
-mise exec -- ormolu --mode inplace $(find app src test -name '*.hs')
+# Only the rendered sources, not other .hs files of an existing clone.
+# shellcheck disable=SC2046 # template paths have no spaces
+mise exec -- ormolu --mode inplace $(list_files | grep '\.hs$')
 # Lock the dependency versions. scripts/check compares against this file.
 mise exec -- cabal freeze -v0 || fail 'cabal freeze failed: the dependency bounds do not solve.'
 
