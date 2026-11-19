@@ -71,8 +71,12 @@ Every other gate states its reason in a comment in its own file.
   the file list on spaces. Rejecting both keeps the scans complete. `scan` also fails when grep
   cannot read a file (exit 2), which would otherwise pass as "no match".
 - **The check reads munit's summary line for each suite.** munit exits 0 for ignored tests and
-  for a suite with no tests (it reports that suite as ignored). A suite that started and did not
-  finish fails too. Tags are banned outright: `munit.Fail` turns a failing test into a pass, and
+  for a suite with no tests (it reports that suite as ignored). Every summary must also say
+  `0 failed`, so the result never rests on the exit status alone. A test that skips itself
+  (JUnit's `AssumptionViolatedException`, which needs no `assume`) shows as `==> s` while its
+  suite still says `0 ignored`, so those lines fail too, and so does `Exception in thread`: an
+  assertion in another thread never reaches munit. A suite that started and did not finish
+  fails too. Tags are banned outright: `munit.Fail` turns a failing test into a pass, and
   a tag can be built from any string. Plain `Ignore` or `Fail` stay free for domain code.
 - **The test JVM records every `System.exit` with its caller, and the last one must be the test
   runner's.** A suite that calls `sys.exit(0)`, directly or through main code, in its
@@ -80,7 +84,15 @@ Every other gate states its reason in a comment in its own file.
   summary lines cannot show a suite that never started. The JDK logs `Runtime.exit` with a stack
   trace when the `java.lang.Runtime` logger is at debug level, so the check passes a logging
   setting with `--java-opt` (not in `project.scala`) that writes those records to a temporary
-  file. `Runtime.halt` records nothing, so a missing record fails too.
+  file. `Runtime.halt` records nothing, so a missing record fails too. The record must also say
+  `exit(0)`: a shutdown hook that halts with status 0 turns the runner's `exit(1)` into a
+  passing run.
+- **Every package is the project's namespace or below it, and code may not name `scala.build`.**
+  The project's classes come first on the test classpath. A test file with
+  `package scala.build.testrunner` and an object `DynamicTestRunner` replaces the test runner,
+  prints a passing summary and exits from the expected caller. A suite that calls the real
+  runner's `main` on one good suite also exits from that caller, before its own tests run. One
+  package rule also stops stand-ins for munit, ScalaCheck and JUnit classes.
 - **The switch-off search reads the compiled code, not the source text.** The build passes
   `-Vprint:typer`, so the compiler prints every file after it resolved each name. There an alias
   (`type Quiet = nowarn`, then `@Quiet`), a renamed or wildcard import (`Fail as X`,
@@ -98,10 +110,19 @@ Every other gate states its reason in a comment in its own file.
   CLI puts in the test scope (a folder named `test`, a name that ends in `.test.scala`) and any
   file whose compiled code uses munit or ScalaCheck. A main file such as `LatestRelease.scala`
   ("test" inside a word) is main code.
-- **Tests do not catch exceptions.** `catch`, `Try(...)`, `Using(...)` and
+- **Tests do not catch exceptions.** `catch`, `Try(...)`, `Using(...)`, `Using.Manager(...)` and
   `scala.util.control.Exception` in a test file are banned: a test that catches can catch the
   AssertionError of its own failed assertion, and `NonFatal` includes munit's FailException.
-  munit's `intercept` and `interceptMessage` check a thrown exception instead.
+  munit's `intercept` and `interceptMessage` check a thrown exception instead, but only for a
+  type that munit's failures do not belong to: `Throwable`, `Error`, `AssertionError`, munit's
+  and JUnit's failure classes, and an alias or a type parameter bounded by one are banned.
+  `recover`, `recoverWith`, `fallbackTo`, `transform`, `transformWith`, `.failed` and
+  `exceptionally` are banned in tests because they turn a failed `Future` into a success; the
+  printout does not show the receiver's type, so `Map.transform` in a test is banned too.
+  `Future.failed(...)` as an input stays free.
+- **Tests may not define a `munit.Compare`.** `assertEquals` asks a given `Compare` whether two
+  values are equal, so `given munit.Compare[String, String] = (_, _) => true` makes every
+  string assertion pass.
 - **`require`, `assert` (Predef's, not munit's), `sys.error` and macros are banned in all code.**
   The first three throw without the `throw` keyword, which the Throw wart needs. A macro
   (`scala.quoted`) builds code that WartRemover never sees, such as a null literal.
@@ -140,7 +161,8 @@ Every other gate states its reason in a comment in its own file.
   cache entry expires, but a failed check is not fatal.
 - No vulnerability scan: GitHub's dependency graph and OSV-Scanner do not read `project.scala`.
 - The switch-off search bans some names in test files: `only`, `ignore`, `fail`, `pending`,
-  `flaky` and `tag` after a dot, `isCI`, `withTags`, `def test` and `def property`. A test that
+  `flaky`, `tag`, `transform`, `recover` and `failed` after a dot, `assume`, `isCI`, `withTags`,
+  `def test` and `def property`. A test that
   compares with a domain value named like a munit word after a dot (`Status.fail`) must use
   another name. A type parameter bounded by `Any` makes every type of that name suspect in
   `CanEqual`: a class named `A` next to a `[A]` somewhere needs another name.
@@ -163,6 +185,9 @@ Every other gate states its reason in a comment in its own file.
     an `Either`, `Try(...).foreach`, `Try(...).getOrElse(default)`.
   - `sys.exit` in a library function. `@main` code may exit with a status, often through a
     helper, so the search cannot tell the two apart. An exit during the tests fails the check.
+  - A catch-all in main code that a test passes its assertion to, such as
+    `def attempt[A](body: => A): Option[A] = Try(body).toOption`. Main code may catch, and the
+    search cannot tell which calls carry an assertion.
   - Tests that check nothing: no assertion, a trivially true property (also through
     `Gen.resize(0, ...)`), an assertion in a `Future` that the test drops, tests registered
     inside an `if` or in a loop over an empty list, deleted tests.

@@ -100,20 +100,30 @@ linters:
       ignore-comments: true
     forbidigo:
       # Match what a name refers to, not how it is spelled: an import alias, a *testing.T named
-      # x, a testing.TB parameter or a method value (skip := t.Skip) cannot hide a call.
+      # x, a testing.TB parameter or a method value (skip := t.Skip) cannot hide a call. A call
+      # through an interface or a type parameter declared in this module is named after that
+      # type, so it is not matched: see "Not closed" in the skill's DESIGN.md.
       analyze-types: true
+      # Example functions follow the same rules as other test code. By default forbidigo skips
+      # them, and an example that is never run is a plain function any test code can call. The
+      # exclusion rule below lets test files use fmt.Print*, which examples need for // Output:.
+      exclude-godoc-examples: false
       # Each message that says "a command (cmd/<name>/)" is allowed in a command's own files:
       # see the exclusion rules below. The others apply everywhere.
       forbid:
         # Each pattern names a way to write to the terminal, a global logger or the exit code.
-        - pattern: ^(fmt\.Print.*|print|println|os\.(Stdout|Stderr|NewFile))$
+        # os.Stdin counts too: on a terminal, file descriptor 0 is open for writing.
+        - pattern: ^(fmt\.Print.*|print|println|os\.(Stdin|Stdout|Stderr|NewFile))$
           msg: Return values from the library; print only in a command (cmd/<name>/).
-        - pattern: ^(log\.(Print|Fatal|Panic|Default|SetOutput|Output|Writer).*|slog\.(Debug|Info|Warn|Error|Log|LogAttrs|Default|SetDefault).*)$
+        # Only the package functions: a *slog.Logger or *log.Logger passed in as a parameter is
+        # the way to log from the library.
+        - pattern: ^(log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln|Default|SetOutput|SetFlags|SetPrefix|Output|Writer)|slog\.((Debug|Info|Warn|Error|Log)(Context)?|LogAttrs|Default|SetDefault|SetLogLoggerLevel))$
           msg: Take a logger as a parameter, or return the information; log only in a command (cmd/<name>/).
         # os.FindProcess gives a handle on the program's own process, which can then kill it.
-        - pattern: ^(os\.(Exit|FindProcess)|runtime\.Goexit)$
+        # A *log.Logger's Fatal methods exit, and its Panic methods panic, like log.Fatal.
+        - pattern: ^(os\.(Exit|FindProcess)|runtime\.Goexit|log\.Logger\.(Fatal|Fatalf|Fatalln))$
           msg: Return an error; only a command (cmd/<name>/) decides the exit code.
-        - pattern: ^panic$
+        - pattern: ^(panic|log\.Logger\.(Panic|Panicf|Panicln))$
           msg: Return an error instead; only a command (cmd/<name>/) may panic.
         # Raw system calls reach around every rule above (write to file descriptor 1, kill the
         # process). A command may use them, for example syscall.SIGTERM for os/signal.
@@ -124,17 +134,30 @@ linters:
           pkg: ^golang\.org/x/sys/(unix|windows)$
           msg: Use the os, os/signal and io packages; raw system calls only in a command (cmd/<name>/), or with the owner's approval.
         # A setting read from the environment is a hidden input, and a test that reads it can
-        # skip itself (if os.Getenv("SLOW") == "" { return }).
-        - pattern: ^os\.(Getenv|LookupEnv|Environ|ExpandEnv)$
+        # skip itself (if os.Getenv("SLOW") == "" { return }). exec.Cmd.Environ returns the
+        # whole environment too.
+        - pattern: ^(os\.(Getenv|LookupEnv|Environ|ExpandEnv)|exec\.Cmd\.Environ)$
           msg: Take settings as parameters; only a command (cmd/<name>/) reads the environment. Tests set it with t.Setenv.
-        # A skipped test passes without checking anything. Matched by type, so every name and
-        # form counts: t.Skip, x.Skipf, tb.SkipNow, (*testing.T).Skip, skip := t.Skip.
+        # The command line is a hidden input in the same way, and the global flag set can change
+        # the test flags (-test.run, -rapid.checks) or exit on a bad flag (flag.ExitOnError).
+        # A flag.FlagSet made with flag.ContinueOnError and given its arguments stays allowed.
+        - pattern: ^(os\.(Args|Executable)|flag\.(Parse|Parsed|Set|Lookup|Arg|Args|NArg|NFlag|Visit|VisitAll|CommandLine|ExitOnError))$
+          msg: Take arguments as parameters; only a command (cmd/<name>/) reads the command line.
+        # Code that asks whether it runs under test checks something other than what runs in
+        # production, so the test proves nothing.
+        - pattern: ^testing\.Testing$
+          pkg: ^testing$
+          msg: Behave the same under test; pass what differs as a parameter.
+        # A skipped test passes without checking anything. Matched by type, so a *testing.T
+        # under any name counts: t.Skip, x.Skipf, tb.SkipNow, (*testing.T).Skip, skip := t.Skip.
         - pattern: ^testing\..*\.Skip(f|Now)?$
           pkg: ^testing$
           msg: A test must not skip itself; fix it or delete it.
-        - pattern: ^testing\.Short$
+        # scripts/check always passes -v, so a test that returns under testing.Verbose() skips
+        # itself in every gate run and runs only in a plain go test.
+        - pattern: ^testing\.(Short|Verbose)$
           pkg: ^testing$
-          msg: A test must not skip itself under -short; fix it or delete it.
+          msg: A test must not skip itself under -short or -v; fix it or delete it.
         # In rapid, t.Skip drops an input: draw only valid inputs instead (rapid.Custom, Filter).
         - pattern: ^rapid\.T\.Skip(f|Now)?$
           pkg: ^pgregory\.net/rapid$
@@ -171,6 +194,11 @@ linters:
       - path: ^cmd/[^/]+/([^/]*([^t/]|[^s/]t|[^e/]st|[^t/]est|[^_/]test)|t|st|est|test)\.go$
         text: fmt\.Fprint
         linters: [errcheck]
+      # Examples print what their // Output: comment checks, so test files may use fmt.Print*.
+      # os.Stdout, os.Stderr and println stay forbidden there.
+      - path: _test\.go$
+        text: "use of `fmt\\.Print"
+        linters: [forbidigo]
       # Table tests are long by nature.
       - path: _test\.go$
         linters: [funlen]

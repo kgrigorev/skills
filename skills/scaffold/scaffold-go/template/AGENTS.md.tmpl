@@ -5,9 +5,10 @@ Write code that {{reader}} can read. Setup is in `README.md`.
 
 ## Checks
 
-`scripts/check` runs every gate: gofumpt and import order, tidy `go.mod` and `go.sum`,
-golangci-lint (which includes `go vet`), a search for files no check sees and for switched-off
-checks, the build, and the tests with the race detector. The git hook and CI run it too.
+`scripts/check` runs every gate: gofumpt and import order, tidy `go.mod` and `go.sum`, an
+unchanged module cache, golangci-lint (which includes `go vet`), a search for files no check
+sees and for switched-off checks, the build, and the tests with the race detector. The git hook
+and CI run it too.
 
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
@@ -40,13 +41,18 @@ The checks enforce: gofumpt formatting and import order, a doc comment on every 
 (exported or not), handled errors (also `_ = f()` and `x.(T)`), wrapped errors from other
 packages, no `reflect` outside tests and no `unsafe`, cgo, assembly or other non-Go files
 without the owner's approval, no package-level variables or `init`, no test that skips itself
-(`t.Skip` under any name, `testing.Short`, rapid's `t.Skip`), and no data races. `//nolint`,
-other inline switches, `//line` directives and a `Code generated` header do not switch a
-linter off: fix the cause. A `TestMain` must call `m.Run()`.
+(`t.Skip` under any name, `testing.Short`, `testing.Verbose`, rapid's `t.Skip`), and no data
+races. `//nolint`, `//go:norace`, other inline switches, `//line` directives and a
+`Code generated` header do not switch a check off: fix the cause. A `TestMain` needs the
+owner's approval (`allowed_testmain` in `scripts/check`), and it calls `m.Run()` and returns.
+Test files may print only with `fmt.Print*`, which examples need for their `Output` comment.
 
-Only a command, package main directly in `cmd/<name>/` (not its tests), may print, log, exit,
-panic, read the environment (`os.Getenv`) or use `syscall`, and only a command may have no
-tests. Every other package, `cmd/<name>/internal/` included, runs at least one test.
+Only a command, package main directly in `cmd/<name>/` (not its tests), may print, log through
+the `log` or `slog` package functions, exit, panic, read the environment (`os.Getenv`) or the
+command line (`os.Args`, `flag.Parse`) or use `syscall`, and only a command may have no tests,
+while it declares no function but `main` and `run`.
+The library logs on a `*slog.Logger` or `*log.Logger` it is given. No code asks whether it runs
+under test (`testing.Testing`). Every other package, `cmd/<name>/internal/` included, runs at least one test.
 
 Property tests use a fixed seed in `scripts/check`, so a run is repeatable. A plain `go test`
 draws a random seed, so set `RAPID_SEED=1` and `-count=1` to rerun what the check ran. The

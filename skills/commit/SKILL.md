@@ -5,8 +5,8 @@ description: Write a git commit message. Use whenever you commit.
 
 # Commit message
 
-In a squash-merge repo the branch commits vanish at merge, and the PR title and body become the
-commit on `main`. So branch commits stay short. The full story goes into the PR body.
+Branch commits stay short; the full story goes into the PR body, which reviewers read and the
+merge keeps on `main`. The merge method is the `pull-request` skill's call.
 
 1. **Title.** Follow the repo's convention: `AGENTS.md`, a CI title check, or else
    `git log --format=%s -20`. Default: `type(scope): what changed`, at most 72 characters, with
