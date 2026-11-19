@@ -34,8 +34,9 @@ python-preference = "only-managed"
 # Lint and format every file, also one that .gitignore or a .ignore file names. ruff's default
 # exclude list still skips .venv and the tool caches.
 respect-gitignore = false
-# Vendored agent skills (SKILL.md files and their scripts) are not this project's code.
-extend-exclude = [".agents"]
+# Vendored agent skills (SKILL.md files and their scripts) are not this project's code. "./": only
+# the folder at the root, not one of that name under tests/.
+extend-exclude = ["./.agents"]
 
 [tool.ruff.lint]
 # Every stable rule. The set grows only when the ruff pin is bumped. Preview rules stay off.
@@ -65,7 +66,7 @@ convention = "google"
   "T201", # the entry point prints the program's output
 ]
 "tests/conftest.py" = [
-  "TID251", # the gate file registers the Hypothesis profiles with hypothesis.settings
+  "TID251", # the gate file uses hypothesis.settings, sys.monitoring, warnings.filters and atexit
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
@@ -81,6 +82,36 @@ ban-relative-imports = "all"
 "typing_extensions.no_type_check".msg = "no_type_check switches the type checker off."
 "contextlib.suppress".msg = "suppress swallows errors. Catch the specific exception and handle it."
 "os._exit".msg = "os._exit ends the process before pytest reports failures and coverage saves data."
+# Code that runs at interpreter exit, after pytest and coverage, or that replaces the process,
+# can set the exit status of the run to 0. posix and nt are os under their platform names.
+"atexit".msg = "Code at exit runs after pytest and coverage and can change the result of the run."
+"posix".msg = "Use os, not posix."
+"nt".msg = "Use os, not nt."
+"ctypes".msg = "ctypes calls C directly, past every check (for example _exit)."
+"_ctypes".msg = "ctypes calls C directly, past every check (for example _exit)."
+"os.execl".msg = "A new or replaced process can change the exit status."
+"os.execle".msg = "A new or replaced process can change the exit status."
+"os.execlp".msg = "A new or replaced process can change the exit status."
+"os.execlpe".msg = "A new or replaced process can change the exit status."
+"os.execv".msg = "A new or replaced process can change the exit status."
+"os.execve".msg = "A new or replaced process can change the exit status."
+"os.execvp".msg = "A new or replaced process can change the exit status."
+"os.execvpe".msg = "A new or replaced process can change the exit status."
+"os.spawnl".msg = "A new or replaced process can change the exit status."
+"os.spawnle".msg = "A new or replaced process can change the exit status."
+"os.spawnlp".msg = "A new or replaced process can change the exit status."
+"os.spawnlpe".msg = "A new or replaced process can change the exit status."
+"os.spawnv".msg = "A new or replaced process can change the exit status."
+"os.spawnve".msg = "A new or replaced process can change the exit status."
+"os.spawnvp".msg = "A new or replaced process can change the exit status."
+"os.spawnvpe".msg = "A new or replaced process can change the exit status."
+"os.posix_spawn".msg = "A new or replaced process can change the exit status."
+"os.posix_spawnp".msg = "A new or replaced process can change the exit status."
+"os.fork".msg = "A new or replaced process can change the exit status."
+"os.forkpty".msg = "A new or replaced process can change the exit status."
+# tests/conftest.py uses both to catch a swallowed assert and a silenced warning.
+"sys.monitoring".msg = "sys.monitoring can switch off the caught-assert check in tests/conftest.py."
+"warnings.filters".msg = "A warning is a failure. Fix its cause."
 "pytest.skip".msg = "A skipped test checks nothing."
 "pytest.xfail".msg = "An expected failure checks nothing."
 "pytest.importorskip".msg = "A skipped test checks nothing."

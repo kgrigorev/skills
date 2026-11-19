@@ -43,7 +43,10 @@ Hypothesis settings live only in `tests/conftest.py`; run a state machine with
 `if TYPE_CHECKING:`, with no `else` and only imports in it. Use `platform.system()`, not
 `sys.platform`. A test never expects or catches `AssertionError`,
 `Exception` or `BaseException`, and a test that catches a failing assert in any other way fails.
-pytest loads only the plugins that `pyproject.toml` names.
+Library code never names `AssertionError`: raise a specific exception. pytest loads only the
+plugins that `pyproject.toml` names. No code uses the plugin manager, `sys.monitoring`,
+`warnings.filters`, `atexit`, `ctypes` or `os.exec*`/`os.spawn*`/`os.fork`. Coverage skips
+only `if TYPE_CHECKING:`, `...` bodies, the `python -m` guard and `assert_never(x)`.
 
 The editor language server is pyright. When pyright and mypy disagree, mypy wins: it is the gate.
 
@@ -51,7 +54,8 @@ The editor language server is pyright. When pyright and mypy disagree, mypy wins
 
 - Logic goes in the library under `src/{{module}}/`. `__main__.py` only calls it.
 - Every `tests/test_*.py` file runs automatically. Python files go only in `src/{{module}}/`
-  and `tests/`; `scripts/check` rejects them anywhere else. Vendored agent skills in `.agents/`
+  and `tests/`, in folders whose names do not start with a dot; `scripts/check` rejects them
+  anywhere else. Vendored agent skills in `.agents/`
   are not project code, and the gates skip them.
 - `.python-version` names the exact Python. uv installs it; never use a system Python.
 - A new dependency needs the owner's approval. Then `uv add <name>` updates `pyproject.toml` and

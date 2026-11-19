@@ -1,5 +1,6 @@
 """Shared test settings and gates. Agents: change only with the owner's approval."""
 
+import atexit
 import inspect
 import os
 import sys
@@ -8,6 +9,7 @@ from collections.abc import Generator
 from types import CodeType
 
 import pytest
+from _pytest.cacheprovider import LFPluginCollSkipfiles
 from hypothesis import HealthCheck, settings
 
 # scripts/check runs the "check" profile: the same examples on every run and machine.
@@ -35,6 +37,9 @@ _failed: list[str] = []
 _reported: set[str] = set()
 _collected: list[str] = []
 _plugins: set[object] = set()
+# Read once at startup: a test can change config.option, and the final check
+# trusts nothing that a test can reach.
+_options = {"collect_only": False, "started": False, "finished": False}
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -46,12 +51,52 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.inipath != config.rootpath / "pyproject.toml":
         msg = f"pytest read its settings from {config.inipath}. Remove that file."
         raise pytest.UsageError(msg)
+    _options["collect_only"] = bool(config.option.collectonly)
+    _monitor["tool"] = _monitoring_tool()
+
+
+def pytest_unconfigure() -> None:
+    """Free the sys.monitoring tool id, so pytest can run again in this process."""
+    tool = _monitor["tool"]
+    if sys.monitoring.get_tool(tool) == "tests/conftest.py":
+        sys.monitoring.set_events(tool, sys.monitoring.events.NO_EVENTS)
+        sys.monitoring.free_tool_id(tool)
+
+
+def _fail_if_checks_skipped() -> None:
+    """Fail at exit when the session started but the final check never ran.
+
+    A test that unregisters this conftest also stops its hooks, so this runs
+    from atexit, which tests may not use (pyproject.toml).
+    """
+    if _options["started"] and not _options["finished"]:
+        sys.stderr.write("\nThe checks in tests/conftest.py did not run to the end.\n")
+        sys.stderr.flush()
+        os._exit(pytest.ExitCode.USAGE_ERROR)
+
+
+atexit.register(_fail_if_checks_skipped)
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Remember the plugins before any test module is imported."""
+    """Start a fresh record and remember the plugins before any test module is imported.
+
+    The record is cleared first: pytest can run more than once in one process.
+    """
+    for record in (
+        _failed,
+        _reported,
+        _collected,
+        _plugins,
+        _not_run,
+        _modules,
+        _imported,
+    ):
+        record.clear()
     _plugins.update(session.config.pluginmanager.get_plugins())
+    _options["started"] = True
+    _options["finished"] = False
 
 
 def pytest_collectstart(collector: pytest.Collector) -> None:
@@ -60,22 +105,38 @@ def pytest_collectstart(collector: pytest.Collector) -> None:
         _modules.append(collector)
 
 
-def _fail_on_new_plugins(config: pytest.Config) -> None:
-    """Stop the run at once when code registered a pytest plugin after startup.
+def _pytest_own(manager: pytest.PytestPluginManager, plugin: object) -> bool:
+    """Tell whether pytest itself added this plugin during the run.
 
-    A plugin added by a test can rewrite any report and the exit status, so no
-    later check could be trusted. os._exit ends the process before it can. pytest
-    adds plugins of its own on the way, for example for --lf.
+    The only one is the --lf helper that skips files without failures. It must be
+    of that exact class, under its own name, with no hooks added to the object.
+    """
+    return (
+        type(plugin) is LFPluginCollSkipfiles
+        and manager.get_name(plugin) == "lfplugin-collskip"
+        and not any(name.startswith("pytest_") for name in vars(plugin))
+    )
+
+
+def _fail_on_new_plugins(config: pytest.Config) -> None:
+    """Stop the run at once when code added or removed a pytest plugin after startup.
+
+    A plugin added by a test can rewrite any report and the exit status, and a
+    removed one stops checking, so no later check could be trusted. os._exit ends
+    the process before either can act.
     """
     manager = config.pluginmanager
-    added = {
-        plugin
-        for plugin in manager.get_plugins() - _plugins
-        if not getattr(type(plugin), "__module__", "").startswith("_pytest.")
-    }
-    if added:
+    plugins = manager.get_plugins()
+    added = [
+        plugin for plugin in plugins - _plugins if not _pytest_own(manager, plugin)
+    ]
+    removed = _plugins - plugins
+    if added or removed:
         names = ", ".join(sorted(str(manager.get_name(plugin)) for plugin in added))
-        sys.stderr.write(f"\nA test registered pytest plugins: {names}. Remove them.\n")
+        sys.stderr.write(
+            f"\nA test registered or removed pytest plugins: {names or 'removed'}. "
+            "Remove that code.\n"
+        )
         sys.stderr.flush()
         os._exit(pytest.ExitCode.USAGE_ERROR)
 
@@ -135,17 +196,20 @@ def pytest_runtest_makereport(
     return report
 
 
-# The AssertionErrors that code caught while the current test body ran.
+# Where code caught an AssertionError while the current test body ran.
 _caught_assert: list[str] = []
 
 
 def _on_exception_handled(
     code: CodeType, offset: int, exception: BaseException
 ) -> None:
-    """Note an AssertionError that some code caught, while a test body runs."""
-    del code, offset
+    """Note where some code caught an AssertionError, while a test body runs."""
     if isinstance(exception, AssertionError):
-        _caught_assert.append(type(exception).__name__)
+        line = next(
+            (line for start, end, line in code.co_lines() if start <= offset < end),
+            code.co_firstlineno,
+        )
+        _caught_assert.append(f"{code.co_filename}:{line}")
 
 
 def _monitoring_tool() -> int:
@@ -161,7 +225,8 @@ def _monitoring_tool() -> int:
     raise pytest.UsageError(msg)
 
 
-_TOOL = _monitoring_tool()
+# The sys.monitoring tool id: taken in pytest_configure, freed in pytest_unconfigure.
+_monitor = {"tool": 0}
 
 
 # The warning filters as they were before a test's fixtures ran.
@@ -184,16 +249,32 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None]:
     as recwarn, or a call such as warnings.resetwarnings(), turns warnings back into
     messages, and a warning is a failure here.
     """
+    tool = _monitor["tool"]
     _caught_assert.clear()
-    sys.monitoring.set_events(_TOOL, sys.monitoring.events.EXCEPTION_HANDLED)
+    sys.monitoring.set_events(tool, sys.monitoring.events.EXCEPTION_HANDLED)
     try:
         result = yield
     finally:
-        sys.monitoring.set_events(_TOOL, sys.monitoring.events.NO_EVENTS)
+        intact = (
+            sys.monitoring.get_tool(tool) == "tests/conftest.py"
+            and sys.monitoring.get_events(tool)
+            == sys.monitoring.events.EXCEPTION_HANDLED
+            and sys.monitoring.register_callback(
+                tool, sys.monitoring.events.EXCEPTION_HANDLED, _on_exception_handled
+            )
+            is _on_exception_handled
+        )
+        sys.monitoring.set_events(tool, sys.monitoring.events.NO_EVENTS)
+    if not intact:
+        pytest.fail(
+            "The test changed sys.monitoring, which the caught-assert check uses.",
+            pytrace=False,
+        )
     if _caught_assert:
         pytest.fail(
-            "The test caught a failing assert (AssertionError), so it passed anyway. "
-            "Let the assert fail; pytest.raises tests an expected exception.",
+            "The test caught a failing assert (AssertionError), so it passed anyway, "
+            f"at {', '.join(_caught_assert)}. Let the assert fail; pytest.raises "
+            "tests an expected exception.",
             pytrace=False,
         )
     if tuple(warnings.filters) != item.stash[_FILTERS] or any(
@@ -211,7 +292,8 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None]:
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """Fail the run when a test failed, did not run, or was skipped."""
-    if session.exitstatus != pytest.ExitCode.OK or session.config.option.collectonly:
+    _options["finished"] = True
+    if session.exitstatus != pytest.ExitCode.OK or _options["collect_only"]:
         return
     never_ran = [nodeid for nodeid in _collected if nodeid not in _reported]
     problems = [

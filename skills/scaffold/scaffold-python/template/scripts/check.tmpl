@@ -56,13 +56,15 @@ step 'No switched-off checks'
 # Comments that switch off ruff (also in its flake8: form), mypy, other type checkers, the
 # formatter (fmt:, and yapf:, which ruff format honours too) or coverage; skipped,
 # expected-to-fail, uncollected or deselected tests; silenced warnings; Hypothesis settings that
-# run fewer examples; pytest hooks and plugins, also bound by assignment. ruff's banned-api
-# (pyproject.toml) catches the same APIs under an alias, and casts.
+# run fewer examples; pytest hooks and plugins, also bound by assignment, and the plugin
+# manager; code that runs at exit or ends the process (atexit, _exit); the APIs the conftest's
+# own checks use (sys.monitoring, warnings.filters). ruff's banned-api (pyproject.toml) catches
+# the same APIs under an alias, and casts.
 # tests/conftest.py is a gate file and is exempt: it holds the Hypothesis profiles and the hooks
 # that fail skipped, dropped and uncollected tests. It is the only conftest.py: the layout check
 # below rejects any other. .agents/ holds vendored agent skills (SKILL.md, step 4): no code of
 # this project, nothing imports it, and the gates skip it.
-switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|flake8:|fmt:|yapf:|isort:|pragma[:[:space:]]*no)|no_type_check|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|collect_ignore|__test__'
+switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|flake8:|fmt:|yapf:|isort:|pragma[:[:space:]]*no)|no_type_check|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit([^[:alnum:]_]|$)|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|pluginmanager|collect_ignore|__test__|atexit|(^|[^[:alnum:]_])_exit([^[:alnum:]_]|$)|sys\.monitoring|warnings\.filters'
 # git grep reads the working tree, skips deleted and ignored files, and has one regex engine
 # everywhere. -i: the tools accept `# NOQA` and `# PRAGMA NO COVER`. -a: a .gitattributes that
 # marks code as binary must not hide it. Exit 1 means no match; any other non-zero exit is an
@@ -89,23 +91,35 @@ esac
 #   one, and library code raises a specific exception instead.
 # - Imports from Hypothesis's private modules (hypothesis._settings, hypothesis.internal):
 #   ruff's banned-api does not see hypothesis.settings under those paths.
-# - Control characters, which most diffs do not show, and coverage's own pragma comments as
-#   coverage reads them (Python's \s also matches Unicode spaces, which the search above
-#   does not).
+# - Control characters and line separators, which most diffs do not show, and coverage's own
+#   pragma comments as coverage reads them (Python's \s also matches Unicode spaces, which the
+#   search above does not).
+# - In the package, any line that coverage skips other than the shapes that hide no code that
+#   runs: `if TYPE_CHECKING:`, a function whose body is `...`, the `python -m` guard and
+#   `assert_never(x)`. coverage's own parser decides what it skips, so a pragma split over two
+#   lines or a pattern inside a string is seen too.
 ast_check=$(cat <<'PY'
 import ast
 import os
 import re
 import sys
+import tomllib
 
 from coverage.config import DEFAULT_EXCLUDE, DEFAULT_PARTIAL
+from coverage.misc import join_regex
+from coverage.parser import PythonParser
 
 # Coverage's own patterns for its pragma comments. The others (if TYPE_CHECKING:, a `...` body)
 # hide no code that runs.
 PRAGMA = re.compile(
     "|".join(pattern for pattern in DEFAULT_EXCLUDE + DEFAULT_PARTIAL if "pragma" in pattern)
 )
-CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
+CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85\u2028\u2029]")
+with open("pyproject.toml", "rb") as file:
+    REPORT = tomllib.load(file).get("tool", {}).get("coverage", {}).get("report", {})
+EXCLUDE = join_regex(
+    REPORT.get("exclude_lines", DEFAULT_EXCLUDE) + REPORT.get("exclude_also", [])
+)
 BROAD = {"AssertionError", "Exception", "BaseException"}
 
 
@@ -138,6 +152,71 @@ def private_hypothesis(node):
         and any(part.startswith("_") or part == "internal" for part in module.split(".")[1:])
         for module in modules
     )
+
+
+def ellipsis_only(body):
+    return all(
+        isinstance(child, ast.Expr) and isinstance(child.value, ast.Constant)
+        and isinstance(child.value.value, (str, type(...)))
+        for child in body
+    ) and any(child.value.value is ... for child in body)
+
+
+def call_of(node, name):
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == name
+    )
+
+
+def main_guard(node):
+    test = node.test if isinstance(node, ast.If) else None
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+        and not node.orelse
+        and len(node.body) == 1
+        and call_of(node.body[0], "main")
+        and not node.body[0].value.args
+    )
+
+
+def may_skip(tree):
+    lines = set()
+    for node in ast.walk(tree):
+        if (
+            (type_checking(node) and not node.orelse)
+            or main_guard(node)
+            or (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and ellipsis_only(node.body)
+            )
+            or (
+                call_of(node, "assert_never")
+                and len(node.value.args) == 1
+                and isinstance(node.value.args[0], (ast.Name, ast.Attribute))
+            )
+            or (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and node.value.value is ...
+            )
+        ):
+            lines.update(range(node.lineno, node.end_lineno + 1))
+    return lines
+
+
+def skipped_by_coverage(text, path, tree):
+    parser = PythonParser(text=text, filename=path, exclude=EXCLUDE)
+    parser.parse_source()
+    code = {node.lineno for node in ast.walk(tree) if isinstance(node, ast.stmt)}
+    return sorted((parser.excluded & code) - may_skip(tree))
 
 
 def bound_names(node):
@@ -173,7 +252,11 @@ for path in sys.argv[1:]:
         if isinstance(node, ast.If) and not node.orelse
     }
     found = []
-    for number, line in enumerate(text.splitlines(), 1):
+    if path.startswith("src/"):
+        for number in skipped_by_coverage(text, path, tree):
+            found.append((number, "coverage skips this line (an exclusion pattern matches)"))
+    # Only \n: splitlines() also breaks at the separators that CONTROL looks for.
+    for number, line in enumerate(text.split("\n"), 1):
         if CONTROL.search(line):
             found.append((number, "a control character, which a diff does not show"))
         if PRAGMA.search(line):
@@ -233,13 +316,15 @@ fi
 # mypy checks src/ and tests/, coverage measures only the package, and pytest collects only
 # tests/test_*.py. Python anywhere else would be linted but never type-checked, measured or run.
 # A .pyi stub beside a module makes mypy read the stub instead of the code; the package ships
-# py.typed, so it needs none.
+# py.typed, so it needs none. mypy also skips files and folders whose names start with a dot,
+# which pytest still collects.
+layout='^src/{{module}}/([^./][^/]*/)*[^./][^/]*\.py$|^tests/([^./][^/]*/)*test_[^/]*\.py$'
 misplaced=$(git ls-files --cached --others --exclude-standard -- '*.py' '*.pyi' ':!.agents/' |
-  grep -vE '^src/{{module}}/.*\.py$|^tests/(.*/)?test_[^/]*\.py$|^tests/conftest\.py$' || true)
+  grep -vE "$layout|^tests/conftest\.py$" || true)
 if [ -n "$misplaced" ]; then
   printf '%s\n' "$misplaced"
   echo 'Move the files above: code goes in src/{{module}}/, tests and their fixtures in' \
-    'tests/test_*.py. No .pyi stubs.' >&2
+    'tests/test_*.py, in folders whose names do not start with a dot. No .pyi stubs.' >&2
   exit 1
 fi
 # The tools read a file that git ignores, but the search above skips it and CI never gets it:

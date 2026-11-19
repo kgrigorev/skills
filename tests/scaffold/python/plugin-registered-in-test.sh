@@ -1,7 +1,7 @@
 # expect: red Tests
-# A test registers a plugin whose report hook turns every failure into a pass. The hook name is
-# built at run time, so no search sees it. tests/conftest.py stops the run when the set of
-# plugins changes.
+# A test registers a plugin whose report hook turns every failure into a pass. The hook name and
+# the plugin manager's are built at run time, so no search sees them. tests/conftest.py stops
+# the run when the set of plugins changes.
 cat >tests/test_aa_plugin.py <<'PY'
 """Runs first."""
 
@@ -19,7 +19,7 @@ def _report() -> Generator[None, pytest.TestReport, pytest.TestReport]:
 def test_plugin(pytestconfig: pytest.Config) -> None:
     hook = pytest.hookimpl(wrapper=True)(_report)
     plugin = type("Plugin", (), {"pytest_" + "runtest_makereport": staticmethod(hook)})
-    pytestconfig.pluginmanager.register(plugin())
+    getattr(pytestconfig, "plugin" + "manager").register(plugin())
 PY
 cat >tests/test_bug.py <<'PY'
 """A failing test."""

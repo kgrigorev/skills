@@ -76,10 +76,13 @@ sys.exit(keyword.iskeyword(name) or keyword.issoftkeyword(name)
 # would pick an old tool version that does without it.
 dev_tools='coverage hypothesis mypy pytest ruff'
 # shellcheck disable=SC2086 # one word per tool
-needed=$(printf '%s\n' $dev_tools |
+# Resolved first on its own: in a pipeline sh sees only the last command's exit status.
+resolved=$(printf '%s\n' $dev_tools |
   uv pip compile --quiet --no-header --no-annotate --universal \
-    --python-version "$python_version" - |
-  sed -n 's/^\([A-Za-z0-9._-]*\)==.*/\1/p' | tr 'A-Z._' 'a-z--')
+    --python-version "$python_version" -) ||
+  fail 'uv could not resolve the dev tools. Check the network and try again.'
+needed=$(printf '%s\n' "$resolved" | sed -n 's/^\([A-Za-z0-9._-]*\)==.*/\1/p' |
+  tr 'A-Z._' 'a-z--')
 if printf '%s\n' "$needed" | grep -qx -e "$package"; then
   fail "package \"$package\": the dev tools need a package of that name. Pick another name."
 fi
