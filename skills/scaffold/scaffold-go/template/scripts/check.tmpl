@@ -49,6 +49,9 @@ unset RAPID_FAILFILE RAPID_SHRINKTIME RAPID_LOG RAPID_V RAPID_DEBUG RAPID_DEBUGV
 allowed_hidden=''
 # Assembly, C and other non-Go files that the owner approved, listed the same way.
 allowed_foreign=''
+# Test files with a TestMain that the owner approved, listed the same way. A TestMain runs
+# before every test of its package and decides whether they run at all.
+allowed_testmain=''
 
 step() { printf '\n==> %s\n' "$1"; }
 
@@ -195,11 +198,12 @@ if [ -n "$unchecked" ]; then
   echo 'The code imports the packages above, but ./... skips their folders, so no check sees them. Move them.' >&2
   exit 1
 fi
-# Comments that switch off a linter, change runtime defaults or reach into unexported symbols,
-# and line directives (//line, /*line*/), which move code to another reported file and line, so
-# a rule that excludes a path (cmd/) would apply to it. Searched in every file above, so a file
-# that git ignores is searched too. Test skips are found by forbidigo in Lint, by type.
-switch_off='//[[:space:]]*(nolint|lint:|#?nosec|gosec:disable|exhaustive:ignore|go:debug|go:linkname)|#nosec|//line[[:space:]]|/\*line[[:space:]]'
+# Comments that switch off a linter (//nolint, //godoclint:disable, ...) or the race detector
+# (//go:norace), change runtime defaults or reach into unexported symbols, and line directives
+# (//line, /*line*/), which move code to another reported file and line, so a rule that excludes
+# a path (cmd/) would apply to it. Searched in every file above, so a file that git ignores is
+# searched too. Test skips are found by forbidigo in Lint, by type.
+switch_off='//[[:space:]]*(nolint|lint:|godoclint:|#?nosec|gosec:disable|exhaustive:ignore|go:debug|go:linkname|go:norace)|#nosec|//line[[:space:]]|/\*line[[:space:]]'
 # shellcheck disable=SC2016 # $0 is awk's, not the shell's.
 sort -u "$work/seen" "$work/git" | tr '\n' '\0' |
   switch_off=$switch_off xargs -0 awk '
@@ -207,6 +211,22 @@ sort -u "$work/seen" "$work/git" | tr '\n' '\0' |
 if [ -s "$work/switched" ]; then
   cat "$work/switched"
   echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
+  exit 1
+fi
+# A TestMain decides whether its package's tests run: it can skip m.Run, or change flags such as
+# -test.run or -rapid.checks first. So each one needs the owner's approval: list its file in
+# allowed_testmain. Format has already run, so a declaration starts its line as "func TestMain(".
+# shellcheck disable=SC2016 # $0 is awk's, not the shell's.
+testmain=$(sort -u "$work/seen" "$work/git" | grep '_test\.go$' | tr '\n' '\0' |
+  xargs -0 awk '/^func TestMain\(/ { print FILENAME }' | while IFS= read -r file; do
+  case " $allowed_testmain " in
+  (*" $file "*) ;;
+  (*) printf '%s\n' "$file" ;;
+  esac
+done)
+if [ -n "$testmain" ]; then
+  printf '%s\n' "$testmain"
+  echo 'The files above declare a TestMain, which decides whether the tests run. Remove it, or ask the owner to approve it.' >&2
   exit 1
 fi
 for extra in .golangci.yaml .golangci.toml .golangci.json go.work; do
@@ -230,12 +250,14 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 grep -E '^(ok|\?)[[:space:]]' "$work/test"
-# A package passes with no test run when it has no _test.go ("?"), when its _test.go has no test,
-# or when a TestMain never calls m.Run. Only a command (package main directly in cmd/) may run no
-# tests: packages below it, such as cmd/<name>/internal/, hold logic and need tests.
+# A package passes with no test run when it has no _test.go ("?"), when its _test.go has no test
+# ("[no tests to run]"), or when a TestMain never calls m.Run. Test code can print, so a "=== RUN"
+# line alone proves nothing when go test also says "[no tests to run]". Only a command (package
+# main directly in cmd/) may run no tests: packages below it, such as cmd/<name>/internal/, hold
+# logic and need tests.
 empty=$(awk -v cmd="$module/cmd/" '
   /^=== RUN / { runs++ }
-  $1 == "ok" { if (runs == 0) print $2; runs = 0 }
+  $1 == "ok" { if (runs == 0 || index($0, "[no tests to run]")) print $2; runs = 0 }
   $1 == "?" { if (index($2, cmd) != 1 || substr($2, length(cmd) + 1) ~ /\//) print $2; runs = 0 }' "$work/test")
 if [ -n "$empty" ]; then
   printf '%s\n' "$empty"
