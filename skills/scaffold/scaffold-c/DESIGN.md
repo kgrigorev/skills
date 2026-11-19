@@ -24,8 +24,8 @@ Every other gate states its reason in a comment in its own file.
   runner's C library instead of the pinned one.
 - On macOS the SDK comes from the Xcode Command Line Tools. A new SDK can add deprecation warnings
   locally that Linux CI does not see.
-- Unity 2.7.0 is vendored in `third_party/unity/`: `src/unity.c`, `src/unity.h`,
-  `src/unity_internals.h` and `LICENSE.txt`, unchanged from
+- Unity 2.7.0 is vendored in `third_party/unity/`: `unity.c`, `unity.h` and `unity_internals.h`
+  (`src/` in the release) and `LICENSE.txt`, unchanged from
   `https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.7.0.tar.gz` (sha256
   `e84eb301ca7967831e68b1728f911e87fa2d345d8ddb64f897bc2f2ee24a321c`). Builds need no network,
   and a fresh git worktree builds offline.
@@ -55,14 +55,17 @@ Every other gate states its reason in a comment in its own file.
   - on the source text, for comments and conditions such as `NOLINT` or
     `#ifndef __clang_analyzer__`.
   - on clang's raw tokens, for directives: `#line`, line markers, `#pragma`, `#define` or `#undef`
-    of a Unity name or of `abort`/`exit`, and `#if` in a test file. A comment, a line splice or
-    the digraph `%:` cannot hide a directive from the lexer. A name the project defines, such as
-    `TEST_BUFFER_SIZE`, passes.
+    of a Unity name or of `abort`/`exit`, `#define` of a project function name (`<prefix>_...`)
+    under `test/`, and `#if` in a test file. A comment, a line splice or the digraph `%:` cannot
+    hide a directive from the lexer. A name the project defines, such as `TEST_BUFFER_SIZE`,
+    passes. The build check applies the same names to `-D` and `-U`.
   - on the preprocessed project lines, where a macro can no longer hide a pragma or an attribute.
     A line marker that renames the file is reported, so `#line` in any spelling cannot move lines
     out of the search.
-  - on the syntax tree, with clang-query: attributes (unused, used, no_sanitize, suppress, asm
-    labels) in any spelling, a dropped result of any project function, and `exit` in `src/`.
+  - on the syntax tree, with clang-query: attributes (unused, used, no_sanitize, suppress,
+    no_profile_instrument_function, weak, alias, asm labels) in any spelling, a dropped result of
+    any project function, `exit` or `_exit` in `src/` (called or taken as a pointer), and `main` or
+    `LLVMFuzzerInitialize` in a property test.
   Sanitizer detection is matched by its spelling (`__has_feature`, `__SANITIZE_`, `__asan_`), not by
   the word `sanitizer`, so a function such as `name_sanitizer` passes. The CMake search skips
   comments, so a comment may say "tests disabled".
@@ -70,31 +73,45 @@ Every other gate states its reason in a comment in its own file.
   `CMAKE_C_COMPILER_LAUNCHER` from a shell or a mise config would change a result. The check also
   fails when a tool on `PATH` is not the pinned one, or when a mise config other than `mise.toml`
   applies in the repository.
-- `scripts/check` holds the sha256 of every file in `third_party/unity/`. Unity is built without
-  the gates, and its summary decides whether a test passed.
+- `scripts/check` holds the sha256 of the five files in `third_party/unity/` and fails on any
+  other file there, ignored by git or not. Its compile command may add no `-D`, `-U`, `-include`
+  or include folder. Unity is built without the gates, its counts decide whether a test passed,
+  and its folder is exempt from the searches.
 - Every test must come from `add_unity_test` or `add_property_test`, with no test property but
   `WORKING_DIRECTORY`. `scripts/check` reads CMake's own list (`ctest --show-only=json-v1`, with
   the backtrace of each `add_test`), so `cmake_language(CALL ...)` with a built-up name cannot add
   `WILL_FAIL` or `ENVIRONMENT`. The CMake search for `add_test` stays for a clearer message.
+  Each test's command must be the helper's own: the cmake that runs the check, `cmake/gates.cmake`,
+  a source in the repository and the pinned llvm-cov and llvm-profdata. The helpers read
+  `CMAKE_COMMAND` and `GATES_LLVM_COV`, which `CMakeLists.txt` could set to a program that
+  always exits 0.
   The helpers add the checks that Unity and libFuzzer need. A Unity test runs through
-  `cmake -P cmake/gates.cmake`, which needs both exit code 0 and Unity's summary of passed tests.
+  `cmake -P cmake/gates.cmake`, which needs exit code 0, Unity's summary of passed tests, and
+  Unity's own counts: unity.c is built with line coverage, and the lines that count a run, a
+  failed and an ignored test must have run at least once, never and never. The test can print any
+  text (`freopen` of `stdout`, then a summary of its own), but not change those counts.
   A `FAIL_REGULAR_EXPRESSION` alone passes a `main` that drops the result of `UNITY_END`, and a
   `PASS_REGULAR_EXPRESSION` makes ctest ignore the exit code, so a leak found at exit would pass.
 - Every line of a Unity test file must run (clang's source-based coverage, read with llvm-cov).
   One rule covers a test that `main` never runs (`(void)name;` keeps it from
   `-Wunused-function`), an early `return`, `TEST_ABORT`, a skip on an environment variable and a
-  `main` that prints a fake Unity summary. Line coverage cannot see code that is not compiled,
-  so a test file has no `#if`. A partly run line counts as run, so an assertion whose failure
-  branch did not run passes. Property tests are not measured: their failure branches never run.
-  `llvm-tools` is pinned on its own, because conda's clang does not bring it on Linux.
-- A property test runs through `cmake -P cmake/gates.cmake` too, which needs libFuzzer's
-  `Done 100000 runs`: an `exit(0)` in `LLVMFuzzerInitialize` would pass with no input.
+  `main` that skips the tests to print a Unity summary. Line coverage cannot see code that is not
+  compiled, so a test file has no `#if`. A partly run line counts as run, so an assertion whose
+  failure branch did not run passes. `llvm-tools` is pinned on its own, because conda's clang does
+  not bring it on Linux.
+- A property test runs through `cmake -P cmake/gates.cmake` too, with line coverage: libFuzzer must
+  have called `LLVMFuzzerTestOneInput` 100000 times. A target that exits early, or prints
+  libFuzzer's `Done 100000 runs` itself, fails. Its failure branches are not measured: they never
+  run. A property test defines neither `main` (which would replace libFuzzer's) nor
+  `LLVMFuzzerInitialize` (which can end the run or rewrite its options).
 - Tests link the project's static libraries whole (`WHOLE_ARCHIVE`). A test that defines a
   library function itself then fails with a duplicate symbol. Without it, the linker leaves the
-  library's object out and the test checks the stub.
-- `scripts/check` removes a `CTestCustom.cmake` or `CTestCustom.ctest` from the build folder and
-  fails. `CTEST_CUSTOM_TESTS_IGNORE` there drops a test from every ctest run, and git ignores
-  `build/`.
+  library's object out and the test checks the stub. So a test may link no shared library (the
+  stub would win quietly), a library must be defined before the test that links it, and a library
+  function may not be `weak`.
+- `scripts/check` removes any `CTestCustom.*` from the build folder, in any letter case and as a
+  symlink too, and fails. `CTEST_CUSTOM_TESTS_IGNORE` there drops a test from every ctest run, and
+  git ignores `build/`.
 - `scripts/check` fails when fewer tests ran than `ctest -N` lists, or when one did not run: ctest
   counts a disabled test as passed, and a preset `filter` drops tests without a word.
 - Not checked, and why:
@@ -106,12 +123,24 @@ Every other gate states its reason in a comment in its own file.
   - A macro that renames another C library function in a test (for example `strcmp`). Only the
     functions that end a test (`abort`, `exit`, `_Exit`, `quick_exit`, `longjmp`) and Unity's names
     are listed. A complete list would need every name the C library declares.
+  - A library that a project library links in turn (`target_link_libraries(lib PUBLIC dep)`) is
+    not linked whole into the tests, so a test of `lib` could stub a function of `dep`. CMake
+    rejects one library linked both whole and plain in the same link.
+  - Link lines and custom commands. The build check reads compile commands only, so an object
+    made by `add_custom_command`, a committed `.o` or `.a`, or a linker flag such as `--wrap`
+    in `target_link_options` reaches a test unchecked. Review sees these in `CMakeLists.txt`.
+  - Line coverage of files other than the test's own source: a test in a `.inc` or `.h` it
+    includes, a second source added with `target_sources`, or `#if` in a test file outside
+    `test/`.
+  - Spellings of compile flags that the build check does not list. It rejects known ones
+    (`-Wno-`, `--warn-`, `-w`, `-include`, ...), not every clang alias.
   - Edits to the gate files: `.clang-tidy` and `.clang-format` (a check turned off,
     `DisableFormat: true`), `CMakePresets.json` (`environment` in the build preset, such as
     `CCC_OVERRIDE_OPTIONS=+-w`, or in the test preset, such as `detect_leaks=0`), `mise.toml`,
     `cmake/gates.cmake` and `scripts/check` itself. The check cannot guard its own rules. These
-    files change only with the owner's approval, and the owner reviews them, with
-    `.github/CODEOWNERS` (step 4 of `SKILL.md`).
+    files change only with the owner's approval, and only the owner's review guards them.
+    CODEOWNERS adds nothing for a solo owner: with "Require review from Code Owners", the owner
+    cannot approve the PRs an agent opens under the owner's account.
   - Other state in the ignored build folder than `CTestCustom` files. `scripts/check` keeps
     `build/dev` between runs for speed. CI builds from a clean folder.
 - Suppressions that `scripts/check` does not reject: `(void)name;` for an unused parameter. It is
@@ -125,7 +154,8 @@ Every other gate states its reason in a comment in its own file.
 - The test preset sets `detect_leaks=1` in `ASAN_OPTIONS` and `LSAN_OPTIONS`, because
   LeakSanitizer is off by default on macOS, and a `LSAN_OPTIONS` from a shell would turn it off.
   `noTestsAction: error` fails a run with no tests.
-- `release` (`-O2`, `_FORTIFY_SOURCE=3`, stack protector) is not a gate. The weekly workflow
+- `release` (CMake's Release flags `-O3 -DNDEBUG`, `_FORTIFY_SOURCE=3`, stack protector) is not a
+  gate. The weekly workflow
   builds it, so a release-only break shows within a week.
 - Version 6 needs CMake 3.25 or newer, which current IDEs read. `CMakeUserPresets.json` is
   ignored by git and cannot redefine `dev`: CMake rejects duplicate preset names.
@@ -156,7 +186,8 @@ Every other gate states its reason in a comment in its own file.
 - To bump a tool, change `template/mise.toml.tmpl` and the `version:` of mise in the workflows.
   The scaffold writes a new `mise.lock` from it.
 - To bump Unity, replace the files in `template/third_party/unity/` and the sha256 list in
-  `template/scripts/check.tmpl`.
+  `template/scripts/check.tmpl`. `cmake/gates.cmake` finds the lines that count tests by their
+  text (`Unity.TestFailures++;` and its two siblings) and fails when one moves into two places.
 - Project-specific material (domain terms, reference documents) stays out of the template.
 - The template works with any set of agent skills. It names no skill and holds no convention that
   comes from one, such as a glossary file or a folder of decision records. A project adds those

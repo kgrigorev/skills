@@ -25,7 +25,8 @@ none of the caller's environment variables.
 mise exec -- cmake --build --preset dev                  # build after scripts/check ran once
 mise exec -- ctest --preset dev -R {{c_name}}_test       # one test executable by name
 scripts/format                                           # format every C file
-build/dev/{{c_name}}_property -max_total_time=60 -rss_limit_mb=0   # search longer, random seed
+# Search longer with a random seed. LeakSanitizer is off by default on macOS.
+ASAN_OPTIONS=detect_leaks=1 build/dev/{{c_name}}_property -max_total_time=60 -rss_limit_mb=0
 build/dev/{{c_name}}_property <crash-file>               # replay a failing input
 ```
 
@@ -45,8 +46,8 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
 - Check the result of every library call that can fail (`fclose`, `fwrite`, `snprintf`, ...).
   Use the result of every project function, static helpers too, or drop it on purpose with
   `(void)`.
-- The library never calls `exit`: it returns an error to its caller. `abort()` is for broken
-  invariants only.
+- The library never calls `exit` or `_exit`: it returns an error to its caller. `abort()` is for
+  broken invariants only.
 - Braces on every branch (clang-format adds them). No `#pragma` except `#pragma once`, no `#line`
   and no asm labels.
 - Use only headers from the C library, the OS or a declared dependency. The check rejects headers
@@ -60,17 +61,19 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
   never runs, an early `return` or a branch a test never takes fails the check. A test file has
   no `#if` or `#ifdef`, and does not define a function of the library it tests (tests link the
   library whole, so a stub fails the link). Do not `#define` or `#undef` Unity's names, `setUp`,
-  `tearDown`, `abort` or `exit`.
+  `tearDown`, `abort`, `exit` or a `{{c_name}}_` function in `test/`.
 - Register tests in `CMakeLists.txt` with `add_unity_test(name file libs...)` or
-  `add_property_test(name file libs...)`. The check rejects a test made any other way, a test
-  property such as `WILL_FAIL` or `ENVIRONMENT`, and a `CTestCustom.cmake` in the build folder.
+  `add_property_test(name file libs...)`, after the static libraries they test. The check rejects a
+  test made any other way, a test property such as `WILL_FAIL` or `ENVIRONMENT`, a change to the
+  variables the helpers use (`CMAKE_COMMAND`, `GATES_LLVM_COV`), and a `CTestCustom.cmake` in the
+  build folder.
 - Every new `.c` file goes into a target in `CMakeLists.txt`, after
   `include(cmake/gates.cmake)`, that the default build makes. Include only `.h` and `.inc` files
   that git tracks. New dependencies need the owner's approval.
 - A Unity test passes only when it exits 0 and ends with Unity's summary of passed tests:
   `return UNITY_END();` ends `main`.
 - A property test runs a fixed seed and run count in `scripts/check`, and passes only when
-  libFuzzer ran every input. CI searches longer with a random seed every week
+  libFuzzer ran every input. It defines no `main` and no `LLVMFuzzerInitialize`. CI searches longer with a random seed every week
   (`.github/workflows/weekly.yml`). A failing input becomes an example test.
 - `clangd` reads `build/dev/compile_commands.json`. Run `scripts/check` once to create it.
 

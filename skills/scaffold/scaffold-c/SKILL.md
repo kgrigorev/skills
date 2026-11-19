@@ -54,9 +54,8 @@ Paths below are relative to this skill's folder unless they start with `<target>
    script's output. Then list what is left for the owner:
    - Make the first commit, with `mise.lock`. Commit only when the user asks.
    - Create the GitHub repository: `gh repo create <name> --private --source <target> --push`.
-   - Protect `main` so the CI jobs `check` and `title` must pass, with review from code owners.
-     Add `.github/CODEOWNERS` that names the owner for the gate files `AGENTS.md` lists. The check
-     cannot guard edits to its own rules.
+   - Protect `main` so the CI jobs `check` and `title` must pass. The check cannot guard edits to
+     its own rules: the owner reviews changes to the gate files `AGENTS.md` lists.
    - Allow only squash merges, with the PR title and body as the commit message:
 
      ```sh

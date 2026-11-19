@@ -7,39 +7,78 @@
 # add_property_test), and scripts/check runs it to read the list of tests. Each block says what it
 # requires.
 if(CMAKE_SCRIPT_MODE_FILE)
-  # A Unity test passes only when it exits 0, its last lines are Unity's summary with at least one
-  # test, no failure and nothing ignored, and every line of its source file ran. A main that drops
-  # the result of UNITY_END or never reaches it fails, and so does a test that returns early, stops
-  # with TEST_ABORT, depends on an environment variable or that main never runs.
-  if(GATES_TEST)
-    set(profile "${GATES_TEST}.profraw")
+  # Line coverage of one source file: the `DA:<line>,<count>` records of llvm-cov's lcov export.
+  # Fails when the file has no coverage data.
+  function(gates_lcov binary source out)
+    execute_process(COMMAND "${GATES_LLVM_COV}" export -format=lcov
+      "-instr-profile=${binary}.profdata" "${binary}" "${source}"
+      OUTPUT_VARIABLE lcov COMMAND_ERROR_IS_FATAL ANY)
+    if(NOT lcov MATCHES "(^|\n)SF:")
+      message(FATAL_ERROR "llvm-cov found no coverage data for ${source}.")
+    endif()
+    set(${out} "${lcov}" PARENT_SCOPE)
+  endfunction()
+  # Runs a test binary with coverage on and merges what it wrote. A binary that ends without
+  # returning from main (_exit, exec, a signal) writes nothing and fails here.
+  function(gates_run binary)
+    set(profile "${binary}.profraw")
     file(REMOVE "${profile}")
     set(ENV{LLVM_PROFILE_FILE} "${profile}")
-    execute_process(COMMAND "${GATES_TEST}" RESULT_VARIABLE result
+    execute_process(COMMAND "${binary}" ${ARGN} RESULT_VARIABLE result
       OUTPUT_VARIABLE output ERROR_VARIABLE output)
     message("${output}")
     if(NOT result EQUAL 0)
       message(FATAL_ERROR "The test exited with ${result}.")
     endif()
-    if(output MATCHES ":FAIL" OR NOT output MATCHES "\n[1-9][0-9]* Tests 0 Failures 0 Ignored \nOK\n$")
-      message(FATAL_ERROR "The test did not end with a Unity summary of passed tests only.")
-    endif()
-    # Line coverage of the test's own source file. A partly run line, such as an assertion whose
-    # failure branch did not run, counts as run.
-    execute_process(COMMAND "${GATES_LLVM_PROFDATA}" merge -sparse -o "${GATES_TEST}.profdata"
+    execute_process(COMMAND "${GATES_LLVM_PROFDATA}" merge -sparse -o "${binary}.profdata"
       "${profile}" RESULT_VARIABLE result ERROR_VARIABLE error)
     if(NOT result EQUAL 0)
       message(FATAL_ERROR "${error}The test wrote no coverage data. It must end by returning from main.")
     endif()
-    execute_process(COMMAND "${GATES_LLVM_COV}" export -format=lcov
-      "-instr-profile=${GATES_TEST}.profdata" "${GATES_TEST}" "${GATES_SOURCE}"
-      OUTPUT_VARIABLE lcov COMMAND_ERROR_IS_FATAL ANY)
-    if(NOT lcov MATCHES "(^|\n)SF:")
-      message(FATAL_ERROR "llvm-cov found no coverage data for ${GATES_SOURCE}.")
+    set(output "${output}" PARENT_SCOPE)
+  endfunction()
+  cmake_path(GET CMAKE_CURRENT_LIST_DIR PARENT_PATH root)
+
+  # A Unity test passes only when it exits 0, Unity's own code shows that at least one test ran
+  # and none failed or was ignored, and every line of its source file ran. The test can write any
+  # text, so Unity's summary alone proves nothing; the counts come from the line coverage of
+  # unity.c, which the test cannot change. A main that drops the result of UNITY_END or never
+  # reaches it fails, and so does a test that returns early, stops with TEST_ABORT, depends on an
+  # environment variable or that main never runs.
+  if(GATES_TEST)
+    gates_run("${GATES_TEST}")
+    if(output MATCHES ":FAIL" OR NOT output MATCHES "\n[1-9][0-9]* Tests 0 Failures 0 Ignored \nOK\n$")
+      message(FATAL_ERROR "The test did not end with a Unity summary of passed tests only.")
     endif()
+    # The lines of unity.c that count a run, a failed and an ignored test, found by their text so
+    # that a Unity update keeps working. Each must appear once.
+    set(unity_source "${root}/third_party/unity/unity.c")
+    file(READ "${unity_source}" unity_text)
+    gates_lcov("${GATES_TEST}" "${unity_source}" unity_lcov)
+    foreach(counter NumberOfTests TestFailures TestIgnores)
+      string(FIND "${unity_text}" "Unity.${counter}++;" at)
+      string(FIND "${unity_text}" "Unity.${counter}++;" last REVERSE)
+      if(at EQUAL -1 OR NOT at EQUAL last)
+        message(FATAL_ERROR "cmake/gates.cmake: unity.c must count Unity.${counter} in one place.")
+      endif()
+      string(SUBSTRING "${unity_text}" 0 ${at} before)
+      string(REGEX REPLACE "[^\n]" "" before "${before}")
+      string(LENGTH "${before}" line)
+      math(EXPR line "${line} + 1")
+      if(NOT unity_lcov MATCHES "\nDA:${line},([0-9]+)")
+        message(FATAL_ERROR "llvm-cov has no count for line ${line} of unity.c.")
+      endif()
+      set(${counter} ${CMAKE_MATCH_1})
+    endforeach()
+    if(NumberOfTests EQUAL 0 OR NOT TestFailures EQUAL 0 OR NOT TestIgnores EQUAL 0)
+      message(FATAL_ERROR "Unity ran ${NumberOfTests} tests: ${TestFailures} failed, "
+        "${TestIgnores} ignored. Every test must run and pass.")
+    endif()
+    # Line coverage of the test's own source file. A partly run line, such as an assertion whose
+    # failure branch did not run, counts as run.
+    gates_lcov("${GATES_TEST}" "${GATES_SOURCE}" lcov)
     string(REGEX MATCHALL "\nDA:[0-9]+,0" missed "${lcov}")
     if(missed)
-      cmake_path(GET CMAKE_CURRENT_LIST_DIR PARENT_PATH root)
       file(RELATIVE_PATH source "${root}" "${GATES_SOURCE}")
       string(REGEX REPLACE "\nDA:([0-9]+),0" "${source}:\\1\n" missed "${missed}")
       string(REPLACE ";" "" missed "${missed}")
@@ -50,16 +89,16 @@ if(CMAKE_SCRIPT_MODE_FILE)
     endif()
     return()
   endif()
-  # A property test passes only when libFuzzer ran every input: a target that exits early, for
-  # example from LLVMFuzzerInitialize, would pass with none.
+  # A property test passes only when libFuzzer called the property for every input. The count
+  # comes from the line coverage of the test file, so a target that exits early, or prints
+  # libFuzzer's last line itself, fails.
   if(GATES_PROPERTY)
-    execute_process(COMMAND "${GATES_PROPERTY}" -seed=1 -runs=100000 -rss_limit_mb=0
-      RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
-    message("${output}")
-    if(NOT result EQUAL 0)
-      message(FATAL_ERROR "The property test exited with ${result}.")
+    gates_run("${GATES_PROPERTY}" -seed=1 -runs=100000 -rss_limit_mb=0)
+    gates_lcov("${GATES_PROPERTY}" "${GATES_SOURCE}" lcov)
+    if(NOT lcov MATCHES "\nFNDA:([0-9]+),LLVMFuzzerTestOneInput\n")
+      message(FATAL_ERROR "llvm-cov found no count for LLVMFuzzerTestOneInput.")
     endif()
-    if(NOT output MATCHES "\nDone 100000 runs in ")
+    if(CMAKE_MATCH_1 LESS 100000)
       message(FATAL_ERROR "The property test did not run all 100000 inputs.")
     endif()
     return()
@@ -70,6 +109,13 @@ if(CMAKE_SCRIPT_MODE_FILE)
   # DISABLED, ENVIRONMENT or a raw add_test.
   if(GATES_TESTS_JSON)
     file(READ "${GATES_TESTS_JSON}" json)
+    file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" gates_file)
+    file(REAL_PATH "${root}" real_root)
+    # scripts/check runs this with the pinned tools first on PATH.
+    find_program(pinned_cov llvm-cov NO_CACHE REQUIRED)
+    find_program(pinned_profdata llvm-profdata NO_CACHE REQUIRED)
+    file(REAL_PATH "${pinned_cov}" pinned_cov)
+    file(REAL_PATH "${pinned_profdata}" pinned_profdata)
     string(JSON count LENGTH "${json}" tests)
     set(problems "")
     if(count GREATER 0)
@@ -89,13 +135,58 @@ if(CMAKE_SCRIPT_MODE_FILE)
           string(JSON helper ERROR_VARIABLE error GET "${json}" backtraceGraph nodes ${parent} command)
           string(JSON helper ERROR_VARIABLE error GET "${json}" backtraceGraph commands ${helper})
         endif()
-        file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" gates_file)
         if(file)
           file(REAL_PATH "${file}" file)
         endif()
         if(NOT added STREQUAL "add_test" OR NOT file STREQUAL gates_file
             OR NOT helper MATCHES "^add_(unity|property)_test$")
           string(APPEND problems "${name}: not added by add_unity_test or add_property_test.\n")
+        endif()
+        # The command must be the helper's own: the cmake that runs this file, this file, a
+        # source in the repository and the pinned llvm-cov and llvm-profdata. CMakeLists.txt could
+        # otherwise set CMAKE_COMMAND or GATES_LLVM_COV to another program before a helper runs.
+        string(JSON arguments ERROR_VARIABLE error LENGTH "${json}" tests ${i} command)
+        set(command_ok FALSE)
+        if(NOT error AND arguments EQUAL 7)
+          foreach(j RANGE 6)
+            string(JSON a${j} GET "${json}" tests ${i} command ${j})
+          endforeach()
+          file(REAL_PATH "${a0}" a0)
+          file(REAL_PATH "${CMAKE_COMMAND}" cmake_file)
+          file(REAL_PATH "${a6}" a6)
+          # ${CMAKE_MATCH_1} expands before MATCHES runs, so each match gets its own if().
+          string(REGEX REPLACE "^-DGATES_SOURCE=" "" source "${a2}")
+          if(a0 STREQUAL cmake_file AND a1 MATCHES "^-DGATES_(TEST|PROPERTY)=."
+              AND a5 STREQUAL "-P" AND a6 STREQUAL gates_file
+              AND a2 MATCHES "^-DGATES_SOURCE=." AND EXISTS "${source}")
+            file(REAL_PATH "${source}" source)
+            string(FIND "${source}" "${real_root}/" at)
+            set(command_ok TRUE)
+            if(NOT at EQUAL 0)
+              set(command_ok FALSE)
+            endif()
+            foreach(j 3 4)
+              if(j EQUAL 3)
+                set(variable GATES_LLVM_COV)
+                set(pinned "${pinned_cov}")
+              else()
+                set(variable GATES_LLVM_PROFDATA)
+                set(pinned "${pinned_profdata}")
+              endif()
+              string(REGEX REPLACE "^-D${variable}=" "" tool "${a${j}}")
+              if(a${j} MATCHES "^-D${variable}=." AND EXISTS "${tool}")
+                file(REAL_PATH "${tool}" tool)
+                if(NOT tool STREQUAL pinned)
+                  set(command_ok FALSE)
+                endif()
+              else()
+                set(command_ok FALSE)
+              endif()
+            endforeach()
+          endif()
+        endif()
+        if(NOT command_ok)
+          string(APPEND problems "${name}: runs another command than its helper's.\n")
         endif()
         string(JSON properties ERROR_VARIABLE error LENGTH "${json}" tests ${i} properties)
         if(NOT error AND properties GREATER 0)
@@ -110,8 +201,8 @@ if(CMAKE_SCRIPT_MODE_FILE)
       endforeach()
     endif()
     if(problems)
-      message(FATAL_ERROR "${problems}Add tests with add_unity_test or add_property_test only, and "
-        "set no test property: each changes how a test passes.")
+      message(FATAL_ERROR "${problems}Add tests with add_unity_test or add_property_test only, set "
+        "no test property and no variable that their commands use: each changes how a test passes.")
     endif()
     return()
   endif()
@@ -152,45 +243,72 @@ endif()
 
 # Links a test to the project libraries it tests. A static library is linked whole, so a test
 # that defines a library function itself (a stub that hides the real code) fails to link with a
-# duplicate symbol, instead of the linker quietly leaving the library's object out.
+# duplicate symbol, instead of the linker quietly leaving the library's object out. A shared
+# library would let the stub win quietly, so tests take static libraries only, defined before the
+# test. A library that a project library links in turn is not linked whole (DESIGN.md).
 function(gates_link_libraries name)
   foreach(library IN LISTS ARGN)
     if(TARGET ${library})
       get_target_property(type ${library} TYPE)
       if(type STREQUAL "STATIC_LIBRARY")
         set(library "$<LINK_LIBRARY:WHOLE_ARCHIVE,${library}>")
+      elseif(NOT type MATCHES "^(OBJECT|INTERFACE)_LIBRARY$")
+        message(FATAL_ERROR "${name}: ${library} is a ${type}. Tests link static libraries only, "
+          "so a stub in a test fails to link.")
       endif()
+    else()
+      # Not a target yet: a system library such as m, or a project library defined later.
+      cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR}
+        CALL gates_require_not_target ${name} ${library})
     endif()
     target_link_libraries(${name} PRIVATE ${library})
   endforeach()
 endfunction()
+function(gates_require_not_target name library)
+  if(TARGET ${library})
+    message(FATAL_ERROR "${name}: define the library ${library} before the test that links it, "
+      "so the test links it whole.")
+  endif()
+endfunction()
 
-# A Unity test executable. Unity exits 0 when it ran no test or ignored one, so ctest runs it
-# through the script-mode block at the top of this file, which also reads the summary and the line
-# coverage of the test file. llvm-cov and llvm-profdata come from the pinned LLVM (mise.toml).
-function(add_unity_test name source)
+# Finds the pinned llvm-cov and llvm-profdata (mise.toml), which read the line coverage of tests.
+macro(gates_find_coverage_tools)
   find_program(GATES_LLVM_COV llvm-cov REQUIRED)
   find_program(GATES_LLVM_PROFDATA llvm-profdata REQUIRED)
+endmacro()
+
+# A Unity test executable. Unity exits 0 when it ran no test or ignored one, so ctest runs it
+# through the script-mode block at the top of this file, which also reads the line coverage of the
+# test file and of unity.c (Unity's counts of run, failed and ignored tests).
+function(add_unity_test name source)
+  gates_find_coverage_tools()
+  # One absolute path for both the build and the coverage check.
+  cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} NORMALIZE)
   add_executable(${name} ${source})
   gates_link_libraries(${name} ${ARGN})
   target_link_libraries(${name} PRIVATE unity)
+  target_compile_options(unity PRIVATE -fprofile-instr-generate -fcoverage-mapping)
   target_compile_options(${name} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
   target_link_options(${name} PRIVATE -fprofile-instr-generate)
-  cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} NORMALIZE)
   add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} -DGATES_TEST=$<TARGET_FILE:${name}>
     -DGATES_SOURCE=${source} -DGATES_LLVM_COV=${GATES_LLVM_COV}
     -DGATES_LLVM_PROFDATA=${GATES_LLVM_PROFDATA} -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
 endfunction()
 
 # A property test: a libFuzzer target that ctest runs with a fixed seed and run count (in the
-# script-mode block above), so every run tries the same inputs. -rss_limit_mb=0 stops libFuzzer's
-# memory-watch thread, which LeakSanitizer would report as a leak. AGENTS.md shows how to search
-# longer for new failures.
+# script-mode block above), so every run tries the same inputs. The line coverage of the test file
+# shows how often libFuzzer called the property. -rss_limit_mb=0 stops libFuzzer's memory-watch
+# thread, which LeakSanitizer would report as a leak. AGENTS.md shows how to search longer for new
+# failures.
 function(add_property_test name source)
+  gates_find_coverage_tools()
+  cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} NORMALIZE)
   add_executable(${name} ${source})
   gates_link_libraries(${name} ${ARGN})
-  target_compile_options(${name} PRIVATE -fsanitize=fuzzer)
-  target_link_options(${name} PRIVATE -fsanitize=fuzzer)
+  target_compile_options(${name} PRIVATE -fsanitize=fuzzer -fprofile-instr-generate
+    -fcoverage-mapping)
+  target_link_options(${name} PRIVATE -fsanitize=fuzzer -fprofile-instr-generate)
   add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} -DGATES_PROPERTY=$<TARGET_FILE:${name}>
-    -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
+    -DGATES_SOURCE=${source} -DGATES_LLVM_COV=${GATES_LLVM_COV}
+    -DGATES_LLVM_PROFDATA=${GATES_LLVM_PROFDATA} -P ${CMAKE_CURRENT_FUNCTION_LIST_FILE})
 endfunction()
