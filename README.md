@@ -26,4 +26,5 @@ While you change a skill, link it from your clone instead, so edits take effect 
 
 ```sh
 ln -s ~/src/skills/skills/pull-request ~/.claude/skills/pull-request
+ln -s ~/src/skills/skills/scaffold/scaffold-haskell ~/.claude/skills/scaffold-haskell    # scaffolds sit one level down
 ```
