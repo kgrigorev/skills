@@ -55,14 +55,25 @@ Every other gate states its reason in a comment in its own file.
 - **fast-check with a fixed seed.** Same commit, same result. To explore new inputs, change the
   seed in its own commit. `tests/setup.ts` uses `import * as fc` because the default import trips
   an oxlint rule on every `fc.assert`. It installs a global fast-check plugin (fast-check 4.10 or
-  later) that fails a property run with another seed or fewer runs: options passed to
-  `fc.assert` cannot remove a global plugin, and a search of the source cannot follow a computed
-  key.
+  later) that fails a property run with another seed or run count, with plugins of its own (a
+  `decorateRun` can report every run as passed), or that failed (`fc.check` returns a failure
+  instead of throwing). Options passed to `fc.assert` cannot remove a global plugin, and a search
+  of the source cannot follow a computed key. The plugin also records the problem in a list that
+  an `afterEach` in `tests/setup.ts` checks, so a test that catches the plugin's error still
+  fails. A property that is expected to fail cannot be tested this way.
 - **The clock and random values in tests are checked at run time.** `tests/setup.ts` wraps
   `Date`, `Math.random`, `performance.now`, `process.hrtime`, `Temporal.Now` and the `crypto`
   random functions, and fails the call when the nearest caller is a file under `tests/`. A search
   of the source cannot see an alias (`const { now } = Date`). Code under `src/` keeps the real
-  functions, because a log stamp or retry jitter is fine there.
+  functions, because a log stamp or retry jitter is fine there. The callers come from structured
+  call sites, with `Error.stackTraceLimit` and `Error.prepareStackTrace` set for the capture, so a
+  test cannot hide its frames, and a capture that does not show `tests/setup.ts` itself fails.
+  File names are compared whole. The same `afterEach` fails a test that catches the error.
+- **`TZ=UTC` and `LC_ALL=C` in `scripts/check`.** Dates and numbers print differently per time
+  zone and locale (`getHours`, `toLocaleString`), and CI runs in UTC.
+- **No install scripts.** `scripts/check` installs with `--ignore-scripts --ignore-pnpmfile`: a
+  `prepare` script in `package.json` or a `.pnpmfile.cjs` would run before every gate and could
+  replace the tools the gates call. The template has no lifecycle scripts.
 - **knip.** Unused files, exports and dependencies are the debris agents leave most. knip always
   treats exports tagged `@public`, `@beta` or `@alias` as used, and no setting turns that off, so
   `scripts/check` rejects those tags instead.
@@ -112,8 +123,13 @@ Every other gate states its reason in a comment in its own file.
   - A test that mocks the module it tests (`vi.mock("../src/x.ts")`), and a `catch` that turns
     every error into a default value. Mocking a module under `src/` is often right, and the
     gates cannot tell an expected error from a bug.
-  - Clock sources other than the wrapped ones, such as `Intl.DateTimeFormat().format()` without
-    a date.
+  - Clock and random sources other than the wrapped ones: `Intl.DateTimeFormat().format()`
+    without a date, `performance.timeOrigin`, `crypto.generateKeySync`, another realm
+    (`vm.runInNewContext("Math.random()")`), a worker thread or a child process.
+  - Plain JavaScript in a file without an extension, loaded with `createRequire` or a dynamic
+    `import()` into an `unknown`. The file-type gate rejects known extensions only.
+  - A `.ts` file that only `.git/info/exclude` ignores: `git grep` skips it, but tsc and vitest
+    use it. It cannot be pushed, so CI fails, but a local run, such as the Stop hook, passes.
   - Edits to the gate files themselves (`scripts/check`, the lint, compiler, formatter and test
     configs, `tests/setup.ts`). Only the owner's review guards them; see CODEOWNERS above.
 - **A browser variant.** A browser app needs bundler resolution, the DOM types, `.tsx`, Vite and

@@ -2,32 +2,79 @@
 // each test file. Agents: change this file only with the owner's approval.
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
-import { fileURLToPath } from "node:url";
+import url from "node:url";
 import * as fc from "fast-check";
+import { afterAll, afterEach, vi } from "vitest";
+
+// Copies taken now: a test could replace url.fileURLToPath (and call syncBuiltinESMExports) or
+// globalThis.Error later.
+const { fileURLToPath } = url;
+const NativeError = Error;
 
 // The fast-check seed and run count. To explore new inputs, change the seed in its own commit. A
 // failure prints the seed and the path that reproduce it.
 const settings = { seed: 1, numRuns: 200 } as const;
 fc.configureGlobal(settings);
 
+// What the checks below found. A test cannot reach this list, so it cannot catch or clear the
+// failure: the hooks fail the test (or the file) that caused it.
+const problems: string[] = [];
+function failOnProblems(): void {
+  if (problems.length === 0) return;
+  throw new Error(problems.splice(0).join("\n"));
+}
+afterEach(failOnProblems);
+afterAll(failOnProblems);
+
 // Options passed to fc.assert win over the global ones, however a test builds them (a computed
 // key, a module under src/, a time-limit plugin), and scripts/check can only search for the plain
-// spellings. A global plugin sees the settings each property ran with, and fails one that ran
-// with another seed or fewer runs. Options passed to fc.assert cannot remove it.
+// spellings. A global plugin sees the settings each property ran with. It fails one that ran
+// with another seed or run count, with a plugin of its own (which could report every run as
+// passed), or that failed: fc.check returns a failure instead of throwing it.
 fc.installGlobalPlugin(() => ({
   onAllRunsComplete(details) {
-    // A failed property reports itself, with its seed.
-    if (details.failed) return;
-    const { seed, numRuns } = details.runConfiguration;
-    if (seed === settings.seed && details.numRuns === settings.numRuns && !details.interrupted)
-      return;
-    throw new Error(
-      `A property test ran ${String(details.numRuns)} of ${String(numRuns)} runs with seed ` +
-        `${String(seed)}${details.interrupted ? ", interrupted" : ""}. tests/setup.ts sets seed ` +
-        `${String(settings.seed)} and ${String(settings.numRuns)} runs: pass no options that change them.`,
-    );
+    const { seed, numRuns, plugins } = details.runConfiguration;
+    const problem = details.failed
+      ? "A property test failed. fc.assert prints the counterexample; fc.check hides it: use fc.assert."
+      : plugins !== undefined && plugins.length > 0
+        ? "A property test ran with fast-check plugins of its own. tests/setup.ts installs the only plugin."
+        : seed !== settings.seed || details.numRuns !== settings.numRuns || details.interrupted
+          ? `A property test ran ${String(details.numRuns)} of ${String(numRuns)} runs with seed ` +
+            `${String(seed)}${details.interrupted ? ", interrupted" : ""}. tests/setup.ts sets seed ` +
+            `${String(settings.seed)} and ${String(settings.numRuns)} runs: pass no options that change them.`
+          : undefined;
+    if (problem === undefined) return;
+    problems.push(problem);
+    throw new Error(problem);
   },
 }));
+
+// vi.setConfig in a test file could switch off requireAssertions or move the fake clock. Only the
+// timeouts and the mock settings may change per file.
+const runtimeOptions = new Set([
+  "testTimeout",
+  "hookTimeout",
+  "maxConcurrency",
+  "clearMocks",
+  "mockReset",
+  "restoreMocks",
+  "unstubEnvs",
+  "unstubGlobals",
+]);
+const setConfig: unknown = Reflect.get(vi, "setConfig");
+Reflect.defineProperty(vi, "setConfig", {
+  value(this: unknown, config: object): unknown {
+    const others = Object.keys(config).filter((key) => !runtimeOptions.has(key));
+    if (others.length > 0)
+      throw new Error(
+        `vi.setConfig may not change ${others.join(", ")}. vitest.config.ts sets them.`,
+      );
+    if (typeof setConfig !== "function") throw new TypeError("vi.setConfig is missing.");
+    return Reflect.apply(setConfig, this, [config]);
+  },
+  writable: false,
+  configurable: false,
+});
 
 // A test that reads the clock or a random value fails, however it reaches the function (an
 // alias, destructuring, brackets), which a search of the source cannot see. Code under src/ may
@@ -36,16 +83,48 @@ fc.installGlobalPlugin(() => ({
 const self = fileURLToPath(import.meta.url);
 const testsFolder = fileURLToPath(new URL(".", import.meta.url));
 
+/**
+ * The files of the calls that led here, nearest first, async callers included. A test may have
+ * changed Error.stackTraceLimit or Error.prepareStackTrace, so both are set for the capture and
+ * then restored. If the capture does not even show this file, they were tampered with.
+ */
+function callerFiles(): string[] | undefined {
+  const limit: unknown = Reflect.get(NativeError, "stackTraceLimit");
+  const prepare: unknown = Reflect.get(NativeError, "prepareStackTrace");
+  const holder = {};
+  let stack: unknown;
+  try {
+    Reflect.set(NativeError, "stackTraceLimit", 64);
+    Reflect.set(NativeError, "prepareStackTrace", (_error: Error, sites: NodeJS.CallSite[]) =>
+      sites.map((site) => site.getFileName() ?? ""),
+    );
+    NativeError.captureStackTrace(holder);
+    stack = Reflect.get(holder, "stack");
+  } finally {
+    Reflect.set(NativeError, "stackTraceLimit", limit);
+    Reflect.set(NativeError, "prepareStackTrace", prepare);
+  }
+  if (!Array.isArray(stack)) return undefined;
+  const files = stack.filter((file): file is string => typeof file === "string");
+  return files.includes(self) ? files : undefined;
+}
+
 /** Throws when the nearest caller that is a file (not this one, not built-in) is under tests/. */
 function failInTest(name: string): void {
-  const caller = (new Error().stack ?? "")
-    .split("\n")
-    .slice(1)
-    .find(
-      (line) => !line.includes(self) && !line.includes("<anonymous>") && !line.includes("node:"),
-    );
-  if (caller?.includes(testsFolder) === true)
-    throw new Error(`A test called ${name}, which changes between runs. Pass a fixed value.`);
+  // File names are compared whole, so a test file named "node:x.test.ts" or
+  // "setup.ts-x.test.ts" is not mistaken for a built-in or for this file.
+  const files = callerFiles();
+  const caller = files
+    ?.map((file) => (file.startsWith("file:") ? fileURLToPath(file) : file))
+    .find((file) => file !== self && file !== "" && !file.startsWith("node:"));
+  if (files === undefined || caller?.startsWith(testsFolder) === true) {
+    const problem =
+      files === undefined
+        ? `A test changed how stack traces are captured, so the check on ${name} cannot run.`
+        : `A test called ${name}, which changes between runs. Pass a fixed value.`;
+    problems.push(problem);
+    throw new Error(problem);
+  }
 }
 
 /** Replaces the function owner[key] with one that fails when a test calls it. */
