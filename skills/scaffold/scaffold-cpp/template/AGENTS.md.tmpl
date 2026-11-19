@@ -41,15 +41,20 @@ Read `CODING_STANDARDS.md` before writing or reviewing C++.
 The checks enforce C++23 without compiler extensions, include what you use
 (`misc-include-cleaner`), no C-style casts, no implicit narrowing, and internal linkage for
 helpers. They also reject in code (comments and strings are not searched): pragmas other than
-`#pragma once`, token pasting (`##`), `#if` on any macro except `__APPLE__`, `__linux__`,
-`__cplusplus`, `__cpp_*` and `__has_include`, and `std::abort`, `std::terminate` and `_Exit`.
+`#pragma once`, token pasting (`##`), `asm`, names outside ASCII, `#define` or `#undef` of a
+reserved name, `#if` on any macro except `__APPLE__`, `__linux__`, `__cplusplus`, `__cpp_*` and
+`__has_include(<standard header>)`, and `std::abort`, `std::terminate` and `_Exit`.
+In CMake files they reject commands that run a program or write a file (`execute_process`,
+`add_custom_command`, `configure_file`, `file(WRITE ...)`, ...), and any file the compiler reads
+from `build/` other than GoogleTest's and rapidcheck's.
 Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call Apple's
 clang.
 
 ## Layout
 
 - Logic goes in the library under `src/`. `app/main.cpp` only calls it.
-- `tests/` holds GoogleTest tests and rapidcheck properties (`RC_GTEST_PROP`). Each test
+- `tests/` holds GoogleTest tests and rapidcheck properties (`RC_GTEST_PROP`). Only files under
+  `tests/` may include GoogleTest or rapidcheck. Each test
   executable links `GTest::gtest_main` and is registered with `gtest_discover_tests`, with no
   extra arguments. The check runs every test that each one lists.
 - C++ files end in `.cpp` (source) or `.hpp` (header). The check rejects other extensions, and

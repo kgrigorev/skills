@@ -34,10 +34,10 @@ Checks: >
   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -portability-avoid-pragma-once
 WarningsAsErrors: '*'
-# Every header the project's files include, except the test libraries under _deps/. scripts/check
+# Every header the project's files include, except GoogleTest and rapidcheck. scripts/check
 # makes sure each .hpp is included and no flag marks a project folder as system headers.
 HeaderFilterRegex: '.*'
-ExcludeHeaderFilterRegex: '/_deps/'
+ExcludeHeaderFilterRegex: '/build/dev/_deps/(googletest|rapidcheck)-src/'
 SystemHeaders: false
 FormatStyle: file
 CheckOptions:

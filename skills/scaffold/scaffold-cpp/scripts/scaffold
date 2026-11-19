@@ -39,6 +39,11 @@ platforms='macos-arm64 linux-x64 linux-arm64'
 
 require_hidden "$template"
 check_inputs "$package" "$synopsis" "$reader"
+# The synopsis goes into a C++ string, and scripts/check rejects these words anywhere in a file.
+case $synopsis in
+  *NOLINT* | *'clang-format off'* | *'clang-format on'*)
+    fail 'synopsis: leave out NOLINT and "clang-format off/on"; scripts/check rejects them.' ;;
+esac
 require_tools mise git
 
 # my-tool -> my_tool
