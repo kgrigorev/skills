@@ -1,5 +1,7 @@
 packages: .
+-- Build the test suites and benchmarks too, so every component's code compiles in scripts/check.
 tests: True
+benchmarks: True
 
 -- The GHC version for this project. cabal, HLS, scripts/check and CI all use it.
 -- It must be ghcup's build. Install it with: mise exec -- ghcup install ghc {{ghc_version}}

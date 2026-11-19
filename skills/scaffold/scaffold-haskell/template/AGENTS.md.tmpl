@@ -39,17 +39,20 @@ Read `CODING_STANDARDS.md` before writing or reviewing Haskell.
 
 The checks enforce imports with an explicit list or a qualifier, extensions set only in the
 `common common` stanza of `{{package}}.cabal` (no `LANGUAGE` pragmas), and the `.hlint.yaml` bans
-on partial functions, `throw`, `assert` and test settings such as `withMaxSuccess`. HLint bans by
+on partial functions, `throw`, `assert` and test settings such as `withMaxSuccess` and `around`
+hooks (use `before` and `after`). HLint bans by
 name, so names like `read`, `last` and `error` are taken: call your own `readConfig` or
 `lastValue`. Only `Main` modules may import `System.Exit`. Modules of other packages with
-`Unsafe` or `Internal` in their name, and their `unsafe*` functions, are not allowed.
+`Unsafe` or `Internal` in their name, their `unsafe*` functions and `foreign import` are not
+allowed.
 
 ## Layout
 
 - Logic goes in the library under `src/`. `app/Main.hs` only calls it.
 - `test/` is an hspec suite. Every `*Spec.hs` module that exports `spec` runs automatically.
   Every test suite uses this hspec-discover driver, so `scripts/check` can pass its options.
-  `scripts/check` fails when a suite's `main-is` is another file or prints no hspec summary.
+  `scripts/check` fails when a suite's `main-is` is another file, a suite stops before hspec
+  finishes, or a `SpecHook.hs` exists.
 - List every new module in `{{package}}.cabal` (`exposed-modules` or `other-modules`). Sources
   are `.hs` files in folders git does not ignore; every new component starts with
   `import: common` and has no `buildable` field. A test helper module that is not a `*Spec`

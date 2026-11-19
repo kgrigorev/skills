@@ -2,6 +2,9 @@
 # Runs every quality gate. People, agents, the git hook and CI all run this script.
 # It stops at the first failure. Agents: change it only with the owner's approval.
 set -eu
+# No glob expansion: the file lists below are split at whitespace, and a name such as
+# bench/[a]/Main.hs must stay that name, not become another file that matches it.
+set -f
 cd "$(dirname "$0")/.."
 
 # Use the tool versions pinned in mise.toml, also from shells where mise is not activated, such
@@ -23,12 +26,13 @@ fi
 step() { printf '\n==> %s\n' "$1"; }
 
 # Every Haskell and cabal file git tracks or would add, wherever it lives, so a new component
-# folder cannot slip past the format, lint and switch-off steps.
+# folder cannot slip past the format, lint and switch-off steps. git prints other names quoted
+# ("src/\303\204.hs"), which are no file; the "plain .hs files" step rejects those names.
 tracked() {
-  git ls-files --cached --others --exclude-standard -- "$@" |
+  git -c core.quotePath=false ls-files --cached --others --exclude-standard -- "$@" |
     while IFS= read -r f; do if [ -f "$f" ]; then echo "$f"; fi; done
 }
-hs_files=$(tracked '*.hs')
+hs_files=$(tracked ':(icase)*.hs') # GHC finds Foo.HS on a macOS disk
 cabal_files=$(tracked '*.cabal')
 project_files=$(tracked 'cabal.project*')
 tmp=$(mktemp -d)
@@ -46,6 +50,9 @@ export WARNINGS
 cat >"$tmp/scan.pl" <<'PERL'
 use strict;
 use warnings;
+use feature 'unicode_strings';
+use Encode qw(decode FB_CROAK);
+binmode STDERR, ':encoding(UTF-8)';
 
 # Usage: scan switches|settings <.hs, .cabal and cabal.project files>
 my $mode = shift @ARGV;
@@ -61,13 +68,17 @@ sub report {
   print STDERR "$file:$n: $why\n" unless $said{"$file:$n:$why"}++;
   $bad = 1;
 }
+# Reads a file as UTF-8, as GHC does. Read as bytes, a 'λ' would be four characters, and the
+# lexer below would pair the quotes after it wrongly.
 sub slurp {
   my ($file) = @_;
-  open(my $h, "<", $file) or die "$file: $!\n";
+  open(my $h, "<:raw", $file) or die "$file: $!\n";
   local $/;
-  my $text = <$h>;
+  my $bytes = <$h> // "";
   close $h;
-  return $text // "";
+  my $text = eval { decode("UTF-8", $bytes, FB_CROAK) };
+  die "$file: not UTF-8. GHC reads only UTF-8 sources.\n" unless defined $text;
+  return $text;
 }
 sub line_at { my ($text, $at) = @_; return 1 + (substr($text, 0, $at) =~ tr/\n//) }
 sub line_of { my ($text, $n) = @_; return (split /\n/, $text, -1)[$n - 1] // "" }
@@ -76,7 +87,11 @@ sub line_of { my ($text, $n) = @_; return (split /\n/, $text, -1)[$n - 1] // "" 
 # and character literals. Returns the code without comments and with empty literals, newlines
 # kept so line numbers stay, and the comments with their offsets. A regex over the raw text
 # would read "--" or "{-" inside a string as a comment, and a word in a string as code.
-my $symbol = qr{[-!#\$%&*+./<=>?\@\\^|~:]};
+# As in GHC, every Unicode symbol or punctuation character is an operator character except
+# (),;[]`{}_"', so "∘--" is an operator, not a comment; and an upper-case letter is any
+# Unicode capital, so "Ä.unsafeIOToST" is a qualified name.
+my $symbol = qr{(?![(),;\[\]`{}_"'])[\p{S}\p{P}]};
+my $large = qr{[\p{Lu}\p{Lt}]};
 sub lex_haskell {
   my ($text) = @_;
   my ($code, @comments) = ("");
@@ -109,7 +124,7 @@ sub lex_haskell {
 sub imports {
   my ($code) = @_;
   my @found;
-  while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?("[^"\n]*"\s+)?([A-Z][\w'.]*)(?:\s+qualified)?(?:\s+as\s+([A-Z][\w'.]*))?(\s+hiding)?/gm) {
+  while ($code =~ /^[ \t]*import\s+(?:safe\s+)?(?:qualified\s+)?("[^"\n]*"\s+)?($large[\w'.]*)(?:\s+qualified)?(?:\s+as\s+($large[\w'.]*))?(\s+hiding)?/gm) {
     my %import = (at => $-[0], package => defined $1, module => $2, alias => $3 // $2, hiding => defined $4, list => "");
     $import{list} = $1 if $code =~ /\G\s*(\((?:[^()]++|(?1))*\))/gc;
     push @found, \%import;
@@ -117,12 +132,11 @@ sub imports {
   return @found;
 }
 
-my (%lexed, %home, %imported);
+my (%lexed, %imported);
 for my $file (@hs) {
   my $text = slurp($file);
   my ($code, $comments) = lex_haskell($text);
   $lexed{$file} = [$text, $code, $comments];
-  $home{$1} = 1 if $code =~ /^module\s+([A-Z][\w'.]*)/m;
   $imported{$_->{module}} = 1 for imports($code);
 }
 
@@ -151,6 +165,16 @@ sub fields {
 }
 sub words_of { my ($value) = @_; return map { s/^"(.*)"$/$1/sr } $value =~ /"[^"]*"|[^\s,]+/g }
 
+# The project's own modules: the ones a .cabal file lists. A module line in a file that no
+# component builds, such as docs/Example.hs with "module GHC.IO", does not count.
+my %home;
+for my $file (@cabal) {
+  my ($fields) = fields($file);
+  for my $field (grep { $_->{name} =~ /^(?:exposed|other|autogen|virtual)-modules$|^signatures$/ } @$fields) {
+    $home{$_} = 1 for words_of($field->{value});
+  }
+}
+
 my @warnings = split " ", $ENV{WARNINGS} // "";
 
 if ($mode eq "switches") {
@@ -158,10 +182,12 @@ if ($mode eq "switches") {
     my ($text, $code, $comments) = @{$lexed{$file}};
     next if $text eq $driver;
     # Pragmas and comments that switch off HLint, Ormolu or GHC checks, also split over lines.
-    # ANN and OPTIONS only work as pragmas, so a plain {- Annual ... -} comment stays allowed.
+    # ANN, OPTIONS and COMPLETE only work as pragmas, so a plain {- Annual ... -} comment stays
+    # allowed. COMPLETE tells -Wincomplete-patterns that some constructors cover a type.
+    # OPTIONS_HADDOCK only changes the docs, and Ormolu reads only ORMOLU_DISABLE and _ENABLE.
     for my $comment (@$comments) {
       my ($at, $body) = @$comment;
-      while ($body =~ /\{-\#?\s*(?:hlint|ormolu)|\{-\#\s*(?:ann|options)/gi) {
+      while ($body =~ /\{-\#?\s*(?:hlint|ormolu_(?:disable|enable))|\{-\#\s*(?:ann|options(?!_haddock)|complete)/gi) {
         my $n = line_at($text, $at + $-[0]);
         report($file, $n, line_of($text, $n));
       }
@@ -176,19 +202,24 @@ if ($mode eq "switches") {
       $outside{$import->{alias}} ||= $foreign;
       next unless $foreign;
       if ($import->{module} =~ /(?:^|\.)(?:Unsafe|Internal)(?:\.|$)/
-        || (!$import->{hiding} && $import->{list} =~ /(?<![\w'])unsafe[A-Z]/)) {
+        || (!$import->{hiding} && $import->{list} =~ /(?<![\w'])unsafe$large/)) {
         my $n = line_at($code, $import->{at});
         report($file, $n, line_of($text, $n));
       }
     }
-    while ($code =~ /(?<![\w'.])((?:[A-Z][\w']*\.)+)unsafe[A-Z]/g) {
+    while ($code =~ /(?<![\w'.])((?:$large[\w']*\.)+)unsafe$large/g) {
       my $alias = substr($1, 0, -1);
       next if exists $outside{$alias} && !$outside{$alias};
       my $n = line_at($code, $-[0]);
       report($file, $n, line_of($text, $n));
     }
+    # A foreign import can give an impure C function a pure type, like unsafePerformIO.
+    while ($code =~ /^[ \t]*foreign\s+(?:import|export)(?![\w'])/gm) {
+      my $n = line_at($code, $-[0]);
+      report($file, $n, line_of($text, $n) . " (foreign import: calls C code that no check reads)");
+    }
     # module M (module M) exports every name, so -Wunused-top-binds never sees dead code.
-    if ($code =~ /^module\s+([A-Z][\w'.]*)\s*(\((?:[^()]++|(?2))*\))/m) {
+    if ($code =~ /^module\s+($large[\w'.]*)\s*(\((?:[^()]++|(?2))*\))/m) {
       my ($name, $exports, $start) = ($1, $2, $-[2]);
       if ($exports =~ /(?<![\w'.])module\s+\Q$name\E(?![\w'.])/) {
         my $n = line_at($code, $start + $-[0]);
@@ -230,6 +261,12 @@ if ($mode eq "switches") {
       my $where = $kind eq "" ? "" : "in \"$field->{header}\" ";
       report($file, $field->{line}, "$field->{name}: ${where}not on the list of allowed cabal.project fields in scripts/check");
     }
+    # A branch name moves, so the build would follow code that no step of this check reads.
+    my ($all, $stanzas) = fields($file);
+    for my $id (grep { $stanzas->[$_]{header} =~ /^source-repository-package(?:\s|$)/ } 0 .. $#$stanzas) {
+      next if grep { $_->{stanza} == $id && $_->{name} eq "tag" && $_->{value} =~ /^\s*[0-9a-f]{40}\s*$/ } @$all;
+      report($file, $stanzas->[$id]{line}, "source-repository-package needs tag: <the full commit hash>");
+    }
   }
 } elsif ($mode eq "settings") {
   # A path inside the project that git does not ignore, so the other steps read its files.
@@ -241,6 +278,10 @@ if ($mode eq "switches") {
       report($file, $line, "$name: git ignores $path, so no check reads it");
     }
   };
+  # hspec-discover applies a SpecHook.hs to every spec in its folder, so it could replace them.
+  for my $file (grep { m{(?:^|/)SpecHook\.hs$}i } @hs) {
+    report($file, 1, "SpecHook.hs: hspec-discover runs it around the specs, and it can replace them. Remove it.");
+  }
   for my $file (@cabal) {
     my ($fields, $stanzas) = fields($file);
     my %common;
@@ -356,7 +397,15 @@ printf 'ghc %s (%s), cabal %s, %s, hlint %s, cabal-gild %s\n' "$("$ghc" --numeri
 step 'Haskell sources are plain .hs files git can see'
 # GHC also compiles .lhs, .hsc, .hs-boot, .hsig and Alex, Happy or c2hs sources. Ormolu, HLint
 # and the switch-off step read only .hs, so the others are not allowed. A git-ignored .hs file
-# would pass here and be missing in CI.
+# would pass here and be missing in CI. A name with a space, a control character or a double
+# quote would drop out of the file lists above, so no step would read the file.
+odd=$(git -c core.quotePath=false ls-files --cached --others --exclude-standard -- \
+  ':(icase)*.hs' '*.cabal' 'cabal.project*' | grep -E '^"|[[:space:]]' || true)
+if [ -n "$odd" ]; then
+  printf '%s\n' "$odd" >&2
+  echo 'Rename these files: no spaces, control characters or double quotes.' >&2
+  exit 1
+fi
 others=$(git ls-files --cached --others -- '*.lhs' '*.hsc' '*.hs-boot' '*.lhs-boot' '*.hsig' \
   '*.lhsig' '*.x' '*.y' '*.ly' '*.chs' '*.gc' '*.cpphs' ':!:dist-newstyle/')
 ignored=$(git ls-files --others --ignored --exclude-standard -- '*.hs' ':!:dist-newstyle/')
@@ -367,12 +416,12 @@ if [ -n "$others$ignored" ]; then
 fi
 
 step 'Format (Ormolu, cabal-gild). Fix: scripts/format'
-# shellcheck disable=SC2086 # file names have no spaces
+# shellcheck disable=SC2086 # file names have no spaces (see above) and globbing is off
 ormolu --mode check $hs_files
 for f in $cabal_files; do cabal-gild --mode check "$f"; done
 
 step 'Lint (HLint, rules in .hlint.yaml)'
-# shellcheck disable=SC2086 # file names have no spaces
+# shellcheck disable=SC2086 # file names have no spaces, and globbing is off
 hlint $hs_files
 
 step 'No switched-off checks'
@@ -380,7 +429,7 @@ step 'No switched-off checks'
 # hatches, and modules that export themselves whole. A file that is exactly the hspec-discover
 # driver keeps its OPTIONS_GHC line. In .cabal and cabal.project files: flags that are not on
 # the allowed list, and cabal.project fields that are not on theirs.
-# shellcheck disable=SC2086 # file names have no spaces
+# shellcheck disable=SC2086 # file names have no spaces, and globbing is off
 if ! scan switches $hs_files $cabal_files $project_files; then
   echo 'The lines above switch off a check or use an unsafe escape hatch. Remove them.' >&2
   exit 1
@@ -394,7 +443,7 @@ step 'Build settings ({{package}}.cabal, cabal.project)'
 # Every component starts with import: common and builds; the common stanza keeps the warnings;
 # extensions are set only there; source folders are ones git sees; every test suite runs the
 # hspec-discover driver; and cabal.project keeps -Werror.
-# shellcheck disable=SC2086 # file names have no spaces
+# shellcheck disable=SC2086 # file names have no spaces, and globbing is off
 if ! scan settings $hs_files $cabal_files $project_files; then
   echo 'Fix the settings above. Gate settings change only with the owner'"'"'s approval.' >&2
   exit 1
@@ -406,8 +455,9 @@ step 'Dependency versions match cabal.project.freeze. Fix: scripts/freeze'
 # steps from here on run cabal with a config of their own: the Hackage repository, and the
 # user's index and store folders, as the user's config names them.
 unset CABAL_CONFIG
-index=$(cd "$tmp" && cabal path --remote-repo-cache)
-store=$(cd "$tmp" && cabal path --store-dir)
+# Without a user config, cabal path first prints a line that it writes a default one.
+index=$(cd "$tmp" && cabal path --remote-repo-cache | tail -n 1)
+store=$(cd "$tmp" && cabal path --store-dir | tail -n 1)
 # shellcheck disable=SC2016 # $ncpus is cabal's word for the number of CPUs
 printf 'repository hackage.haskell.org\n  url: http://hackage.haskell.org/\n\nremote-repo-cache: %s\nstore-dir: %s\njobs: $ncpus\n' \
   "$index" "$store" >"$tmp/cabal.config"
@@ -428,23 +478,22 @@ cabal build all
 step 'Test'
 # hspec also reads options from HSPEC_* variables and .hspec files; either can skip tests.
 # The fixed seed makes QuickCheck try the same inputs on every run. The weekly scheduled CI job
-# tries random seeds. --no-color keeps the summary line plain for the count below; hspec colours
-# its output on GitHub Actions.
+# tries random seeds. hspec colours its output on GitHub Actions; --no-color keeps it plain.
+# hspec writes its failure report only once every example has run. cabal fills in $test-suite.
 for name in $(env | sed -n 's/^\(HSPEC_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$name"; done
-{
-  cabal test all --test-show-details=direct \
-    --test-options='--ignore-dot-hspec --no-color --fail-on=pending,focused,empty,empty-description --seed=1' ||
-    echo failed >"$tmp/test-failed"
-} 2>&1 | tee "$tmp/test.log"
-if [ -e "$tmp/test-failed" ]; then exit 1; fi
-# Each test suite must print hspec's summary. A suite whose Main skips the hspec-discover driver
-# would run nothing and still pass.
-# shellcheck disable=SC2086 # file names have no spaces
-suites=$(cat $cabal_files | grep -c '^test-suite ' || true)
-summaries=$(grep -cE '^[0-9]+ examples?, 0 failures' "$tmp/test.log" || true)
-if [ "$suites" -ne "$summaries" ]; then
-  echo "$suites test suites, but $summaries hspec summaries. Every suite must use hspec-discover." >&2
-  exit 1
-fi
+mkdir "$tmp/reports"
+# shellcheck disable=SC2016 # $test-suite is cabal's word for the suite's name
+cabal test all --test-show-details=direct \
+  --test-options="--ignore-dot-hspec --no-color --fail-on=pending,focused,empty,empty-description --seed=1 --failure-report=$tmp/reports/"'$test-suite'
+# Each test suite must finish an hspec run. A suite whose Main skips the hspec-discover driver
+# runs nothing, and a test can print a summary and exit with code 0 before the other examples
+# run. Neither writes the report.
+# shellcheck disable=SC2086,SC2013 # no spaces in file names or suite names, globbing is off
+for suite in $(sed -n 's/^test-suite[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' $cabal_files); do
+  if [ ! -e "$tmp/reports/$suite" ]; then
+    echo "Test suite $suite did not finish an hspec run. Every suite must use hspec-discover, and no test may exit." >&2
+    exit 1
+  fi
+done
 
 printf '\nAll checks passed.\n'

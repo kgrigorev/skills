@@ -20,12 +20,15 @@
   - {name: foldl, within: [], message: "Lazy: builds up thunks. Use foldl' (exported by Prelude)."}
   - {name: fromJust, within: [], message: "Partial. Pattern match, or use fromMaybe or maybe."}
   - {name: [read, readLn, readIO], within: [], message: "Partial. Use readMaybe from Text.Read."}
+  - {name: [decodeUtf8, decodeUtf16LE, decodeUtf16BE, decodeUtf32LE, decodeUtf32BE], within: [], message: "Throws on bytes that are not valid text. Use decodeUtf8' (returns Either) or decodeUtf8Lenient."}
   # Crashes from pure code. In IO, throwIO is fine for the unexpected, such as a full disk.
   - {name: [error, errorWithoutStackTrace, undefined, throw, Control.Exception.assert, Control.Exception.Base.assert, GHC.Base.assert], within: [], message: "Return a Maybe or an Either instead."}
   - {name: [unsafePerformIO, unsafeDupablePerformIO, unsafeInterleaveIO, unsafeCoerce], within: [], message: "Unsafe. Not allowed."}
   - {name: [trace, traceShow, traceShowId, traceM, traceShowM, traceId], within: [], message: "Debug output. Remove it."}
   - {name: [xit, xspecify, xdescribe, xcontext, pending, pendingWith], within: [], message: "Do not skip tests. Fix or delete them with the owner's approval."}
   - {name: [fit, fspecify, fdescribe, fcontext, focus], within: [], message: "Do not commit focused tests."}
+  # An around hook decides whether the example runs at all, so it can skip it and still pass.
+  - {name: [around, around_, aroundWith, aroundAll, aroundAll_, aroundAllWith], within: [], message: "An around hook can skip the test. Use before and after, or bracket inside the example."}
   # Settings that make a test check less, or invert it. scripts/check sets the test options.
   - {name: [expectFailure, Test.QuickCheck.once, Test.QuickCheck.Property.once, withMaxSuccess, withNumTests, withDiscardRatio, withMaxSize, withMaxShrinks, modifyMaxSuccess, modifyMaxDiscardRatio, modifyMaxSize, modifyMaxShrinks, modifyArgs, modifyConfig], within: [], message: "Do not change how much a test checks. Write a better generator or test instead."}
 
@@ -37,9 +40,11 @@
   - {name: [Data.Map, Data.Map.Lazy], within: [], message: "Use Data.Map.Strict."}
   - {name: Control.Arrow, within: [], message: "Hard to read. Write a lambda or a helper function."}
   # Only an executable's Main decides to stop the program. The library returns an Either.
-  - {name: System.Exit, within: [Main], message: "Only Main may exit. Return an Either and let Main exit."}
+  - {name: [System.Exit, GHC.IO.Exception], within: [Main], message: "Only Main may exit. Return an Either and let Main exit."}
   # hspec's internals can switch a whole suite to a dry run or skip examples.
   - {name: [Test.Hspec.Core.**, Test.Hspec.Runner, Test.Hspec.Api.**], within: [], message: "Not allowed. scripts/check sets the test options."}
+  # QuickCheck's internals can turn a failed property into a pass (mapTotalResult, succeeded).
+  - {name: Test.QuickCheck.Property, within: [], message: "Not allowed. Use Test.QuickCheck."}
 
 # Point-free style hides the arguments and is hard to read. Do not suggest it.
 - ignore: {name: Eta reduce}
