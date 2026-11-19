@@ -54,7 +54,8 @@ A new entry in `dependencies` or `devDependencies` in `package.json`, or in `all
 - Review what the checks cannot see: a type guard (`value is T`) or an overload signature that
   claims more than the code checks, a `catch` that turns every error into a default value, a
   deleted or weakened test, a test that returns before its real assertion, catches its own
-  assertion error or mocks the module it tests, an export or method that only tests use, and a
+  assertion error or mocks the module it tests, a test that patches a built-in or reaches into
+  vitest through `Reflect` or a computed name, an export or method that only tests use, and a
   devDependency imported from `src/`.
 - A rule that holds for many inputs gets a property test with fast-check, as in
   `tests/{{package}}.test.ts`.

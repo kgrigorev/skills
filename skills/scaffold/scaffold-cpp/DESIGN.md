@@ -36,6 +36,42 @@ Every other gate states its reason in a comment in its own file.
   hardening flags must be there. The list is closed on purpose; a new flag is an owner decision.
   The required sanitizer and hardening flags are written into the check, not read from
   `CMakePresets.json`, because a preset edit is the easiest way to drop them.
+  - `-c` takes no argument; only the source file after it is skipped, so `-c @flags.rsp` is a
+    response file like any other.
+  - `-resource-dir` must be the pinned compiler's own, once. That folder holds the builtin
+    headers and the default sanitizer ignore lists (`share/ubsan_ignorelist.txt`).
+  - `-W<name>=0` is rejected like `-Wno-<name>`.
+- Only GoogleTest and rapidcheck are trusted under `build/`. They are known by target (the
+  objects of `gtest`, `gtest_main` and `rapidcheck`, from sources under
+  `build/dev/_deps/{googletest,rapidcheck}-src/`), not by folder: a project target can write its
+  output into any folder, but cannot take one of those target names. Any other file the compiler
+  reads under `build/`, `-I` into `build/` and `-isystem` anywhere else fail. A generated header
+  is code that no gate read. A project folder named `_deps` is rejected, since `.clang-tidy`
+  skips that path.
+- `rules.ninja` must run the pinned tools as CMake writes them: the compile rule and the
+  executable link rule exactly, the static library rule step by step (`rm`, `ar qc`, `ranlib`,
+  and the `touch` CMake adds on macOS). `CMAKE_AR` and `CMAKE_RANLIB` must be the pinned LLVM
+  tools, and `CMAKE_MAKE_PROGRAM` the pinned ninja, which the check passes on each configure so a
+  value once forced into the cache cannot outlive the CMake line. No target may set a launcher, a code check
+  (`CXX_INCLUDE_WHAT_YOU_USE`, `CXX_CPPCHECK`, ..., which run any program on each compile) or a
+  pre-link or post-build step. This closes rule variables such as `CMAKE_CXX_ARCHIVE_FINISH`
+  without listing them. Shared libraries and C++ modules are not used, so their rules fail.
+- `build.ninja` is read as a graph: an executable or a static library is made only from objects
+  a checked compile step makes, an executable links only archives built here, a static library
+  gets no extra archiver arguments (`STATIC_LIBRARY_OPTIONS`), and every compiled object is in
+  `compile_commands.json` (`EXPORT_COMPILE_COMMANDS OFF` would hide one from the flag check).
+  Prebuilt `.o`, `.a`, `.so`, `.dylib` and similar files in the project are rejected.
+- CMake files may call only the commands on a list in the check (the usual project, target,
+  test, `FetchContent` and control-flow commands, `install`, read-only `file()` modes) and the
+  functions and macros the project defines, whose bodies the scan reads. Anything else can run a
+  program or write a file when CMake or the build runs (`execute_process`, `add_custom_command`,
+  `configure_file`, `write_file`, `cmake_language`, a module function such as
+  `configure_package_config_file`), after the source searches, and so change or add code. A
+  list of what to reject would miss the next spelling. `include` takes a module from a short
+  list or a tracked project `.cmake` file, and `add_subdirectory` a project folder (with
+  `EXCLUDE_FROM_ALL` or `SYSTEM` at most), named literally: CMake splits an unquoted `;` into
+  more arguments and a variable can hold anything. The gate files `cmake/strict.cmake` and
+  `cmake/toolchain.cmake` may use any command; the owner reviews those.
 - `ninja -t deps` lists every file the compiler read. The check requires that set, inside the
   project, to equal the `.cpp` and `.hpp` files the other gates read. This closes `#include` of
   any other extension, untracked or ignored headers, and files that nothing compiles (never
@@ -52,11 +88,23 @@ Every other gate states its reason in a comment in its own file.
   check itself, outside the preset), runs ctest with `GTEST_OUTPUT=json`, and requires a report
   that says "completed, no failure" for every listed test. GoogleTest writes the report only when
   the test run ends normally.
+  - The test executables are every program a ctest test runs, plus every project executable that
+    links the archives of the `gtest` and `gtest_main` targets, found by target, not by file name.
+  - ctest runs with `--repeat until-fail:1`, and a `"repeat"` key in the presets is rejected: a
+    retry would hide a crash on the first run, which writes no report. A report that records a
+    failure fails the check too.
+  - A `CTestTestfile.cmake` may include only the scripts `gtest_discover_tests` writes next to
+    it. A `TEST_INCLUDE_FILES` script runs in the real run but can see that it is not
+    `--show-only` (for example by `GTEST_OUTPUT`) and set test properties only then. The check
+    walks the `subdirs()` that ctest follows, from `build/dev`, so a file left by a removed folder
+    does not count and no folder is skipped.
 - `compile_commands.json` must give every project file the same `-D` macros, so a header cannot
   act differently in the test target than in the program.
 - Link lines in `build.ninja` may not name `-l`, `-L`, frameworks or absolute paths, except the
   C library parts `-lpthread`, `-ldl`, `-lm`, `-lrt` and `-pthread`. That catches `find_package`
-  and bare system libraries, which build on one machine and not on another.
+  and bare system libraries, which build on one machine and not on another. Link flags are a
+  closed list (the sanitizer flag and the two `-Wl` flags CMake adds on macOS): `-Wl,--wrap`,
+  `-Wl,--defsym` or `-Wl,-alias` could swap a function, such as a sanitizer's handler.
 
 ## What `scripts/check` reads in the source
 
@@ -64,17 +112,39 @@ Every other gate states its reason in a comment in its own file.
   blanked out, and with backslash-continued lines joined, as the compiler reads it. So a word
   in a comment or a string is not flagged, and a comment cannot split a word (`#/**/pragma`).
   Only the `NOLINT` and `clang-format off` searches read comments, because those are comments.
+  The blanker tracks numbers as the preprocessor does, so the digit separator in `1'000` or
+  `.5'0` does not open a character literal, and a dot ends a name (`x.R"(...)"` is a raw string).
 - A search cannot see a word that a macro builds from parts, so token pasting (`##`) is
-  rejected.
+  rejected. Names in code must be ASCII, so a word cannot hide in other letters.
+- `asm` labels are rejected: the symbol name sits in a string, which the searches do not read,
+  so `__asm__("___ubsan_handle_add_overflow_abort")` could define a sanitizer's handler.
 - `#if`, `#ifdef` and `#elif` may test only `__APPLE__`, `__linux__`, `__cplusplus`, `__cpp_*`
-  and `__has_include`. This is a closed list for the same reason as the flag list: code under
-  any other macro (`NDEBUG`, `__OPTIMIZE__`, a macro nothing defines) is never compiled in the
-  checked build, and naming each such macro misses the next one. Headers use `#pragma once`, the
-  only allowed pragma.
-- In test files (those that include GoogleTest or rapidcheck), `main` and a bare `return;` are
-  rejected. A property skips an input with `RC_PRE`, which fails it when too many are skipped.
-- `std::abort`, `std::terminate`, `std::quick_exit` and `_Exit` are rejected: they skip the test
-  report and the caller's error handling. `assert` stays, for preconditions.
+  and `__has_include` of a header named without a slash (`<print>`, `<unistd.h>`), except
+  GoogleTest's and rapidcheck's. This is a closed list for the same reason as the flag list:
+  code under any other macro (`NDEBUG`, `__OPTIMIZE__`, a macro nothing defines) is never
+  compiled in the checked build, and naming each such macro misses the next one.
+  `__has_include(<gtest/gtest.h>)` is true in test files only. `#define` and `#undef` of a
+  reserved name (`__linux__`, `_LIBCPP_...`) are rejected, since they would change those answers
+  for one file; the libc feature macros (`_GNU_SOURCE`, `_POSIX_C_SOURCE`, ...) are fine. Headers
+  use `#pragma once`, the only allowed pragma.
+- An `#include` must name its file. `#include DEBUG_HEADER` would hide from the searches which
+  file it is, such as GoogleTest outside `tests/`.
+- Test files are the files under `tests/`, and only they may include GoogleTest or rapidcheck
+  (`<rapidcheck.h>` too). In them, `main` and a bare `return;` are rejected, in helper headers
+  too, since a header can hold a `TEST`: write a guard clause there as `if`/`else`. A property
+  skips an input with `RC_PRE`, which fails it when too many are skipped.
+- `std::abort`, `std::terminate`, `std::quick_exit`, `_Exit` and `_exit` are rejected: they skip
+  the test report and the caller's error handling. A qualified name (`std::abort`,
+  `::std::abort`, `::abort`, with spaces or a comment around `::`) is rejected in any use, its
+  address too. A plain `abort(...)` is rejected as a call, inside a class too (call a member
+  as `this->abort()`), and inside a `#define`. A member function of the same name
+  (`void abort()`, `job.abort()`, `Job::abort()`) is fine. A namespace alias of `std` is
+  rejected, since `sys::terminate()` would not read as `std::`. `assert` stays, for
+  preconditions.
+- `.clang-format-ignore` is rejected with the nested `.clang-tidy` and `.clang-format` files: it
+  makes clang-format skip the files it lists. clang-format also reads one in any folder above
+  the project (the main checkout around a nested worktree), so the check looks there too.
+- Lines must end in LF: a CR LF file gets its own message rather than "outside ASCII".
 - The dependency scan reads CMake as CMake does: it drops `#` and `#[[ ]]` comments outside
   quotes, joins a command over its lines, and matches command names in any letter case.
 - In test files, clang-tidy's `bugprone-unchecked-optional-access` is off. It does not model
@@ -102,8 +172,19 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
 - Code that detects the test build without a macro: a `std::source_location` default argument
   or `__FILE__` inside a macro names the calling test file. The searches catch `__BASE_FILE__`
   only.
-- A `main` for a test executable in a file that does not include GoogleTest, or a test that
-  writes a fake GoogleTest report before it ends the process.
+- A `main` for a test executable in a file outside `tests/`, or a test that writes a fake
+  GoogleTest report before it ends the process.
+- Code that detects the test run at run time, for example by reading `/proc/self/cmdline` or the
+  program name. `std::getenv` is caught by clang-tidy's `concurrency-mt-unsafe`.
+- An `#include` of an absolute path outside the project (`#include "/opt/x.hpp"`): the compiler
+  and the SDK live outside it too, so the deps check skips those paths. CI does not have the
+  file, so it goes red there.
+- A dependency's own CMake code. FetchContent runs GoogleTest's and rapidcheck's CMake files,
+  which the scan does not read; their URL and SHA-256 pin them, and a new dependency needs the
+  owner.
+- A file under `build/dev/_deps/*-src` changed by hand after the download. CI downloads afresh
+  only when its build cache misses (the cache key holds `cmake/**`, and `restore-keys` falls
+  back to an older cache), so such a change stays local.
 
 ## Toolchain
 
@@ -124,7 +205,17 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
   that does not exist; `/dev/null` is rejected by mise). Otherwise `mise.local.toml`, a parent
   folder's config (a git worktree inside the main checkout has one) or the user's global config
   can change PATH or a version. `mise.toml` may hold only `[tools]` and `lockfile = true`, and
-  each tool must resolve inside its `mise where` folder.
+  each tool must resolve inside its `mise where` folder. A line above the first section is
+  rejected (a dotted `env.NAME` key is an `[env]` table), and each tool line is
+  `name = "version"`, so no inline table carries options. The missing config path lies in the
+  git-ignored `build/`, so the check deletes it before each run.
+- `scripts/check` unsets what the caller's shell could pass to the tools: `GTEST_*`, `CMAKE_*`,
+  `CTEST_*`, `*SAN_*`, `LD_*`, `DYLD_*`, the compiler flag variables, `CCC_*`
+  (`CCC_OVERRIDE_OPTIONS` edits clang's command line), `COMPILER_PATH` and `GCC_EXEC_PREFIX`
+  (where clang finds the linker), the include path variables and `SDKROOT`. CI has none of
+  them.
+- A project path with a space fails early: `compile_commands.json` quotes it, and the checks
+  read commands word by word.
 - `scripts/check` compares `mise.toml` with `mise.lock` before it calls mise. `mise exec
   --locked` only warns about a version that the lock lacks, then may install it and rewrite
   `mise.lock`.

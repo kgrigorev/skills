@@ -29,8 +29,8 @@ Every other gate states its reason in a comment in its own file.
     two checkers. Pyright is only the editor's language server; mypy decides.
   - `ruff check --preview`: preview rules change between patch releases.
   - Failing on every deselected test: it would break `uv run pytest -k name`.
-    `tests/conftest.py` fails only when tests are dropped without `-k`, `-m` or `--deselect`.
-    `scripts/check` passes none of them, and it clears `PYTEST_ADDOPTS`.
+    `tests/conftest.py` fails only when tests are dropped without `-k`, `-m`, `--deselect`,
+    `--lf` or `--sw`. `scripts/check` passes none of them, and it clears `PYTEST_ADDOPTS`.
   - A "test must assert" gate: no cheap, reliable tool. Counting passed asserts
     (`pytest_assertion_pass`) would fail every `pytest.raises` test, and a static "has an
     assert" rule passes `assert True` and rejects tests that call an asserting helper.
@@ -52,12 +52,58 @@ Every other gate states its reason in a comment in its own file.
   that neither sees (an `else` after `if TYPE_CHECKING:`, a function renamed to `assert_never`,
   a test that expects a failing assert) are found in the parsed code (`ast`). What a test really
   runs with is checked at run time in `tests/conftest.py`: tests that a module defines but
-  pytest does not collect, and Hypothesis tests whose settings are not the active profile.
+  pytest does not collect, Hypothesis tests whose settings are not the active profile, and:
+  - failures and tests that never ran, from the conftest's own record, not from pytest's counts,
+    which a test can change (`session.testsfailed = 0`);
+  - a test that registers or removes a pytest plugin: such a plugin can rewrite any report, so
+    the run stops at once (`os._exit`). The one plugin pytest adds on the way (the `--lf`
+    helper) is allowed by exact class and name, not by module;
+  - a session whose final check never ran, for example because a test unregistered the
+    conftest: an `atexit` handler fails the run. Tests may not use `atexit`, `os.exec*`,
+    `os.spawn*`, `os.fork`, `posix`, `nt` or `ctypes`, which could replace the exit status
+    after pytest;
+  - the collect-only option as it was at startup, so a test cannot set it to skip the final
+    check;
+  - a passing test during which code caught an `AssertionError`, seen through
+    `sys.monitoring` (`EXCEPTION_HANDLED`). This catches a failing assert swallowed by any name
+    or context manager, which no static check can list. The monitoring tool is checked after
+    each test, and tests may not use `sys.monitoring`;
+  - a test whose warning filters differ from the ones pytest set up (`recwarn`,
+    `resetwarnings`, a changed `warnings.filters`).
 - `PYTHONHASHSEED=0` makes reruns identical. The cost: a bug that depends on set order stays
   hidden.
 - Per-test Hypothesis settings are banned, even ones that run more examples. A test that needs
   more goes into a named profile in `tests/conftest.py`, with the owner's approval.
 - `astral-sh/setup-uv` has no major tag, so it is pinned by commit and bumped by hand.
+- `norecursedirs` lists only caches. pytest's default skips `build`, `dist`, `venv` and hidden
+  folders without a word, so `tests/build/test_x.py` would never run. mypy still skips hidden
+  folders, so the layout check rejects them.
+- What coverage skips is decided by coverage's own parser, not by a search for its patterns:
+  every line it excludes in the package must be one of the shapes that hide no code that runs.
+  coverage matches its patterns over the whole file, across line breaks and inside strings.
+- `.agents/` holds vendored agent skills. Nothing imports them, so ruff, the searches and the
+  layout check skip the folder at the root; their Python would otherwise break the gates.
+- `HYPOTHESIS_NO_PLUGINS=1`: Hypothesis runs code from installed packages' `hypothesis` entry
+  points when it is imported, before `tests/conftest.py`, and `--disable-plugin-autoload` does
+  not cover that.
+
+## Not closed
+
+Only the owner's review of every change catches these:
+
+- Code that patches pytest, Hypothesis or `tests/conftest.py` itself at run time, for example
+  through `type.__setattr__`, `getattr` with built names or `sys.modules`. Each run-time check
+  can be switched off by code that runs before it; the checks close the plain forms.
+- Reflection on private Hypothesis modules (`getattr(hypothesis, "_settings")`). The ast check
+  rejects only their imports.
+- A test without an assert (see above), and a test whose assert cannot fail.
+- Changing module state of the standard library through `vars()` or built names, for example
+  adding a warning filter with `vars(warnings)["filters"]` and removing it before the test
+  ends. The run-time check compares the filters only before and after the test.
+- A failing assert swallowed where `sys.monitoring` does not see it: in C code (a sqlite3
+  user function, a `concurrent.futures` worker read with `future.exception()`), or in a
+  fixture or teardown, which the caught-assert check does not watch.
+- A tampered `.venv` or a local `.git/config`: they change only the local run. CI starts clean.
 
 ## Keeping the template current
 

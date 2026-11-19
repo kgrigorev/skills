@@ -51,6 +51,24 @@ for word in break case chan const continue default defer else fallthrough for fu
   [ "$gopackage" != "$word" ] ||
     fail "package \"$package\": the Go package name \"$gopackage\" is a Go keyword or \"main\". Pick another name."
 done
+# The template's files import these packages next to the root package, so the same name would
+# be declared twice: cmd/<package>/main.go imports fmt, the test file strings, testing and rapid.
+for word in fmt strings testing rapid; do
+  [ "$gopackage" != "$word" ] ||
+    fail "package \"$package\": the Go package name \"$gopackage\" clashes with a package the template imports. Pick another name."
+done
+# The import of the root package would hide a built-in name, which the predeclared linter rejects.
+for word in any append bool byte cap clear close comparable complex complex64 complex128 copy \
+  delete error false float32 float64 imag int int8 int16 int32 int64 iota len make max min new \
+  nil panic print println real recover rune string true uint uint8 uint16 uint32 uint64 uintptr; do
+  [ "$gopackage" != "$word" ] ||
+    fail "package \"$package\": the Go package name \"$gopackage\" is a built-in Go name. Pick another name."
+done
+# cmd/<package>/ must be a folder that ./... includes: go skips testdata/ and treats vendor/
+# as vendored modules.
+case $package in
+testdata | vendor) fail "package \"$package\": go treats cmd/$package/ as a special folder. Pick another name." ;;
+esac
 
 # github.com/<owner>/<repo> from the target's own origin remote, else example.com/<package>.
 # Only a .git folder inside the target counts, never a repository around it. The fallback has a

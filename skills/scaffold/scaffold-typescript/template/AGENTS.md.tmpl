@@ -47,21 +47,25 @@ Read `CODING_STANDARDS.md` before writing or reviewing TypeScript.
 The checks enforce these rules:
 
 - Source files are `.ts` only: no `.js`, `.mts`, `.cts`, `.tsx`, and no hand-written `.d.ts`.
-  No committed file under an ignored path such as `dist/`.
+  No `.ts` file in a hidden folder such as `.tools/`, which the type check skips. No committed
+  file under an ignored path such as `dist/`.
 - Only `mise.toml` configures mise: no `mise.local.toml`, `.tool-versions` or `.config/mise/`.
 - Relative imports name the `.ts` file (`./parse.ts`). Built-in modules use `node:` (`node:fs`).
 - Only TypeScript that Node can strip: no `enum`, `namespace` or constructor parameter
   properties. Use a union of string literals and plain fields.
 - No `any`, no `!`, no `as` that narrows a type. Data from outside is `unknown` until a type
   guard checks it.
-- No `declare` (`declare function`, `declare global`): import what the code uses, or define it.
+- No `declare` (`declare function`, `declare global`) and no `/// <reference>`: import what the
+  code uses, or define it.
 - A `switch` on a union handles every member. Compare with `=== undefined` or `=== ""`
   instead of relying on truthiness.
 - Tests use fixed inputs: no clock and no `Math.random` or `crypto` random values, however the
   test reaches them (`tests/setup.ts` fails it; code under `src/` may read them), and no
-  fast-check seed, `numRuns` or time limit other than in `tests/setup.ts`. Fake timers start at
-  0. No skipped, conditional, expected-to-fail or retried tests. A missing snapshot fails; write
-  it on purpose with `vitest run -u`.
+  fast-check seed, `numRuns`, time limit or plugin other than in `tests/setup.ts`. Use
+  `fc.assert`, not `fc.check`. Fake timers start at 0. `vi.setConfig` may change only timeouts
+  and mock settings. No test changes how stack traces are captured, patches built-ins such as
+  `Array.prototype`, or reaches into vitest's internals. No skipped, conditional, expected-to-fail
+  or retried tests. A missing snapshot fails; write it on purpose with `vitest run -u`.
 - Every promise is awaited or handled with `.catch`; `void promise` does not count.
 - No unused parameter or variable, also not one named `_name`. A parameter before a used one may
   stay unused (`(_, index) => index`).

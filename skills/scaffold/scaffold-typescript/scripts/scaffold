@@ -22,6 +22,11 @@ template=$(cd "$(dirname "$0")/../template" && pwd)
 . "$(dirname "$0")/scaffold-lib.sh"
 
 check_inputs "$2" "$3" "$4"
+# The library is src/<package>.ts, next to the program src/main.ts.
+if [ "$2" = main ]; then
+  echo 'The package name "main" would make the library src/main.ts, the program. Pick another name.' >&2
+  exit 2
+fi
 require_tools mise git
 require_hidden "$template"
 
