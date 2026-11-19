@@ -12,6 +12,9 @@ A rebase rewrites branches you already pushed, so the next push is a force-push.
 a rebased branch (`gh stack submit` or `git push --force-with-lease`), ask the owner. Some agent
 harnesses block force-push; then report the commands and let the owner run them.
 
+Run `gh extension list` first. When it shows `gh stack`, build with it: GitHub then shows the
+PRs as one stack and merges them as one.
+
 - With `gh stack` (`gh extension install github/gh-stack`): `gh stack add` for each layer, then
   `gh stack submit`. To adopt branches you already have, list them bottom to top:
   `gh stack init <b1> <b2> <b3>`. After a lower layer changes or merges (`gh stack view` shows

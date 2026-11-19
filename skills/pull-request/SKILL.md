@@ -29,8 +29,10 @@ body the commit on `main`), and reviewers skim it. Keep it short.
 
 3. **Title.** Follow the repo's convention: `AGENTS.md`, a CI title check, or else
    `git log --format=%s -20`. Default: `type(scope): what changed`, at most 72 characters.
-4. **Body.** Write for a human who reads it once. Each paragraph is one or two plain sentences,
-   and a template slot holds one line unless the template gives it its own limit, such as a
+4. **Body.** Write for a human who reads it once, in **plain** words: each line says what
+   changes for the people who use the code ("Every test file runs, wherever it is"), not which
+   settings, flags or globs moved. Name a file only when the reader must find it. Each paragraph
+   is one or two sentences, and a template slot holds one line unless the template gives it its own limit, such as a
    sketch of at most 10 lines. State the reason in general terms, as it will still read after
    the merge, rather than the story of how the need came up. Leave out what the diff and the
    repo's files already show: file lists, code, renames, lists of details. Use a bullet list
@@ -42,7 +44,9 @@ body the commit on `main`), and reviewers skim it. Keep it short.
 
 ## Update a PR
 
-After new commits, check that the title and body still match the diff. Fix them with
+Before you push commits that fix review findings, review them the way the first review ran (the
+same review skill or reviewer subagent, given only the new commits), so the fix is not the next
+round's finding. After new commits, check that the title and body still match the diff. Fix them with
 `gh pr edit <number> --title "<title>" --body-file -`, under the same rules.
 
 ## Merge a PR
