@@ -11,7 +11,10 @@
 #   # expect: green        scripts/check passes (good code the gates must not reject)
 #   # expect-<OS>: ...     optional: replaces the expect line where `uname -s` prints <OS>, for an
 #                          attack that the platform itself stops at another step
+#   # expect-output: <text>  optional, repeatable: the output of scripts/check also contains
+#                          <text>, so a red case fails for its own reason, not another one
 #   # env: NAME=value      optional, repeatable: set for scripts/check only
+#   # output: <text>       optional, repeatable: the output of scripts/check contains <text>
 # The rest of the file is a sh script that changes the project (cwd is the project root).
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,7 +41,14 @@ if [ -z "$project" ]; then
 fi
 cd "$project"
 
-# The rendered state is a commit in the project's own repo, so each attack starts from it.
+# The rendered state is a commit in the project's own repo, so each attack starts from it. After
+# each attack the runner resets the project to that commit and deletes untracked files, so a
+# project with work that is not committed is refused.
+if git rev-parse -q --verify HEAD >/dev/null && [ -n "$(git status --porcelain)" ]; then
+  echo "$project has changes that are not committed, and the runner would delete them." >&2
+  echo 'Commit them, or pass a copy of the project.' >&2
+  exit 2
+fi
 git add -A
 if ! git rev-parse -q --verify HEAD >/dev/null; then
   git -c user.name=test -c user.email=test@example.invalid commit -q -m rendered --no-verify
@@ -83,6 +93,7 @@ for file in $files; do
   esac
   if ! sh -eu "$file" >"$work/attack.log" 2>&1; then
     result="attack script failed: $(tail -n 1 "$work/attack.log")"
+    cp "$work/attack.log" "$work/out"
   else
     git add -A
     if run_check "$file"; then got=green; else got=red; fi
@@ -98,9 +109,23 @@ for file in $files; do
         *"$want"*) result=ok ;;
         *) result="red at the wrong step: $step (want: $want)" ;;
         esac
+        if [ "$result" = ok ]; then
+          missing=$(sed -n 's/^# expect-output: //p' "$file" | while IFS= read -r text; do
+            grep -qF -- "$text" "$work/out" || printf '%s\n' "$text"
+          done)
+          [ -z "$missing" ] || result="red for another reason: the output lacks \"$missing\""
+        fi
       fi
       ;;
     esac
+    if [ "$result" = ok ]; then
+      wants=$(sed -n 's/^# output: //p' "$file")
+      while IFS= read -r text; do
+        [ -z "$text" ] || grep -qF -- "$text" "$work/out" || { result="output lacks: $text"; break; }
+      done <<EOF
+$wants
+EOF
+    fi
   fi
   if [ "$result" = ok ]; then
     pass=$((pass + 1))

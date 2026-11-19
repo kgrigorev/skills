@@ -66,15 +66,20 @@
     "eslint/no-useless-catch": "error",
 
     // Control flow: every union member handled; no truthiness on nullable strings and numbers
-    // (0 and "" are valid values); no condition that is always true or false.
+    // (0 and "" are valid values); no condition that is always true or false, except the literal
+    // `while (true)` of a loop that ends with a break.
     "typescript/switch-exhaustiveness-check": "error",
     "typescript/strict-boolean-expressions": "error",
-    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-condition": [
+      "error",
+      { "allowConstantLoopConditions": "only-allowed-literals" }
+    ],
     "typescript/prefer-nullish-coalescing": "error",
     "typescript/prefer-optional-chain": "error",
 
-    // Expressions whose result is easy to misread.
-    "typescript/no-confusing-void-expression": "error",
+    // Expressions whose result is easy to misread. An arrow without braces may return a void call,
+    // as in `expect(() => validate(-1)).toThrow()` and `lines.forEach((line) => console.log(line))`.
+    "typescript/no-confusing-void-expression": ["error", { "ignoreArrowShorthand": true }],
     "typescript/restrict-plus-operands": "error",
     "typescript/no-deprecated": "error",
     "typescript/no-mixed-enums": "error",
@@ -86,6 +91,12 @@
     "typescript/ban-ts-comment": [
       "error",
       { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true, "ts-check": false }
+    ],
+    // A triple-slash reference adds types from outside the project: `/// <reference lib="dom" />`
+    // declares `document`, which Node does not have, so the type check passes and the code fails.
+    "typescript/triple-slash-reference": [
+      "error",
+      { "lib": "never", "path": "never", "types": "never" }
     ],
     "eslint/eqeqeq": "error",
     "eslint/no-self-compare": "error",

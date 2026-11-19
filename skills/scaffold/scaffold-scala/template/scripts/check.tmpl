@@ -275,8 +275,13 @@ step 'No switched-off checks in the compiled code'
 # for a type alias or a type parameter that can stand for one, or a generic CanEqual given.
 # Test files are the files Scala CLI puts in the test scope (a folder named test, or a name that
 # ends in .test.scala) and every file that uses munit or ScalaCheck. Only there are the munit and
-# ScalaCheck words banned, so a domain name such as `def property` in main code passes. Test
-# files also may not catch exceptions: a test that catches can catch its own failed assertion.
+# ScalaCheck words banned, so a domain name such as `def property` or `withTags` in main code
+# passes. Test files also may not catch exceptions: a test that catches can catch its own failed
+# assertion. The same goes for a recovered Future, an intercept of a type that munit's failures
+# belong to (AssertionError and its supertypes, also through an alias or a type parameter), and a
+# custom munit.Compare, which decides what assertEquals accepts.
+# Every package is {{namespace}} or below it. A class in another package, such as
+# scala.build.testrunner.DynamicTestRunner, would stand in for the library class of that name.
 # shellcheck disable=SC2016 # an awk program, not shell code
 tree_scan='
   function strip(s,   out, i, n, c, j) {
@@ -329,7 +334,24 @@ tree_scan='
       m = substr(rest, RSTART + 1, RLENGTH - 1); rest = substr(rest, RSTART + RLENGTH)
       name = m; sub(/ .*/, "", name); hi = m; sub(/.* <: /, "", hi); sub(/.*\./, "", hi)
       if (hi in top) wide[name] = 1
+      if (hi in failtop) catcher[name] = 1
     }
+  }
+  function catches(s,   part, k, m) {
+    m = split(s, part, /[^A-Za-z0-9_$]+/)
+    for (k = 1; k <= m; k++) if (part[k] in failtop || part[k] in catcher) return 1
+    return 0
+  }
+  function widecatch(s,   rest, d, k, len, c, args) {
+    rest = s
+    while (match(rest, /intercept(Message)?\[/)) {
+      rest = substr(rest, RSTART + RLENGTH); len = length(rest); d = 1
+      for (k = 1; k <= len && d > 0; k++) { c = substr(rest, k, 1); if (c == "[") d++; else if (c == "]") d-- }
+      args = substr(rest, 1, k - 2)
+      if (catches(args)) return args
+      rest = substr(rest, k)
+    }
+    return ""
   }
   function caneq(f, s,   rest, i, d, k, len, c, args) {
     rest = s
@@ -341,7 +363,7 @@ tree_scan='
       rest = substr(rest, k)
     }
   }
-  function check(i,   f, s, t) {
+  function check(i,   f, s, t, p, u, w) {
     f = F[i]; s = L[i]; t = (f in testfile)
     gsub(/x\$[0-9]+:\(x\$[0-9]+ : .*\) @unchecked/, "", s)
     if (s ~ /^ *def [A-Za-z0-9_]*[$]default[$][0-9]+/) gsub(/@uncheckedVariance/, "", s)
@@ -353,20 +375,33 @@ tree_scan='
     if (s ~ /canEqualAny/) report(f, "universal equality", s)
     if (s ~ ("(^|[^.A-Za-z0-9_$])(require|assert)[(]") || s ~ /Predef[.](require|assert)[(]/ || s ~ (b "sys[.]error[(]"))
       report(f, "throws without the throw keyword: return an Either", s)
-    if (s ~ (b "assume[(]")) report(f, "assume skips a test or a check", s)
+    if (s ~ /Predef[.]assume[(]/) report(f, "assume skips a test or a check", s)
+    if (s ~ /^ *package [^ ]+ [{]/) {
+      p = s; sub(/^ *package /, "", p); sub(/ .*/, "", p)
+      if (p != ns && index(p, ns ".") != 1 && p != "<empty>")
+        report(f, "a package outside " ns ": its classes can stand in for a library or the test runner", s)
+    }
+    if (s ~ /scala[.]build[.]/) report(f, "the test runner: code must not call or replace it", s)
     if (s ~ /scala[.]quoted[.]/) report(f, "a macro: WartRemover never sees the code it builds", s)
     if (s ~ ("munit[.](Tag|Ignore|Only|Flaky|Fail|Pending|Slow)" e) || s ~ (b "package munit" e))
       report(f, "a munit tag skips, focuses or excuses tests", s)
-    if (s ~ /IgnoreSuite|munitIgnore|munitFlakyOK|withTags|scalaCheckTestParameters|withMinSuccessfulTests/ ||
-      s ~ (b "isCI" e) || s ~ ("(munitTests|munit[A-Za-z]*Transforms?|(Test|Suite|Value)Transforms?)" e) ||
+    if (!t) return
+    if (s ~ (b "(IgnoreSuite|munitIgnore|munitFlakyOK|withTags|scalaCheckTestParameters|withMinSuccessfulTests|isCI)" e) ||
+      s ~ (b "(munitTests|munit[A-Za-z]*Transforms?|(Test|Suite|Value)Transforms?)" e) ||
       s ~ ("org[.]scalacheck[.]Properties" e))
       report(f, "changes which tests run or how often", s)
-    if (!t) return
+    if (s ~ (b "assume[(]")) report(f, "assume skips a test or a check", s)
     if (s ~ ("[.](only|ignore|pending|flaky|fail|tag)" e)) report(f, "a munit test option skips, focuses or excuses a test", s)
     if (s ~ (b "def (test|property)" e)) report(f, "replaces how munit registers tests", s)
     if ((s ~ (b "catch" e) && s !~ /[$]values[.]apply[(]ordinal[)] catch/ && L[i + 2] !~ /CommandLineParser[.]ParseError/) ||
-      s ~ ("scala[.]util[.](Try|Using)[.]apply" e) || s ~ /scala[.]util[.]control[.]Exception/)
+      s ~ ("scala[.]util[.](Try|Using|Using[.]Manager)[.]apply" e) || s ~ /scala[.]util[.]control[.]Exception/)
       report(f, "a test that catches exceptions can catch its own failure: use intercept", s)
+    u = s; gsub(/Future[.]failed[[(]/, "", u)
+    if (u ~ ("[.](recover|recoverWith|fallbackTo|transform|transformWith|failed|exceptionally)" e))
+      report(f, "a test that recovers a failed Future can hide its own failure", s)
+    if (s ~ /munit[.]Compare[[]/) report(f, "a custom munit.Compare can make assertEquals accept anything", s)
+    if ((w = widecatch(s)) != "")
+      report(f, "intercept[" w "] also catches the failures of munit assertions: intercept the exception you expect", s)
   }
   BEGIN { q = sprintf("%c", 39); b = "(^|[^A-Za-z0-9_])"; e = "([^A-Za-z0-9_]|$)" }
   { gsub(/\033\[[0-9;]*m/, "") }
@@ -387,6 +422,9 @@ tree_scan='
     keep()
     split("Any AnyRef AnyVal Matchable Object", word, " ")
     for (k in word) top[word[k]] = 1
+    # munit failures are AssertionErrors, so intercept with one of these types catches them.
+    split("Throwable Error AssertionError FailException FailExceptionLike ComparisonFailException FailSuiteException ComparisonFailure AssertionFailedError", word, " ")
+    for (k in word) failtop[word[k]] = 1
     m = split(expected, want, " ")
     for (k = 1; k <= m; k++) if (want[k] != "" && !(want[k] in seen)) { print want[k] ": not in the compiled code"; missing = 1 }
     if (missing) exit 3
@@ -400,6 +438,11 @@ tree_scan='
       for (a in alias) if (!(a in wide) && mentions(alias[a])) { wide[a] = 1; changed = 1 }
       if (!changed) break
     }
+    for (round = 0; round < 20; round++) {
+      changed = 0
+      for (a in alias) if (!(a in catcher) && catches(alias[a])) { catcher[a] = 1; changed = 1 }
+      if (!changed) break
+    }
     for (f in J) caneq(f, J[f])
     for (k = 1; k <= n; k++) check(k)
   }
@@ -408,7 +451,7 @@ tree_scan='
 # shellcheck disable=SC2086 # the step above keeps spaces out of file names
 expected=$(printf '%s ' project.scala $scala_files)
 status=0
-findings=$(awk -v root="$PWD" -v real="$root" -v expected="$expected" "$tree_scan" "$test_log") ||
+findings=$(awk -v root="$PWD" -v real="$root" -v ns='{{namespace}}' -v expected="$expected" "$tree_scan" "$test_log") ||
   status=$?
 if [ "$status" -ne 0 ]; then
   printf '%s\n' "$findings" >&2
@@ -422,26 +465,34 @@ fi
 step 'Build and test: test results'
 [ "$test_status" = 0 ] || fail 'The build or a test failed. The errors are in the output of the build and test step.'
 # A test that ends the JVM with exit code 0 stops the run early, and the suites after it never
-# report. The test runner itself exits last, so the last recorded exit must come from it.
-exit_caller=''
+# report. The test runner itself exits last, so the last recorded exit must come from it, with
+# status 0. The status matters too: a shutdown hook can turn the runner's exit(1) into a
+# Runtime.halt(0), which records nothing, so the scala-cli status alone would read as a pass.
+exit_record=''
 if [ -f "$work/exit.log" ]; then
-  exit_caller=$(awk '
-    /^java[.]lang[.]Throwable: Runtime[.]exit[(]/ { caller = ""; seen = 1; next }
+  exit_record=$(awk '
+    /^java[.]lang[.]Throwable: Runtime[.]exit[(]/ {
+      code = $0; sub(/^.*Runtime[.]exit[(]/, "", code); sub(/[)].*$/, "", code); caller = ""; seen = 1; next
+    }
     seen && caller == "" && /^[ \t]*at / && !/at java[.]base\// && !/at scala[.]sys[.]package[$][.]exit/ { caller = $0 }
-    END { sub(/^[ \t]*at /, "", caller); print caller }
+    END { sub(/^[ \t]*at /, "", caller); if (seen) print "exit(" code ") from " caller }
   ' "$work/exit.log")
 fi
-case $exit_caller in
-'scala.build.testrunner.DynamicTestRunner$.main('*) ;;
-*) fail "The test run ended before the test runner finished. The exit came from: ${exit_caller:-no recorded exit (Runtime.halt?)}. Tests must not end the JVM." ;;
+case $exit_record in
+'exit(0) from scala.build.testrunner.DynamicTestRunner$.main('*) ;;
+*) fail "The test run did not end with the test runner's exit(0). Last recorded exit: ${exit_record:-none (Runtime.halt?)}. Tests must not end the JVM." ;;
 esac
-# Each suite ends with "Test run <suite> finished: F failed, I ignored, T total". A skipped test, or
-# a suite with no tests (munit counts it as ignored), fails here, though munit exits 0. A suite that
-# started and did not finish also fails.
+# Each suite ends with "Test run <suite> finished: F failed, I ignored, T total". A failed test, a
+# skipped test, or a suite with no tests (munit counts it as ignored) fails here, whatever the exit
+# status. munit prints "==> s <test> skipped" for a test that skips itself, also when the summary
+# says 0 ignored. A suite that started and did not finish fails, and so does an exception that
+# ended another thread: an assertion there never reaches munit.
 esc=$(printf '\033')
 skipped=$(sed "s/$esc\\[[0-9;]*m//g" "$test_log" | awk '
   /^Test run .* started/ { started++ }
-  /^Test run .* finished: / { runs++; if ($0 !~ / 0 ignored, / || $0 ~ / 0 total/) print }
+  /^Test run .* finished: / { runs++; if ($0 !~ / 0 failed, / || $0 !~ / 0 ignored, / || $0 ~ / 0 total/) print }
+  /^==> s / { print "Skipped:" substr($0, 6) }
+  /^Exception in thread / { print }
   END {
     if (runs == 0) print "No test summary found."
     if (started != runs) print started " suites started, " runs " finished."
@@ -449,7 +500,7 @@ skipped=$(sed "s/$esc\\[[0-9;]*m//g" "$test_log" | awk '
 ')
 if [ -n "$skipped" ]; then
   printf '%s\n' "$skipped" >&2
-  fail 'Every suite must run at least one test and ignore none.'
+  fail 'Every suite must pass, run at least one test, and skip or ignore none. No test may throw in another thread.'
 fi
 
 printf '\nAll checks passed.\n'

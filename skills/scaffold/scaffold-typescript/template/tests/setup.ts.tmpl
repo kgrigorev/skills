@@ -2,32 +2,106 @@
 // each test file. Agents: change this file only with the owner's approval.
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
-import { fileURLToPath } from "node:url";
+import url from "node:url";
 import * as fc from "fast-check";
+import { afterAll, afterEach, vi } from "vitest";
+
+// Copies taken now, before any test runs. A test could later replace url.fileURLToPath (and call
+// syncBuiltinESMExports), globalThis.Error, Error.captureStackTrace or a Reflect function. The
+// checks below use only these copies, plain loops and string operators, so a test that patches
+// Array.prototype or String.prototype does not change what they see.
+const { fileURLToPath } = url;
+const NativeError = Error;
+const { apply, defineProperty, get, getOwnPropertyDescriptor, ownKeys, set } = Reflect;
+const captureStackTrace: unknown = get(NativeError, "captureStackTrace");
 
 // The fast-check seed and run count. To explore new inputs, change the seed in its own commit. A
 // failure prints the seed and the path that reproduce it.
 const settings = { seed: 1, numRuns: 200 } as const;
 fc.configureGlobal(settings);
 
+// What the checks below found, one problem per line. A test cannot reach this text, so it cannot
+// catch or clear the failure: the hooks fail the test (or the file) that caused it.
+let problems = "";
+function record(problem: string): void {
+  problems = problems === "" ? problem : `${problems}\n${problem}`;
+}
+function failOnProblems(): void {
+  if (problems === "") return;
+  const found = problems;
+  problems = "";
+  throw new NativeError(found);
+}
+afterEach(failOnProblems);
+afterAll(failOnProblems);
+
 // Options passed to fc.assert win over the global ones, however a test builds them (a computed
 // key, a module under src/, a time-limit plugin), and scripts/check can only search for the plain
-// spellings. A global plugin sees the settings each property ran with, and fails one that ran
-// with another seed or fewer runs. Options passed to fc.assert cannot remove it.
+// spellings. A global plugin sees the settings each property ran with. It fails one that ran
+// with another seed or run count, or with a plugin of its own (which could report every run as
+// passed). It also records a property that failed, because fc.check returns the failure instead
+// of throwing it. It does not throw then: fc.assert goes on to print the counterexample.
 fc.installGlobalPlugin(() => ({
   onAllRunsComplete(details) {
-    // A failed property reports itself, with its seed.
-    if (details.failed) return;
-    const { seed, numRuns } = details.runConfiguration;
-    if (seed === settings.seed && details.numRuns === settings.numRuns && !details.interrupted)
+    const { seed, numRuns, plugins } = details.runConfiguration;
+    if (details.failed) {
+      record(
+        "A property test failed. fc.assert prints the counterexample; fc.check hides it: use fc.assert.",
+      );
       return;
-    throw new Error(
-      `A property test ran ${String(details.numRuns)} of ${String(numRuns)} runs with seed ` +
-        `${String(seed)}${details.interrupted ? ", interrupted" : ""}. tests/setup.ts sets seed ` +
-        `${String(settings.seed)} and ${String(settings.numRuns)} runs: pass no options that change them.`,
-    );
+    }
+    const problem =
+      plugins !== undefined && plugins.length > 0
+        ? "A property test ran with fast-check plugins of its own. tests/setup.ts installs the only plugin."
+        : seed !== settings.seed || details.numRuns !== settings.numRuns || details.interrupted
+          ? `A property test ran ${String(details.numRuns)} of ${String(numRuns)} runs with seed ` +
+            `${String(seed)}${details.interrupted ? ", interrupted" : ""}. tests/setup.ts sets seed ` +
+            `${String(settings.seed)} and ${String(settings.numRuns)} runs: pass no options that change them.`
+          : undefined;
+    if (problem === undefined) return;
+    record(problem);
+    throw new NativeError(problem);
   },
 }));
+
+// vi.setConfig in a test file could switch off requireAssertions or move the fake clock. Only the
+// timeouts and the mock settings may change per file. vitest gets a copy of the allowed keys, so
+// an object that lists other keys to vitest than to this check (a Proxy) changes nothing else.
+const runtimeOptions = [
+  "testTimeout",
+  "hookTimeout",
+  "maxConcurrency",
+  "clearMocks",
+  "mockReset",
+  "restoreMocks",
+  "unstubEnvs",
+  "unstubGlobals",
+] as const;
+function isRuntimeOption(key: string | symbol): boolean {
+  for (let index = 0; index < runtimeOptions.length; index += 1)
+    if (runtimeOptions[index] === key) return true;
+  return false;
+}
+const setConfig: unknown = get(vi, "setConfig");
+defineProperty(vi, "setConfig", {
+  value(this: unknown, config: object): unknown {
+    const keys = ownKeys(config);
+    const copy = {};
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (key === undefined) continue;
+      if (!isRuntimeOption(key))
+        throw new NativeError(
+          `vi.setConfig may not change ${String(key)}. vitest.config.ts sets it.`,
+        );
+      defineProperty(copy, key, { value: get(config, key), enumerable: true });
+    }
+    if (typeof setConfig !== "function") throw new TypeError("vi.setConfig is missing.");
+    return apply(setConfig, this, [copy]);
+  },
+  writable: false,
+  configurable: false,
+});
 
 // A test that reads the clock or a random value fails, however it reaches the function (an
 // alias, destructuring, brackets), which a search of the source cannot see. Code under src/ may
@@ -36,27 +110,118 @@ fc.installGlobalPlugin(() => ({
 const self = fileURLToPath(import.meta.url);
 const testsFolder = fileURLToPath(new URL(".", import.meta.url));
 
-/** Throws when the nearest caller that is a file (not this one, not built-in) is under tests/. */
+function hasPrefix(text: string, prefix: string): boolean {
+  if (text.length < prefix.length) return false;
+  for (let index = 0; index < prefix.length; index += 1)
+    if (text[index] !== prefix[index]) return false;
+  return true;
+}
+
+/** True when owner[key] is a plain data property that holds exactly value. */
+function holds(owner: object, key: string, value: unknown): boolean {
+  const descriptor = getOwnPropertyDescriptor(owner, key);
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === value;
+}
+
+/** Captures a stack and hands its call sites to read, which only V8 can call. */
+function withCallSites(read: (sites: readonly NodeJS.CallSite[]) => void): boolean {
+  const limit: unknown = get(NativeError, "stackTraceLimit");
+  const prepare: unknown = get(NativeError, "prepareStackTrace");
+  const capture = { called: false };
+  const ours = (_error: Error, sites: NodeJS.CallSite[]): string => {
+    capture.called = true;
+    read(sites);
+    return "";
+  };
+  const holder = {};
+  try {
+    // Node calls globalThis.Error.prepareStackTrace. Each property must hold exactly the value set
+    // here: an accessor could hand the call sites to a test's function instead.
+    set(NativeError, "stackTraceLimit", 64);
+    set(NativeError, "prepareStackTrace", ours);
+    if (
+      !holds(globalThis, "Error", NativeError) ||
+      !holds(NativeError, "stackTraceLimit", 64) ||
+      !holds(NativeError, "prepareStackTrace", ours)
+    )
+      return false;
+    if (typeof captureStackTrace !== "function") return false;
+    apply(captureStackTrace, NativeError, [holder]);
+    get(holder, "stack");
+  } finally {
+    set(NativeError, "stackTraceLimit", limit);
+    set(NativeError, "prepareStackTrace", prepare);
+  }
+  return capture.called;
+}
+
+// The real CallSite getFileName, taken from a capture now. Called on an object that is not a call
+// site from V8, it throws.
+let getFileName: unknown;
+withCallSites((sites) => {
+  const site = sites[0];
+  if (site !== undefined) getFileName = get(Object.getPrototypeOf(site), "getFileName");
+});
+
+/**
+ * The files of the calls that led here, nearest first, async callers included. Undefined when a
+ * test changed how stacks are captured (the capture fails, or does not show this file).
+ */
+function callerFiles(): string[] | undefined {
+  const files: string[] = [];
+  const seen = { self: false };
+  try {
+    const captured = withCallSites((sites) => {
+      for (let index = 0; index < sites.length; index += 1) {
+        const site = sites[index];
+        if (site === undefined || typeof getFileName !== "function") continue;
+        const name: unknown = apply(getFileName, site, []);
+        const file = typeof name === "string" ? name : "";
+        if (file === self) seen.self = true;
+        defineProperty(files, files.length, { value: file, writable: true, enumerable: true });
+      }
+    });
+    if (!captured) return undefined;
+  } catch {
+    return undefined;
+  }
+  return seen.self ? files : undefined;
+}
+
+/**
+ * Throws when the nearest caller that is a file (not this one, not built-in) is under tests/, or
+ * when no file called at all (`.then(Math.random)` runs it straight from the promise queue).
+ */
 function failInTest(name: string): void {
-  const caller = (new Error().stack ?? "")
-    .split("\n")
-    .slice(1)
-    .find(
-      (line) => !line.includes(self) && !line.includes("<anonymous>") && !line.includes("node:"),
-    );
-  if (caller?.includes(testsFolder) === true)
-    throw new Error(`A test called ${name}, which changes between runs. Pass a fixed value.`);
+  // File names are compared whole, so a test file named "node:x.test.ts" or
+  // "setup.ts-x.test.ts" is not mistaken for a built-in or for this file.
+  const files = callerFiles();
+  let caller: string | undefined;
+  if (files !== undefined)
+    for (let index = 0; index < files.length && caller === undefined; index += 1) {
+      const raw = files[index];
+      if (raw === undefined) continue;
+      const file = hasPrefix(raw, "file:") ? fileURLToPath(raw) : raw;
+      if (file !== self && file !== "" && !hasPrefix(file, "node:")) caller = file;
+    }
+  if (files !== undefined && caller !== undefined && !hasPrefix(caller, testsFolder)) return;
+  const problem =
+    files === undefined
+      ? `A test changed how stack traces are captured, so the check on ${name} cannot run.`
+      : `A test called ${name}, which changes between runs. Pass a fixed value.`;
+  record(problem);
+  throw new NativeError(problem);
 }
 
 /** Replaces the function owner[key] with one that fails when a test calls it. */
 function guard(owner: object, key: string, name: string): void {
-  const original: unknown = Reflect.get(owner, key);
+  const original: unknown = get(owner, key);
   if (typeof original !== "function") return;
   const value = function (this: unknown, ...args: unknown[]): unknown {
     failInTest(name);
-    return Reflect.apply(original, this, args);
+    return apply(original, this, args);
   };
-  Reflect.defineProperty(owner, key, { value, writable: true, configurable: true });
+  defineProperty(owner, key, { value, writable: true, configurable: true });
 }
 
 guard(Math, "random", "Math.random");
@@ -65,7 +230,7 @@ guard(performance, "now", "performance.now");
 guard(process, "uptime", "process.uptime");
 const hrtime = process.hrtime;
 guard(process, "hrtime", "process.hrtime");
-Reflect.defineProperty(process.hrtime, "bigint", { value: Reflect.get(hrtime, "bigint") });
+defineProperty(process.hrtime, "bigint", { value: get(hrtime, "bigint") });
 guard(process.hrtime, "bigint", "process.hrtime.bigint");
 for (const key of ["randomUUID", "getRandomValues"]) guard(globalThis.crypto, key, `crypto.${key}`);
 for (const key of [
@@ -80,11 +245,11 @@ for (const key of [
 // `import { randomInt } from "node:crypto"` sees the guarded functions only after this.
 syncBuiltinESMExports();
 // Temporal is not in the es2025 types yet.
-const temporal: unknown = Reflect.get(globalThis, "Temporal");
+const temporal: unknown = get(globalThis, "Temporal");
 const temporalNow: unknown =
-  typeof temporal === "object" && temporal !== null ? Reflect.get(temporal, "Now") : undefined;
+  typeof temporal === "object" && temporal !== null ? get(temporal, "Now") : undefined;
 if (typeof temporalNow === "object" && temporalNow !== null)
-  for (const key of Reflect.ownKeys(temporalNow))
+  for (const key of ownKeys(temporalNow))
     if (typeof key === "string") guard(temporalNow, key, `Temporal.Now.${key}`);
 
 // new Date() and Date() read the clock; new Date(value) does not.
@@ -98,11 +263,11 @@ const clockDate = new Proxy(Date, {
   },
   apply(target, thisArgument: unknown, args: unknown[]): unknown {
     failInTest("Date()");
-    return Reflect.apply(target, thisArgument, args);
+    return apply(target, thisArgument, args);
   },
 });
 globalThis.Date = clockDate;
-Reflect.defineProperty(Date.prototype, "constructor", {
+defineProperty(Date.prototype, "constructor", {
   value: clockDate,
   writable: true,
   configurable: true,

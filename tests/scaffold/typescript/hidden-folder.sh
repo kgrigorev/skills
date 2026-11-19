@@ -1,4 +1,4 @@
-# expect: red Lint (oxlint
+# expect: red Only .ts sources
 # Code in a hidden folder, which some tools skip.
 mkdir -p .lib
 cat >.lib/helper.ts <<'X'
