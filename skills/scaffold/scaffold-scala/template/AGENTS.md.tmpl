@@ -68,19 +68,24 @@ The compiler and WartRemover reject these. Write the form on the right:
 - A pattern that may not match: write a `match` with every case, never `@unchecked`.
 - Property tests go in a `munit.ScalaCheckSuite` with `property(...)`. A plain ScalaCheck
   `Properties` object never runs.
-- A test that expects an exception uses `intercept[E](...)`. Tests never `catch`, `Try(...)` or
-  `Using(...)`: a test that catches can catch its own failed assertion. Tests never end the JVM.
+- A test that expects an exception uses `intercept[E](...)` with the exception the code throws,
+  never `Throwable`, `Error` or `AssertionError`: those also catch munit's own failures. Tests
+  never `catch`, `Try(...)`, `Using(...)` or recover a `Future`: a test that catches can catch
+  its own failed assertion. Tests never define a `munit.Compare`, which decides what
+  `assertEquals` accepts. Tests never end the JVM or throw in another thread.
 - No macros (`scala.quoted`): WartRemover never sees the code they build.
 
 The search for switched-off checks reads the code as the compiler resolved it, so comments, strings,
 aliases and renamed imports do not matter. In all code it rejects `@nowarn`, `@unused`, `@unchecked`
 and the other `unchecked` annotations, `@SuppressWarnings`, `.runtimeChecked`, `scala.language`
-imports, `assume`, and a `CanEqual` for `Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`), or for
+imports, `Predef.assume`, a package outside `{{namespace}}`, the test runner's code
+(`scala.build`), and a `CanEqual` for `Any` (or `AnyRef`, `AnyVal`, `Matchable`, `Object`), or for
 a type alias or type parameter that can stand for one. In test files (a `test` folder, a
-`.test.scala` name, or any file that uses munit) it also bans `only`, `ignore`, `fail`, `pending`,
-`flaky` and `tag` after a dot, `withTags`, `isCI`, a method named `test` or `property`, and munit's
-tags (`munit.Fail` in any spelling). Name your own code differently, such as `rejectWith` instead of
-`fail`. Test tags are not used: every test runs on every run. scalafmt switches (`format: off`,
+`.test.scala` name, or any file that uses munit or ScalaCheck) it also bans `only`, `ignore`,
+`fail`, `pending`, `flaky` and `tag` after a dot, `assume`, `withTags`, `isCI`, munit's test
+transforms, a method named `test` or `property`, munit's tags (`munit.Fail` in any spelling), the
+catching forms above (also `.transform` and `.failed` on a `Future`), and a custom `munit.Compare`.
+Name your own test code differently, such as `rejectWith` instead of `fail`. Test tags are not used: every test runs on every run. scalafmt switches (`format: off`,
 `@formatter:off`, `scalafmt: {`) are banned in comments.
 
 ## Layout
@@ -88,8 +93,9 @@ tags (`munit.Fail` in any spelling). Name your own code differently, such as `re
 - All code lives in `src/` as `.scala` files. `scripts/check` fails on `.scala`, `.sc` or `.java`
   files anywhere else, on symlinks in `src/`, and on names with characters other than letters,
   digits, `_`, `.` and `-`.
-- Every suite runs at least one test and ignores none. `scripts/check` reads munit's summary
-  and checks that the test runner, not a test, ended the run.
+- All code is in package `{{namespace}}` or a package below it.
+- Every suite passes, runs at least one test, and skips or ignores none. `scripts/check` reads
+  munit's summary and checks that the test runner, not a test, ended the run with status 0.
 - Logic goes in `src/main/scala`. `src/main/scala/Main.scala` only calls it.
 - Tests go in `src/test/scala`. Every munit suite there runs automatically.
 - Build settings live only in `project.scala`: the Scala version, compiler options, WartRemover
