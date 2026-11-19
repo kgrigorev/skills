@@ -127,6 +127,7 @@ toml_shape() {
       push @inner, $1 while $code =~ /[{,]\s*([^\s.=,{}]+)\s*[.=]/g;
       my @wrong = grep { !/^(?:$ENV{inner})$/ } @inner;
       bad("not allowed inside $key: @wrong") if @wrong;
+      bad("an inline table over several lines") if (() = $code =~ /\{/g) != (() = $code =~ /\}/g);
     }
     $depth += () = $code =~ /[[{]/g;
     $depth -= () = $code =~ /[]}]/g;
@@ -370,13 +371,16 @@ step 'No switched-off checks in the code'
 # - #[doc(hidden)], which hides a public item from the missing_docs lint.
 # - proptest settings in the code, such as with_cases(0). The weekly job sets the cases.
 #   They need proptest_config, ProptestConfig, a TestRunner or the config argument of the closure
-#   form proptest!(config, |...| ...). A module named test_runner is fine.
+#   form proptest!(config, |...| ...), with any brackets. proptest! under another name is
+#   rejected too, as this search would not see its config. A module named test_runner is fine.
 # - A cfg that only one gate's tool sees: clippy (the code Clippy reads is not the code that
 #   builds and runs), and any use of debug_assertions or doctest other than the plain
 #   #[cfg(...)] or #[cfg_attr(..., ...)] of the name itself. not(debug_assertions) is code only a
-#   release build has, which no gate compiles; not(doctest) hides doc examples.
-# - Doc examples in files that #[doc = include_str!(...)] pulls in are searched too. A path the
-#   search cannot read, such as one built with concat!, is rejected.
+#   release build has, which no gate compiles; not(doctest) hides doc examples. A cfg inside
+#   #[cfg_attr(debug_assertions, ...)] or #[cfg_attr(doctest, ...)] does the same.
+# - Doc examples in files that #[doc = include_str!("path")] pulls in are searched too, from the
+#   folder of the .rs file. Any other doc = value than a string or that bare form, such as
+#   core::include_str! or concat!, is rejected, and so is a path that is not found there.
 # - `_ = f();`, which throws away a Result.
 # - A test inside a macro other than proptest!, or inside a block, and a test attribute that is
 #   not on a plain `fn name`. The test step below could not follow them: a macro can write a
@@ -396,22 +400,28 @@ off=$(perl -e "$rust_reader" -e '
       [qr{\bdoc\s*\(\s*hidden\b}, "#[doc(hidden)] hides an item from missing_docs"],
       [qr{\b(?:proptest_config|ProptestConfig|TestRunner|with_cases)\b},
         "proptest settings in the code: the weekly job sets the cases"],
-      [qr{\bproptest\s*!\s*\(\s*(?![|#])},
+      [qr{\bproptest\s*!\s*[(\[\{]\s*+(?![|#]|(?:move|fn)\b)},
         "proptest!(config, ...) sets the cases in the code: the weekly job sets them"],
-      [qr{\bdoc\s*=\s*include_str\s*!\s*[(\[{]\s*(?!""\s*[)\]}])},
-        "doc = include_str! with a path that the search for doc examples cannot read"],
       [qr{^[ \t]*_\s*=(?![=>])}m, "_ = f(); throws away a Result"],
       [qr{\bmacro_rules\s*!\s*proptest\b|\bas\s+proptest\b},
         "only the proptest crate may define proptest!"],
+      [qr{\bproptest\s+as\b}, "proptest! under another name hides its config from this search"],
     );
     my $doc_rule = qr{(?:```|~~~)[^`~\n]*\b(?:ignore|no_run|should_panic)\b};
-    # The cfg predicates in the inside of an attribute that hide code from a gate: see above.
-    sub cfg_problems {
+    # The doc and cfg attributes that hide code or doc examples from a gate: see above.
+    sub attr_problems {
       my ($attr) = @_;
       $attr =~ s/^\s+|\s+$//g;
+      if ($attr =~ /^doc\s*=/) {
+        return () if $attr =~ /^doc\s*=\s*(?:""|include_str\s*!\s*(?:\(\s*""\s*\)|\[\s*""\s*\]|\{\s*""\s*\}))$/;
+        return ("doc = with a value other than a string or include_str!(\"path\"): the search for doc examples cannot read it");
+      }
       my ($name, $inside) = $attr =~ /^(cfg|cfg_attr)\s*\((.*)\)$/s or return ();
       my ($predicate, @attrs) = $name eq "cfg" ? ($inside) : split_top($inside);
-      my @found = map { cfg_problems($_) } @attrs;
+      my @found = map { attr_problems($_) } @attrs;
+      push @found, "cfg_attr on $1 with a cfg inside hides code or doc examples from the gates"
+        if $name eq "cfg_attr" && (grep { /\bcfg\s*\(/ } @attrs)
+          && $predicate =~ /\b(debug_assertions|doctest)\b/;
       push @found, "cfg(clippy) gives Clippy other code than the build and the tests"
         if $predicate =~ /\bclippy\b(?!\s*::)/;
       push @found, "this cfg on $1 hides code or doc examples from the gates"
@@ -433,14 +443,17 @@ off=$(perl -e "$rust_reader" -e '
       }
       while ($code =~ /\#\s*!?\s*\[((?:[^\[\]]|(?&br))*)\]$define/gx) {
         my $line = line_at($code, $-[0]);
-        push @hits, map { [$line, $_] } cfg_problems($1);
+        push @hits, map { [$line, $_] } attr_problems($1);
       }
       push @hits, [line_at($docs, $-[0]), "a doc example that never runs or may panic"]
         while $docs =~ /$doc_rule/g;
       for my $include (@$includes) {
         my ($path, $line) = @$include;
         (my $dir = $file) =~ s{[^/]*$}{};
-        next unless -f "$dir$path";
+        unless (-f "$dir$path") {
+          push @hits, [$line, "doc = include_str! of $path, which the check cannot find from the folder of this file"];
+          next;
+        }
         my $text = slurp("$dir$path");
         utf8::decode($text);
         push @hits, [$line, "a doc example in $path that never runs or may panic"]

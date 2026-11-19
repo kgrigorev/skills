@@ -74,10 +74,10 @@ Every other gate states its reason in a comment in its own file.
   `Cargo.toml` may hold `[package]` metadata keys, the two dependency tables, `[features]` and
   `[lints]`; `.config/nextest.toml` two profiles with timeout and output keys. In
   `.config/nextest.toml` the keys inside an inline table and the parts of a dotted key are
-  checked too: `slow-timeout = { ..., on-timeout = "pass" }` made a test that hangs pass. Both
-  files must be plain TOML: no escapes, no multi-line strings, no quoted keys, so a key reads as
-  itself. The
-  scan is a small Perl script; Perl ships with macOS and the Ubuntu runners, and no pinned TOML
+  checked too: `slow-timeout = { ..., on-timeout = "pass" }` made a test that hangs pass. An
+  inline table there must close on its own line, as a TOML 1.1 table over two lines hid the key
+  on its second line. Both files must be plain TOML: no escapes, no multi-line strings, no quoted
+  keys, so a key reads as itself. The scan is a small Perl script; Perl ships with macOS and the Ubuntu runners, and no pinned TOML
   tool is needed.
 - `cargo metadata` must list one local package. A path dependency or a workspace member is a
   crate outside `[lints]`: one with `unsafe` and `.unwrap()` passed every other gate.
@@ -104,7 +104,8 @@ Every other gate states its reason in a comment in its own file.
   `use t1 as check`), or one of these in a `cfg_attr`. The reader decodes each file from UTF-8.
   Read as bytes, `'é'` is two bytes, its closing quote paired with the next quote, and a string
   that was not there hid an `#[allow]` and a hidden test after it. A `"` that starts no string
-  stops the check, so a reader out of step fails instead of hiding code.
+  stops the check. This catches a reader out of step only when it is left with an odd number of
+  quotes; the UTF-8 decoding is the fix.
 - Tests that a macro writes are rejected, because the check cannot follow them: a test attribute
   inside a macro other than `proptest!` or inside a block, one that is not on a plain `fn name`,
   and a `#` that starts no attribute (a macro could join `#` and `[test]` from its input and drop
@@ -138,20 +139,26 @@ Every other gate states its reason in a comment in its own file.
 - Doc examples marked `ignore`, `no_run` or `should_panic` are rejected: each lets a wrong
   assertion pass. `compile_fail` stays allowed, because it shows what the types forbid. The
   match takes any rustdoc separator, so `rust ignore` is caught too, and `~~~` fences as well as
-  backtick ones. Files that `#[doc = include_str!("...")]` pulls in are searched too; a path the
-  search cannot read, such as one built with `concat!`, is rejected.
+  backtick ones. Files that `#[doc = include_str!("...")]` pulls in are searched too, from the
+  folder of the `.rs` file. Any other `doc =` value than a string or that bare form is rejected:
+  `core::include_str!`, `concat!(include_str!(...))` and a path built with `concat!` each hid an
+  ignored example. A path that is not found there is rejected too.
 - A cfg that only one gate's tool sees is rejected. `cfg(clippy)` gives Clippy other code than
   the build and the tests: `#[cfg(not(clippy))] return Ok(s.parse().unwrap());` passed every
   gate. `not(debug_assertions)` is code only a release build has, and no gate builds one.
-  `not(doctest)` hides an item's doc examples from `cargo test --doc`. The plain
+  `not(doctest)` hides an item's doc examples from `cargo test --doc`. A cfg inside
+  `#[cfg_attr(debug_assertions, ...)]` or `#[cfg_attr(doctest, ...)]` is rejected as well:
+  `cfg_attr(debug_assertions, cfg(any()))` is `not(debug_assertions)` in another form. The plain
   `#[cfg(debug_assertions)]`, `#[cfg(doctest)]` and their `cfg_attr` forms stay allowed: the
   gates compile that code, and `#[cfg(doctest)]` is how README examples run as doc tests.
 - proptest settings in the code (`proptest_config`, `ProptestConfig`, `TestRunner`,
-  `with_cases`, and a first argument of the closure form `proptest!(config, |...| ...)`) are
-  rejected: `with_cases(0)` passed a wrong property, and a fixed case count overrides the
+  `with_cases`, and a first argument of the closure form `proptest!(config, |...| ...)` with any
+  brackets) are rejected, and so is `proptest` renamed with `as`, which hid the config from the
+  search: `with_cases(0)` passed a wrong property, and a fixed case count overrides the
   weekly job's `PROPTEST_CASES`. A case count takes one of these ways in, so the name
   `test_runner` alone is allowed: it rejected a module of that name, and a helper that returns
-  `test_runner::TestCaseError`. `proptest!(|(x in ...)| ...)` without a config is fine.
+  `test_runner::TestCaseError`. `proptest!(|(x in ...)| ...)` and `proptest!(move |...| ...)`
+  without a config are fine.
 - A thrown-away Result: `let _ =` is a lint, `.ok();` is the `unused_result_ok` lint, and
   `_ = f();` is rejected by the search. Other forms are not closed (see below).
 - `#[doc(hidden)]` is rejected: it takes a public item out of `missing_docs`.
@@ -170,6 +177,13 @@ Every other gate states its reason in a comment in its own file.
   - `#[should_panic(expected = ...)]` with text that the wrong panic also holds. `""` matches
     every panic, and so do `"assertion"` or a common word, so a search for one value would not
     close it.
+  - `cfg!(debug_assertions)` in an expression: like `not(debug_assertions)`, it gives a release
+    build behaviour no gate runs. The search reads attributes, not expressions.
+  - A test renamed in a way the search cannot follow: the same identifier spelt in two Unicode
+    forms (rustc folds them to one, the search does not), or `use $a as $b` inside a
+    `macro_rules!`, which needs the owner's approval anyway.
+  - A doc example in a fence that is not Rust, such as ```` ```text ````: rustdoc does not run
+    it. Only an allow-list of fence words would close this, and `text` has honest uses.
   - Code under `#[cfg(not(feature = "..."))]`: every gate builds with `--all-features`, so no
     gate compiles it, but a default build ships it. A new feature needs the owner's approval.
   - A deleted test, a test without an assertion, an early `return` on an environment variable,
