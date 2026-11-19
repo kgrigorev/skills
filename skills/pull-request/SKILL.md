@@ -1,12 +1,12 @@
 ---
 name: pull-request
-description: Open or update a GitHub pull request. Use when you open a PR, edit its title or description, split work into stacked PRs, or review a stack of PRs.
+description: Open, update or merge a GitHub pull request. Use when you open or merge a PR, edit its title or description, push fixes for review findings, split work into stacked PRs, or review a stack of PRs.
 ---
 
 # Pull request
 
-With squash merges the PR title and body become the commit on `main`. The body is the lasting
-record of why the change exists, and reviewers skim it. Keep it short.
+The PR body is the lasting record of why the change exists (a squash merge makes the title and
+body the commit on `main`), and reviewers skim it. Keep it short.
 
 ## Open a PR
 
@@ -29,11 +29,13 @@ record of why the change exists, and reviewers skim it. Keep it short.
 
 3. **Title.** Follow the repo's convention: `AGENTS.md`, a CI title check, or else
    `git log --format=%s -20`. Default: `type(scope): what changed`, at most 72 characters.
-4. **Body.** Write for a human who reads it once. Each paragraph is one or two plain sentences,
-   and a template slot holds one line unless the template gives it its own limit, such as a
-   sketch of at most 10 lines. State the reason in general terms, as it will still read after
-   the merge, rather than the story of how the need came up. Leave out what the diff and the
-   repo's files already show: file lists, code, renames, lists of details. Use a bullet list
+4. **Body.** Write for a human who reads it once, in **plain** words: say what changes for the
+   people who use the code ("Every test file runs, wherever it is"), rather than which settings
+   or flags moved. Each paragraph is one or two sentences, and a template slot holds one line
+   unless the template gives it its own limit, such as a sketch of at most 10 lines. State the
+   reason in general terms, as it will still read after the merge, rather than the story of how
+   the need came up. Leave out what the diff and the repo's files already show: file lists (name
+   a file only when the reader must find it), code, renames, lists of details. Use a bullet list
    only for a real list of parallel items. Then reread it and delete every sentence a reviewer
    would not miss. Done when the body is about 60 to 100 words and each slot is within its
    limit.
@@ -42,9 +44,25 @@ record of why the change exists, and reviewers skim it. Keep it short.
 
 ## Update a PR
 
+Before you push commits that fix review findings, review the commits since the last reviewed one
+against those findings. Rerun the review that found them when an agent ran it (its skill or
+reviewer subagent, given the findings); otherwise review the range yourself. Done when each
+finding is resolved and the range raises no new one.
+
 After new commits, check that the title and body still match the diff. Fix them with
 `gh pr edit <number> --title "<title>" --body-file -`, under the same rules.
 
+## Merge a PR
+
+Merge only when the owner asks, with the checks green and the reviews in. The repo's own merge
+rules come first: its PR doc, `AGENTS.md` or contributing guide, and the methods its settings
+allow (`gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`).
+
+Without rules, squash a PR that was never part of a stack. A stacked PR (its base is another
+branch, or another open PR targets its branch) merges by [`STACKS.md`](STACKS.md), and so does
+the rest of its stack once the lower layers land. When GitHub refuses a merge, report its
+message.
+
 ## Stacks
 
-To build, update or review a stack of PRs, read [`STACKS.md`](STACKS.md).
+To build, update, review or merge a stack of PRs, read [`STACKS.md`](STACKS.md).

@@ -1,6 +1,6 @@
 ---
 name: test-design
-description: "Test evidence: a test counts once you have seen it fail, and checks outcomes and properties. Use when writing tests, fixing a bug, adding tests to code that already works, choosing between mocks, stubs and fakes, or chasing a coverage target."
+description: "Test evidence: a test counts once you have seen it fail, and checks outcomes and properties. Use before writing any test, new test files included, when fixing a bug, adding tests to code that already works, choosing between mocks, stubs and fakes, or chasing a coverage target."
 ---
 
 # Test Evidence
@@ -13,7 +13,7 @@ Applies to any language and test framework. When the project's coding standards 
 
 - **Predict, then run.** Before each run, say what you expect: which test fails and on which assertion, or that all pass. A result you did not predict is a finding about the test or the code; resolve it before moving on.
 - **A bug fix starts red.** Write the test that reproduces the report and run it against the unfixed code. It fails on the assertion that names the bug, with the wrong value the report describes. Then fix, and see it pass.
-- **Test-after earns its red by sabotage.** Tests for code that already works pass on the first run, which shows nothing yet. For each behaviour a test exists to check, break the code with one small edit (flip a comparison, drop a line, return a constant), run, and see *that* test fail on *that* assertion. Revert and see green. A test that stays green under sabotage checks nothing: tighten its assertion. Coverage shows which lines ran; sabotage shows which lines are checked. A coverage target is met when the covered lines are also checked.
+- **Test-after earns its red by sabotage.** Tests for code that already works pass on the first run, which shows nothing yet. Stage the real change first, so `git restore <file>` undoes the sabotage alone; where part of the file is staged on purpose, undo with a reverse edit instead. For each behaviour a test exists to check, break the code with one small edit (flip a comparison, drop a line, return a constant), run, and see *that* test fail on *that* assertion. Revert and see green. A test that stays green under sabotage checks nothing: tighten its assertion. Coverage shows which lines ran; sabotage shows which lines are checked. A coverage target is met when the covered lines are also checked.
   **Stops where:** one sabotage per behaviour, not per line. Code with a single path and no decision (a getter, a constant) needs none.
   **Test:** for each test you added, can you name the run where it failed and the edit that made it fail?
 
