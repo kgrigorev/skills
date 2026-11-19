@@ -95,10 +95,12 @@ grep -nv '^[[:space:]]*\(#.*\)\{0,1\}$' rustfmt.toml /dev/null |
 # [profile] that turns off overflow checks, a build script, a [[test]] target that never runs,
 # or a nextest wrapper script. The files must use plain TOML: no escapes, no multi-line strings
 # and no quoted keys, so a key always reads as itself.
-# Usage: toml_shape <file> <allowed>, where <allowed> has one line per table: the header and an
-# ERE for its keys. Prints each line that does not fit.
+# Usage: toml_shape <file> <allowed> [<inner>], where <allowed> has one line per table: the
+# header and an ERE for its keys. With <inner>, an ERE, the keys inside an inline table
+# ({ key = ... }) and the parts after a dot (key.part = ...) must match it too.
+# Prints each line that does not fit.
 toml_shape() {
-  allowed=$2 perl -ne '
+  allowed=$2 inner=${3:-} perl -ne '
     BEGIN {
       for (split /\n/, $ENV{allowed}) { my ($h, $k) = split / +/; $keys{$h} = $k }
       $table = ""; $depth = 0;
@@ -107,6 +109,7 @@ toml_shape() {
     chomp; $line = $_;
     ($code = $line) =~ s/"[^"]*"|\x27[^\x27]*\x27/S/g;
     $code =~ s/#.*//;
+    ($key, $sep) = $code =~ /^\s*([A-Za-z0-9_-]+)\s*([.=])/;
     if ($line =~ /\\|"""|\x27\x27\x27/) { bad("escape or multi-line string") }
     elsif ($depth > 0) { }
     elsif ($code =~ /^\s*$/) { next }
@@ -115,9 +118,17 @@ toml_shape() {
       bad("table not allowed") unless defined $keys{$table};
       next;
     }
-    elsif ($code !~ /^\s*([A-Za-z0-9_-]+)\s*[.=]/) { bad("not a plain key") }
+    elsif (!defined $key) { bad("not a plain key") }
     elsif (!defined $keys{$table}) { bad("key outside a table") if $table eq "" }
-    elsif ($1 !~ /^(?:$keys{$table})$/) { bad("key not allowed in " . ($table || "the top level")) }
+    elsif ($key !~ /^(?:$keys{$table})$/) { bad("key not allowed in " . ($table || "the top level")) }
+    elsif ($ENV{inner} ne "" && ($sep eq "." || $code =~ /\{/)) {
+      my ($dotted) = $code =~ /^\s*[A-Za-z0-9_-]+((?:\s*\.\s*[^\s.=]+)*)\s*=/;
+      my @inner = ($dotted // "") =~ /\.\s*([^\s.=]+)/g;
+      push @inner, $1 while $code =~ /[{,]\s*([^\s.=,{}]+)\s*[.=]/g;
+      my @wrong = grep { !/^(?:$ENV{inner})$/ } @inner;
+      bad("not allowed inside $key: @wrong") if @wrong;
+      bad("an inline table over several lines") if (() = $code =~ /\{/g) != (() = $code =~ /\}/g);
+    }
     $depth += () = $code =~ /[[{]/g;
     $depth -= () = $code =~ /[]}]/g;
   ' "$1"
@@ -139,9 +150,9 @@ grep -nE "=[[:space:]]*['\"]allow['\"]" Cargo.toml |
 nextest_keys='slow-timeout|leak-timeout|test-threads|threads-required|fail-fast'
 nextest_keys="$nextest_keys|status-level|final-status-level|failure-output|success-output"
 toml_shape .config/nextest.toml "[profile.default] $nextest_keys
-[profile.explore] $nextest_keys" |
-  reject '.config/nextest.toml holds only timeouts and output settings. Retries, filters and
-scripts would hide tests.'
+[profile.explore] $nextest_keys" 'period|terminate-after|grace-period|max-fail|terminate' |
+  reject '.config/nextest.toml holds only timeouts and output settings. Retries, filters,
+scripts and on-timeout = "pass" would hide tests.'
 
 # Cargo also reads .cargo/config.toml in every folder above this one and in CARGO_HOME.
 # Settings there that change the compiler, the test environment, the build profile or the test
@@ -200,6 +211,7 @@ rust_reader='
 use strict;
 use warnings;
 use File::Find;
+binmode STDOUT, ":utf8";
 
 # The .rs files of the project, without ./target and ./.git.
 sub rust_files {
@@ -221,9 +233,14 @@ sub slurp {
 # - code: comments become a space, string literals "", character literals a blank one, and raw
 #   identifiers lose their r# (r#allow is allow).
 # - docs: only the text of doc comments and string literals, which is where doc examples are.
+# Also returns the paths that doc = include_str!("...") names, each as [path, line].
+# The source is decoded from UTF-8 first: read as bytes, a character literal such as the e with
+# an accent is two bytes, its closing quote pairs with the next quote, and a string that is not
+# there would hide the code after it. A double quote that starts no string stops the check.
 sub lex {
-  my ($src) = @_;
-  my ($code, $docs) = ("", "");
+  my ($src, $file) = @_;
+  utf8::decode($src);
+  my ($code, $docs, @includes) = ("", "");
   my $breaks = sub { "\n" x ($_[0] =~ tr/\n//) };
   pos($src) = 0;
   while (pos($src) < length $src) {
@@ -237,6 +254,8 @@ sub lex {
     elsif ($src =~ m{\G[bc]?r(#*)"(.*?)"\1}gcs
       || $src =~ m{\G[bc]?"((?:[^"\\]|\\.)*)"}gcs) {
       my $text = defined $2 ? $2 : $1;
+      push @includes, [$text, line_at($code, length $code)]
+        if $code =~ /\bdoc\s*=\s*include_str\s*!\s*[(\[{]\s*\z/;
       $code .= q{""} . $breaks->($text);
       $docs .= $text;
     }
@@ -244,9 +263,13 @@ sub lex {
       $code .= "\x27 \x27";
     }
     elsif ($src =~ m{\G(?:r#)?([A-Za-z_][A-Za-z0-9_]*)}gc) { $code .= $1 }
+    elsif ($src =~ m{\G"}gc) {
+      die "$file:" . line_at($code, length $code) . ": a quote that starts no string. The check"
+        . " cannot read this file.\n";
+    }
     elsif ($src =~ m{\G([^"\x27/A-Za-z_]+|.)}gcs) { $code .= $1; $docs .= $breaks->($1) }
   }
-  return ($code, $docs);
+  return ($code, $docs, \@includes);
 }
 
 sub line_at { 1 + (substr($_[0], 0, $_[1]) =~ tr/\n//) }
@@ -263,9 +286,19 @@ sub split_top {
   return (@parts, $part);
 }
 
-# Names that mean the test attribute: test, and any name a `use ... test as <name>` gives it.
+# Names that mean the test attribute: test, and any name a `use ... <name> as <other>` gives a
+# name that already means it, so `use t1 as check` after `use ...::test as t1` counts too.
+# Usage: learn_test_names(<lexed code of every file>). Repeats until no new name comes up.
 our %test_names = (test => 1);
-sub learn_test_names { $test_names{$1} = 1 while $_[0] =~ /\btest\s+as\s+(\w+)/g }
+sub learn_test_names {
+  my $count = 0;
+  while ($count != keys %test_names) {
+    $count = keys %test_names;
+    for my $code (@_) {
+      while ($code =~ /\b(\w+)\s+as\s+(\w+)/g) { $test_names{$2} = 1 if $test_names{$1} }
+    }
+  }
+}
 
 # Whether the inside of an attribute makes a test: test, a path that ends in test (such as
 # core::prelude::v1::test), or a cfg_attr whose attributes hold one of them.
@@ -337,7 +370,17 @@ step 'No switched-off checks in the code'
 # - #[path] and include!, which pull in code from outside the scanned .rs files.
 # - #[doc(hidden)], which hides a public item from the missing_docs lint.
 # - proptest settings in the code, such as with_cases(0). The weekly job sets the cases.
-#   They need proptest_config, ProptestConfig or a TestRunner. A module named test_runner is fine.
+#   They need proptest_config, ProptestConfig, a TestRunner or the config argument of the closure
+#   form proptest!(config, |...| ...), with any brackets. proptest! under another name is
+#   rejected too, as this search would not see its config. A module named test_runner is fine.
+# - A cfg that only one gate's tool sees: clippy (the code Clippy reads is not the code that
+#   builds and runs), and any use of debug_assertions or doctest other than the plain
+#   #[cfg(...)] or #[cfg_attr(..., ...)] of the name itself. not(debug_assertions) is code only a
+#   release build has, which no gate compiles; not(doctest) hides doc examples. A cfg inside
+#   #[cfg_attr(debug_assertions, ...)] or #[cfg_attr(doctest, ...)] does the same.
+# - Doc examples in files that #[doc = include_str!("path")] pulls in are searched too, from the
+#   folder of the .rs file. Any other doc = value than a string or that bare form, such as
+#   core::include_str! or concat!, is rejected, and so is a path that is not found there.
 # - `_ = f();`, which throws away a Result.
 # - A test inside a macro other than proptest!, or inside a block, and a test attribute that is
 #   not on a plain `fn name`. The test step below could not follow them: a macro can write a
@@ -355,25 +398,67 @@ off=$(perl -e "$rust_reader" -e '
         "#[path] reads a module from elsewhere"],
       [qr{\binclude\s*!}, "include! pulls in code from a file this search does not read"],
       [qr{\bdoc\s*\(\s*hidden\b}, "#[doc(hidden)] hides an item from missing_docs"],
-      [qr{\b(?:proptest_config|ProptestConfig|TestRunner)\b},
+      [qr{\b(?:proptest_config|ProptestConfig|TestRunner|with_cases)\b},
         "proptest settings in the code: the weekly job sets the cases"],
+      [qr{\bproptest\s*!\s*[(\[\{]\s*+(?![|#]|(?:move|fn)\b)},
+        "proptest!(config, ...) sets the cases in the code: the weekly job sets them"],
       [qr{^[ \t]*_\s*=(?![=>])}m, "_ = f(); throws away a Result"],
       [qr{\bmacro_rules\s*!\s*proptest\b|\bas\s+proptest\b},
         "only the proptest crate may define proptest!"],
+      [qr{\bproptest\s+as\b}, "proptest! under another name hides its config from this search"],
     );
-    my $doc_rule = qr{```[^`\n]*\b(?:ignore|no_run|should_panic)\b};
+    my $doc_rule = qr{(?:```|~~~)[^`~\n]*\b(?:ignore|no_run|should_panic)\b};
+    # The doc and cfg attributes that hide code or doc examples from a gate: see above.
+    sub attr_problems {
+      my ($attr) = @_;
+      $attr =~ s/^\s+|\s+$//g;
+      if ($attr =~ /^doc\s*=/) {
+        return () if $attr =~ /^doc\s*=\s*(?:""|include_str\s*!\s*(?:\(\s*""\s*\)|\[\s*""\s*\]|\{\s*""\s*\}))$/;
+        return ("doc = with a value other than a string or include_str!(\"path\"): the search for doc examples cannot read it");
+      }
+      my ($name, $inside) = $attr =~ /^(cfg|cfg_attr)\s*\((.*)\)$/s or return ();
+      my ($predicate, @attrs) = $name eq "cfg" ? ($inside) : split_top($inside);
+      my @found = map { attr_problems($_) } @attrs;
+      push @found, "cfg_attr on $1 with a cfg inside hides code or doc examples from the gates"
+        if $name eq "cfg_attr" && (grep { /\bcfg\s*\(/ } @attrs)
+          && $predicate =~ /\b(debug_assertions|doctest)\b/;
+      push @found, "cfg(clippy) gives Clippy other code than the build and the tests"
+        if $predicate =~ /\bclippy\b(?!\s*::)/;
+      push @found, "this cfg on $1 hides code or doc examples from the gates"
+        if $predicate =~ /\b(debug_assertions|doctest)\b/
+          && $predicate !~ /^\s*(?:debug_assertions|doctest)\s*$/;
+      return @found;
+    }
     my @files = rust_files();
-    my %lexed = map { $_ => [lex(slurp($_))] } @files;
-    learn_test_names($_->[0]) for values %lexed;
+    my %lexed = map { $_ => [lex(slurp($_), $_)] } @files;
+    learn_test_names(map { $_->[0] } values %lexed);
     for my $file (@files) {
-      my ($code, $docs) = @{$lexed{$file}};
-      my @source = split /\n/, slurp($file);
+      my ($code, $docs, $includes) = @{$lexed{$file}};
+      my $source = slurp($file);
+      utf8::decode($source);
+      my @source = split /\n/, $source;
       my @hits;
       for my $rule (@code_rules) {
         push @hits, [line_at($code, $-[0]), $rule->[1]] while $code =~ /$rule->[0]/g;
       }
+      while ($code =~ /\#\s*!?\s*\[((?:[^\[\]]|(?&br))*)\]$define/gx) {
+        my $line = line_at($code, $-[0]);
+        push @hits, map { [$line, $_] } attr_problems($1);
+      }
       push @hits, [line_at($docs, $-[0]), "a doc example that never runs or may panic"]
         while $docs =~ /$doc_rule/g;
+      for my $include (@$includes) {
+        my ($path, $line) = @$include;
+        (my $dir = $file) =~ s{[^/]*$}{};
+        unless (-f "$dir$path") {
+          push @hits, [$line, "doc = include_str! of $path, which the check cannot find from the folder of this file"];
+          next;
+        }
+        my $text = slurp("$dir$path");
+        utf8::decode($text);
+        push @hits, [$line, "a doc example in $path that never runs or may panic"]
+          if $text =~ /$doc_rule/;
+      }
       push @hits, @{(walk($code))[1]};
       for my $hit (sort { $a->[0] <=> $b->[0] } @hits) {
         my ($line, $why) = @$hit;
@@ -426,8 +511,8 @@ never_run=$(printf '%s\n' "$tests_json" | perl -e "$rust_reader" -e '
     use JSON::PP;
     my $list = decode_json(do { local $/; <STDIN> });
     my @files = rust_files();
-    my %code = map { $_ => (lex(slurp($_)))[0] } @files;
-    learn_test_names($_) for values %code;
+    my %code = map { $_ => (lex(slurp($_), $_))[0] } @files;
+    learn_test_names(values %code);
     my %tests = map { $_ => (walk($code{$_}))[0] } @files;
     my (%want, %have, %where, %compiled);
     for my $suite (values %{$list->{"rust-suites"}}) {

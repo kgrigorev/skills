@@ -1,18 +1,17 @@
 # expect: red Test (race
-# A TestMain that returns before m.Run when the program has arguments, which it always has.
+# An approved TestMain that returns before m.Run when coverage is off, which it is in
+# scripts/check.
 cat >main_test.go <<'GO'
 package sampletool_test
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 // TestMain exits without running.
 func TestMain(m *testing.M) {
-	if len(os.Args) > 0 {
+	if testing.CoverMode() == "" {
 		return
 	}
 	m.Run()
 }
 GO
+sed "s/^allowed_testmain=''\$/allowed_testmain='main_test.go'/" scripts/check >x.tmp && cat x.tmp >scripts/check && rm x.tmp

@@ -28,6 +28,12 @@ template=$(cd "$(dirname "$0")/../template" && pwd)
 ghc_version=9.14.1
 
 check_inputs "$package" "$synopsis" "$reader"
+# These names clash with a module: Prelude, or an executable's Main.
+case $package in
+prelude | main) fail "package \"$package\": its module would clash with Prelude or Main. Pick another name." ;;
+esac
+# cabal freeze writes this file after rendering. It is not a template file, so check it here.
+[ ! -e "$target/cabal.project.freeze" ] || fail "$target/cabal.project.freeze exists. Nothing was written."
 require_hidden "$template"
 require_tools mise git
 
@@ -75,6 +81,11 @@ latest() {
 
 base_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field base version --simple-output)")
 text_bound=$(major_minor "$("$ghcup_bin/ghc-pkg-$ghc_version" field text version --simple-output)")
+# A local package with the name of a Hackage package clashes when that package is a dependency,
+# such as random for QuickCheck, and cabal freeze then fails after every file is written.
+on_hackage=$(pinned cabal list --simple-output "$package" 2>/dev/null |
+  awk -v p="$package" 'tolower($1) == tolower(p) { print $1; exit }')
+[ -z "$on_hackage" ] || fail "package \"$package\": Hackage has a package $on_hackage. Pick another name."
 hspec_latest=$(latest hspec)
 quickcheck_latest=$(latest QuickCheck)
 [ -n "$hspec_latest" ] && [ -n "$quickcheck_latest" ] ||
@@ -103,8 +114,9 @@ mise trust --quiet "$PWD/mise.toml"
 
 # cabal-gild sorts build-depends and Ormolu sorts imports. The order depends on the names.
 mise exec -- cabal-gild "$package.cabal"
-# shellcheck disable=SC2046 # file names have no spaces
-mise exec -- ormolu --mode inplace $(find app src test -name '*.hs')
+# Only the rendered sources, not other .hs files of an existing clone.
+# shellcheck disable=SC2046 # template paths have no spaces
+mise exec -- ormolu --mode inplace $(list_files | grep '\.hs$')
 # Lock the dependency versions. scripts/check compares against this file.
 mise exec -- cabal freeze -v0 || fail 'cabal freeze failed: the dependency bounds do not solve.'
 
