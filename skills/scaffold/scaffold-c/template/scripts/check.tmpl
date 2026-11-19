@@ -128,8 +128,9 @@ cmake_code() {
 #   function that ends a test (abort, exit, longjmp): `#define abort() return 0` would turn a
 #   failed property into a passed one. A name of the project's own, such as TEST_BUFFER_SIZE, is
 #   fine.
-# - #define or #undef of a project function name ({{c_name}}_...) in a file under test/: the macro
-#   would point the test at a stub of its own instead of the library.
+# - #define or #undef of a name with a lower-case letter, such as a function name, in a file under
+#   test/: `#define {{c_name}}_parse stub_parse` would point the test at a stub of its own instead
+#   of the library. A test's own macros are upper case (TEST_BUFFER_SIZE).
 # - #if, #ifdef and the like in a test file (under test/): a test that is compiled only sometimes
 #   does not run here.
 unity_names=$(
@@ -147,7 +148,7 @@ unity_names=$(
 directives() {
   # shellcheck disable=SC2086 # file names have no spaces
   run clang -std=c23 -fsyntax-only -Xclang -dump-raw-tokens -x c $c_files 2>&1 |
-    awk -v banned=" $unity_names " -v prefix={{c_name}}_ '
+    awk -v banned=" $unity_names " '
       BEGIN { q = sprintf("%c", 39) }
       # A token spelled over several lines (a line splice) continues on lines of its own.
       $0 !~ ("^[a-z_]+ +" q) { next }
@@ -202,7 +203,7 @@ directives() {
       }
       want == "macro" {
         want = ""
-        if (index(banned, " " spelling " ") || (in_test_dir && index(spelling, prefix) == 1))
+        if (index(banned, " " spelling " ") || (in_test_dir && spelling ~ /[a-z]/))
           print at "#" directive " " spelling
       }'
 }
@@ -257,12 +258,12 @@ gate_flags="-std=c23 -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -W
 -Wvla -Wcast-qual -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes \
 -Wmissing-variable-declarations -Wformat=2 -Wimplicit-fallthrough -Wcomma -Werror \
 -fsanitize=address,undefined -fno-sanitize-recover=all"
-off_flags='-w|--no-warnings|-Wno-.*|--warn-.*|-Wp,.*|-X.*|-mllvm|-include.*|--include.*|-imacros.*|-isystem.+|-idirafter.*|-iwithprefix.*|-iwithsysroot.*|--(no-)?system-header-prefix.*|--config|-fno-sanitize.*|-fsanitize-recover.*|-fsanitize-(ignore|black)list.*|-std=.*|-DNDEBUG.*|-[DU](TEST_|UNITY_|RUN_TEST).*|@.*'
+off_flags='-w|--no-warnings|-Wno-.*|--warn-.*|--define-macro.*|--undefine-macro.*|-Wp,.*|-X.*|-mllvm|-include.*|--include.*|-imacros.*|-isystem.+|-idirafter.*|-iwithprefix.*|-iwithsysroot.*|--(no-)?system-header-prefix.*|--config|-fno-sanitize.*|-fsanitize-recover.*|-fsanitize-(ignore|black)list.*|-std=.*|-DNDEBUG.*|-[DU](TEST_|UNITY_|RUN_TEST).*|@.*'
 rm -f build/dev/check-objects build/dev/check-preprocess
 # shellcheck disable=SC2086 # file names have no spaces
 report=$(run ninja -C build/dev -t commands all | awk -v root="$root/" -v unity="$root/$unity" \
   -v clang="$clang_dir/" -v gate_flags="$gate_flags" -v off_flags="^($off_flags)\$" \
-  -v banned=" $unity_names " -v prefix={{c_name}}_ \
+  -v banned=" $unity_names " \
   -v files=" $(printf '%s ' $c_files)" '
   / -c / {
     source = $NF
@@ -270,7 +271,7 @@ report=$(run ninja -C build/dev -t commands all | awk -v root="$root/" -v unity=
     if (source == unity "/unity.c") {
       # Unity is built without the gates, but with no flag that changes what it counts.
       for (i = 2; i <= NF; i++)
-        if ($i ~ /^(-[DU]|-include|-imacros|-I|-iquote|-idirafter|-isystem|@)/ && !($i == "-isystem" && $(i + 1) == unity))
+        if ($i ~ /^(-[DUIX]|-Wp,|-include|-imacros|-iquote|-idirafter|-isystem|-fno-coverage|-fprofile-list|--|@)/ && !($i == "-isystem" && $(i + 1) == unity))
           print substr(source, length(root) + 1) ": built with " $i "."
       next
     }
@@ -292,12 +293,13 @@ report=$(run ninja -C build/dev -t commands all | awk -v root="$root/" -v unity=
       if (arg[i] == "-fno-sanitize-recover=all" || arg[i] == "-std=c23") continue
       if (arg[i] ~ off_flags || arg[i] ~ /^(--config|-resource-dir)/ || arg[i] == "-isystem")
         print file ": built with " arg[i] (arg[i] == "-isystem" ? " " arg[i + 1] : "") "."
-      # A macro named like a Unity name or a project function would turn an assertion into a
-      # no-op or point a test at a stub.
+      # A macro named like a Unity name or a function (lower case) would turn an assertion into a
+      # no-op or point a test at a stub. The <target>_EXPORTS that CMake gives a shared library
+      # passes.
       if (arg[i] ~ /^-[DU]/) {
         name = substr(arg[i], 3)
         sub(/[(=].*/, "", name)
-        if (index(banned, " " name " ") || index(name, prefix) == 1) print file ": built with " arg[i] "."
+        if (index(banned, " " name " ") || (name ~ /[a-z]/ && name !~ /_EXPORTS$/)) print file ": built with " arg[i] "."
       }
     }
     m = split(gate_flags, flag, " ")
@@ -401,19 +403,24 @@ step 'No switched-off checks or dropped results in the syntax tree (clang-query)
 #   sanitizer hook such as __lsan_disable.
 # - A call to a project function whose result is dropped without (void). clang-tidy's
 #   bugprone-unused-return-value covers only the {{c_name}}_ functions; this covers static helpers.
-# - exit() in the library (src/), called or taken as a pointer. The library reports errors to its
-#   caller (CODING_STANDARDS.md).
+# - Any use of Unity's state (`Unity.CurrentTestFailed = 0` in tearDown, or TEST_IS_IGNORED = 1
+#   in setUp, turns a failure into a pass) other than TEST_PROTECT and TEST_ABORT.
+# - In the library (src/): exit() called or taken as a pointer, since the library reports errors
+#   to its caller (CODING_STANDARDS.md); and main or a libFuzzer hook, which a test that links the
+#   library whole would run instead of its own.
 # - main or LLVMFuzzerInitialize in a property test: either could end the run before libFuzzer
 #   tried every input.
 cat >build/dev/check-query <<'X'
 set bind-root false
 set output diag
 match decl(anyOf(hasAttr("attr::Unused"), hasAttr("attr::Used"), hasAttr("attr::NoSanitize"), hasAttr("attr::DisableSanitizerInstrumentation"), hasAttr("attr::Suppress"), hasAttr("attr::AsmLabel"), hasAttr("attr::NoProfileFunction"), hasAttr("attr::Weak"), hasAttr("attr::WeakRef"), hasAttr("attr::Alias")), unless(isExpansionInSystemHeader())).bind("an attribute or asm label that switches a check off")
+match declRefExpr(to(varDecl(hasName("Unity"))), unless(isExpansionInSystemHeader()), unless(anyOf(isExpandedFromMacro("TEST_PROTECT"), isExpandedFromMacro("TEST_ABORT")))).bind("Unity state used outside TEST_PROTECT and TEST_ABORT: use the TEST_ macros")
 match callExpr(anyOf(hasParent(compoundStmt()), hasParent(caseStmt()), hasParent(defaultStmt()), hasParent(labelStmt())), unless(hasType(voidType())), unless(isExpansionInSystemHeader()), callee(functionDecl(unless(isExpansionInSystemHeader())))).bind("a dropped result: use it, or drop it on purpose with (void)")
 X
 {
   cat build/dev/check-query
   echo 'match declRefExpr(to(functionDecl(hasAnyName("exit", "_exit", "_Exit", "quick_exit"))), unless(isExpansionInSystemHeader())).bind("exit in the library: return an error to the caller")'
+  echo 'match functionDecl(isDefinition(), anyOf(hasName("main"), matchesName("^::LLVMFuzzer")), unless(isExpansionInSystemHeader())).bind("main or a libFuzzer hook in the library: tests link the library")'
 } >build/dev/check-query-library
 {
   cat build/dev/check-query
@@ -450,6 +457,16 @@ if [ -n "$custom" ]; then
   fail "$custom
 ctest reads these files, and they can drop tests. scripts/check removed them. Remove what wrote them."
 fi
+# ctest runs the CTestTestfile.cmake files each time, and they include TEST_INCLUDE_FILES first: a
+# script there could change a test after the list below was read. Only the lines CMake writes for
+# add_test and for subdirectories inside build/dev may be in them. awk, not grep: a regex error
+# must stop the check, not pass it.
+extra=$(find build/dev -name CTestTestfile.cmake -exec awk '
+  /^subdirs\("/ && !/^subdirs\("\// && !/\.\./ { next }
+  !/^(#.*|add_test\(.*|set_tests_properties\(.*)?$/ { print FILENAME ": " $0 }' {} +)
+[ -z "$extra" ] || fail "$extra
+ctest would run these lines (TEST_INCLUDE_FILES, or tests from outside build/dev). Remove what
+added them."
 # Every test must be one that add_unity_test or add_property_test made, with no test property
 # added (cmake/gates.cmake reads CMake's own list of tests).
 run ctest --test-dir build/dev --show-only=json-v1 >build/dev/check-tests.json

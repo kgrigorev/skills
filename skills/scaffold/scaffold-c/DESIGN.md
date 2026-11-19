@@ -33,6 +33,14 @@ Every other gate states its reason in a comment in its own file.
 
 ## Gates
 
+What the gates are for: they catch mistakes and the cheap ways to make a red check green (a
+suppression comment, a flag, a test property, a fake summary, an edit to Unity). They cannot stop
+an agent that is free to edit `CMakeLists.txt` and the tests and sets out to defeat them: CMake
+can run any program, link any object and build any file in ways a search of the build cannot
+list in full. Three rounds of review found new ways each time; "Not checked" below lists the
+known ones. Changes to `CMakeLists.txt` and to tests therefore need the owner's review, as
+`AGENTS.md` says.
+
 - Lint runs inside the build, not as its own step before it. clang-tidy needs the compile flags
   from the build, and Ninja then lints only the files that changed. Agents run the check often.
 - The gates apply by directory scope in `cmake/gates.cmake`, not per target, so a target an agent
@@ -55,16 +63,19 @@ Every other gate states its reason in a comment in its own file.
   - on the source text, for comments and conditions such as `NOLINT` or
     `#ifndef __clang_analyzer__`.
   - on clang's raw tokens, for directives: `#line`, line markers, `#pragma`, `#define` or `#undef`
-    of a Unity name or of `abort`/`exit`, `#define` of a project function name (`<prefix>_...`)
-    under `test/`, and `#if` in a test file. A comment, a line splice or the digraph `%:` cannot
-    hide a directive from the lexer. A name the project defines, such as `TEST_BUFFER_SIZE`,
-    passes. The build check applies the same names to `-D` and `-U`.
+    of a Unity name or of `abort`/`exit`, `#define` of a name with a lower-case letter (a function
+    renamed to a stub) under `test/`, and `#if` in a test file. A comment, a line splice or the
+    digraph `%:` cannot hide a directive from the lexer. An upper-case name the project defines,
+    such as `TEST_BUFFER_SIZE`, passes. The build check rejects `-D` and `-U` of Unity names and
+    of lower-case names, and `--define-macro`.
   - on the preprocessed project lines, where a macro can no longer hide a pragma or an attribute.
     A line marker that renames the file is reported, so `#line` in any spelling cannot move lines
     out of the search.
   - on the syntax tree, with clang-query: attributes (unused, used, no_sanitize, suppress,
     no_profile_instrument_function, weak, alias, asm labels) in any spelling, a dropped result of
-    any project function, `exit` or `_exit` in `src/` (called or taken as a pointer), and `main` or
+    any project function, any use of Unity's `Unity` state outside `TEST_PROTECT` and
+    `TEST_ABORT` (`TEST_IS_IGNORED = 1` in `setUp` would skip every assertion), `exit` or `_exit`
+    (called or taken as a pointer) and `main` or a libFuzzer hook in `src/`, and `main` or
     `LLVMFuzzerInitialize` in a property test.
   Sanitizer detection is matched by its spelling (`__has_feature`, `__SANITIZE_`, `__asan_`), not by
   the word `sanitizer`, so a function such as `name_sanitizer` passes. The CMake search skips
@@ -88,8 +99,10 @@ Every other gate states its reason in a comment in its own file.
   The helpers add the checks that Unity and libFuzzer need. A Unity test runs through
   `cmake -P cmake/gates.cmake`, which needs exit code 0, Unity's summary of passed tests, and
   Unity's own counts: unity.c is built with line coverage, and the lines that count a run, a
-  failed and an ignored test must have run at least once, never and never. The test can print any
-  text (`freopen` of `stdout`, then a summary of its own), but not change those counts.
+  failed and an ignored test must have run at least once, never and never, and the functions that
+  report a failure or an ignored test (`UnityTestResultsFailBegin`, `UnityFail`, `UnityIgnore`)
+  never. The test can print any text (`freopen` of `stdout`, then a summary of its own), and the
+  syntax-tree search keeps it from Unity's state.
   A `FAIL_REGULAR_EXPRESSION` alone passes a `main` that drops the result of `UNITY_END`, and a
   `PASS_REGULAR_EXPRESSION` makes ctest ignore the exit code, so a leak found at exit would pass.
 - Every line of a Unity test file must run (clang's source-based coverage, read with llvm-cov).
@@ -106,12 +119,14 @@ Every other gate states its reason in a comment in its own file.
   `LLVMFuzzerInitialize` (which can end the run or rewrite its options).
 - Tests link the project's static libraries whole (`WHOLE_ARCHIVE`). A test that defines a
   library function itself then fails with a duplicate symbol. Without it, the linker leaves the
-  library's object out and the test checks the stub. So a test may link no shared library (the
-  stub would win quietly), a library must be defined before the test that links it, and a library
-  function may not be `weak`.
+  library's object out and the test checks the stub. The helpers also link whole the project
+  libraries that a library links in turn. A test may link no shared library (the stub would win
+  quietly), and a library function may not be `weak`.
 - `scripts/check` removes any `CTestCustom.*` from the build folder, in any letter case and as a
   symlink too, and fails. `CTEST_CUSTOM_TESTS_IGNORE` there drops a test from every ctest run, and
-  git ignores `build/`.
+  git ignores `build/`. The `CTestTestfile.cmake` files may hold only the lines CMake writes for
+  `add_test` and for subdirectories inside `build/dev`: ctest runs them on every call, and
+  `TEST_INCLUDE_FILES` adds an `include()` that could change a test after its command was checked.
 - `scripts/check` fails when fewer tests ran than `ctest -N` lists, or when one did not run: ctest
   counts a disabled test as passed, and a preset `filter` drops tests without a word.
 - Not checked, and why:
@@ -120,20 +135,28 @@ Every other gate states its reason in a comment in its own file.
     it checks the result. CODING_STANDARDS.md asks for both, and the owner reviews tests.
   - `abort()` on bad input in the library. Only the meaning of the condition tells a broken
     invariant from bad input. `exit` in `src/` is rejected.
+  - Library rules (no `exit`, no `main`) by folder: they apply to `src/`, not to a library under
+    `lib/` or elsewhere.
   - A macro that renames another C library function in a test (for example `strcmp`). Only the
     functions that end a test (`abort`, `exit`, `_Exit`, `quick_exit`, `longjmp`) and Unity's names
     are listed. A complete list would need every name the C library declares.
-  - A library that a project library links in turn (`target_link_libraries(lib PUBLIC dep)`) is
-    not linked whole into the tests, so a test of `lib` could stub a function of `dep`. CMake
-    rejects one library linked both whole and plain in the same link.
-  - Link lines and custom commands. The build check reads compile commands only, so an object
-    made by `add_custom_command`, a committed `.o` or `.a`, or a linker flag such as `--wrap`
-    in `target_link_options` reaches a test unchecked. Review sees these in `CMakeLists.txt`.
+  - Link commands. The build check reads compile commands only. So a library linked to a test
+    with a plain `target_link_libraries` or a generator expression (not linked whole, so a stub
+    in the test wins), a library defined after its test, a stub library that replaces the real
+    one, an object made by `add_custom_command`, a committed `.o` or `.a`, a linker flag such as
+    `--wrap`, and a `POST_BUILD` step that replaces a test binary all reach a test unchecked. A
+    check of the link commands was tried and dropped: CMake writes them differently on Linux
+    (`-Xlinker` pairs) and macOS, and each version left new holes. Review sees these in
+    `CMakeLists.txt`.
+  - Stubs renamed by a macro outside `test/`: a lower-case `#define` in a library header, or in a
+    test file outside `test/`, pointing a library function at a static function of the test.
   - Line coverage of files other than the test's own source: a test in a `.inc` or `.h` it
     includes, a second source added with `target_sources`, or `#if` in a test file outside
     `test/`.
   - Spellings of compile flags that the build check does not list. It rejects known ones
-    (`-Wno-`, `--warn-`, `-w`, `-include`, ...), not every clang alias.
+    (`-Wno-`, `--warn-`, `--define-macro`, `-w`, `-include`, ...), not every clang alias. An
+    allow-list was tried and dropped: CMake adds flags on Linux (`-pthread`, quoted definitions)
+    that the macOS run does not show.
   - Edits to the gate files: `.clang-tidy` and `.clang-format` (a check turned off,
     `DisableFormat: true`), `CMakePresets.json` (`environment` in the build preset, such as
     `CCC_OVERRIDE_OPTIONS=+-w`, or in the test preset, such as `detect_leaks=0`), `mise.toml`,

@@ -16,6 +16,9 @@ none of the caller's environment variables.
 - Work in small steps and keep `scripts/check` green after each one.
 - Done means `scripts/check` is green. Show the command and the end of its output.
 - When a check stays red after two honest attempts, stop and report what you tried.
+- The check catches mistakes and the cheap ways to turn it green, not every way: CMake can link or
+  run anything. Never work around a gate; the owner reviews every change to `CMakeLists.txt` and to
+  tests for that.
 - Fix the cause of a red check. Gate files change only with the owner's explicit approval:
   `scripts/check`, `cmake/gates.cmake`, `CMakePresets.json`, `.clang-tidy`, `.clang-format`,
   `mise.toml`, `mise.lock`, `third_party/`, `.githooks/`, `.github/`, `.claude/`, and existing
@@ -46,8 +49,8 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
 - Check the result of every library call that can fail (`fclose`, `fwrite`, `snprintf`, ...).
   Use the result of every project function, static helpers too, or drop it on purpose with
   `(void)`.
-- The library never calls `exit` or `_exit`: it returns an error to its caller. `abort()` is for
-  broken invariants only.
+- The library never calls `exit` or `_exit` and defines no `main`: it returns an error to its
+  caller. `abort()` is for broken invariants only.
 - Braces on every branch (clang-format adds them). No `#pragma` except `#pragma once`, no `#line`
   and no asm labels.
 - Use only headers from the C library, the OS or a declared dependency. The check rejects headers
@@ -61,11 +64,15 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
   never runs, an early `return` or a branch a test never takes fails the check. A test file has
   no `#if` or `#ifdef`, and does not define a function of the library it tests (tests link the
   library whole, so a stub fails the link). Do not `#define` or `#undef` Unity's names, `setUp`,
-  `tearDown`, `abort`, `exit` or a `{{c_name}}_` function in `test/`.
+  `tearDown`, `abort`, `exit` or any lower-case name in `test/`. Use Unity only through its
+  `TEST_` and `RUN_TEST` macros, never its `Unity` state (`TEST_IS_IGNORED` included).
 - Register tests in `CMakeLists.txt` with `add_unity_test(name file libs...)` or
-  `add_property_test(name file libs...)`, after the static libraries they test. The check rejects a
-  test made any other way, a test property such as `WILL_FAIL` or `ENVIRONMENT`, a change to the
-  variables the helpers use (`CMAKE_COMMAND`, `GATES_LLVM_COV`), and a `CTestCustom.cmake` in the
+  `add_property_test(name file libs...)`, after the static libraries they test, and pass those
+  libraries to the helper (it links them whole). Never link a test with a plain
+  `target_link_libraries`, a linker flag or a custom-built object: the check cannot see these, and
+  the owner rejects them in review. The check rejects a test made any other way, a test property
+  such as `WILL_FAIL` or `ENVIRONMENT`, a change to the variables the helpers use
+  (`CMAKE_COMMAND`, `GATES_LLVM_COV`), and a `CTestCustom.cmake` or `TEST_INCLUDE_FILES` in the
   build folder.
 - Every new `.c` file goes into a target in `CMakeLists.txt`, after
   `include(cmake/gates.cmake)`, that the default build makes. Include only `.h` and `.inc` files
@@ -73,8 +80,9 @@ Read `CODING_STANDARDS.md` before writing or reviewing C.
 - A Unity test passes only when it exits 0 and ends with Unity's summary of passed tests:
   `return UNITY_END();` ends `main`.
 - A property test runs a fixed seed and run count in `scripts/check`, and passes only when
-  libFuzzer ran every input. It defines no `main` and no `LLVMFuzzerInitialize`. CI searches longer with a random seed every week
-  (`.github/workflows/weekly.yml`). A failing input becomes an example test.
+  libFuzzer ran every input. It defines no `main` and no `LLVMFuzzerInitialize`. CI searches
+  longer with a random seed every week (`.github/workflows/weekly.yml`). A failing input becomes
+  an example test.
 - `clangd` reads `build/dev/compile_commands.json`. Run `scripts/check` once to create it.
 
 ## Writing

@@ -74,6 +74,16 @@ if(CMAKE_SCRIPT_MODE_FILE)
       message(FATAL_ERROR "Unity ran ${NumberOfTests} tests: ${TestFailures} failed, "
         "${TestIgnores} ignored. Every test must run and pass.")
     endif()
+    # The functions that report a failure or an ignored test run when the assertion fails, before
+    # tearDown could clear Unity's flag. None may have run.
+    foreach(function UnityTestResultsFailBegin UnityFail UnityIgnore)
+      if(NOT unity_lcov MATCHES "\nFNDA:([0-9]+),([^,\n]*:)?${function}\n")
+        message(FATAL_ERROR "llvm-cov has no count for ${function} in unity.c.")
+      endif()
+      if(NOT CMAKE_MATCH_1 EQUAL 0)
+        message(FATAL_ERROR "Unity's ${function} ran ${CMAKE_MATCH_1} times: a test failed or was ignored.")
+      endif()
+    endforeach()
     # Line coverage of the test's own source file. A partly run line, such as an assertion whose
     # failure branch did not run, counts as run.
     gates_lcov("${GATES_TEST}" "${GATES_SOURCE}" lcov)
@@ -244,31 +254,51 @@ endif()
 # Links a test to the project libraries it tests. A static library is linked whole, so a test
 # that defines a library function itself (a stub that hides the real code) fails to link with a
 # duplicate symbol, instead of the linker quietly leaving the library's object out. A shared
-# library would let the stub win quietly, so tests take static libraries only, defined before the
-# test. A library that a project library links in turn is not linked whole (DESIGN.md).
+# library would let the stub win quietly, so tests take static libraries only. Only libraries
+# passed to the helper (and the project libraries they link) are linked whole: a plain
+# target_link_libraries on a test is not (DESIGN.md, "Not checked").
 function(gates_link_libraries name)
   foreach(library IN LISTS ARGN)
     if(TARGET ${library})
       get_target_property(type ${library} TYPE)
       if(type STREQUAL "STATIC_LIBRARY")
+        # The libraries it links in turn are linked whole too, so a test of it cannot stub them.
+        gates_static_dependencies(${library} dependencies)
+        foreach(dependency IN LISTS dependencies)
+          target_link_libraries(${name} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${dependency}>")
+        endforeach()
         set(library "$<LINK_LIBRARY:WHOLE_ARCHIVE,${library}>")
       elseif(NOT type MATCHES "^(OBJECT|INTERFACE)_LIBRARY$")
         message(FATAL_ERROR "${name}: ${library} is a ${type}. Tests link static libraries only, "
           "so a stub in a test fails to link.")
       endif()
-    else()
-      # Not a target yet: a system library such as m, or a project library defined later.
-      cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR}
-        CALL gates_require_not_target ${name} ${library})
     endif()
     target_link_libraries(${name} PRIVATE ${library})
   endforeach()
 endfunction()
-function(gates_require_not_target name library)
-  if(TARGET ${library})
-    message(FATAL_ERROR "${name}: define the library ${library} before the test that links it, "
-      "so the test links it whole.")
-  endif()
+# The project's static libraries that `library` links, directly or through others.
+function(gates_static_dependencies library out)
+  set(found "")
+  set(queue ${library})
+  while(queue)
+    list(POP_FRONT queue current)
+    get_target_property(links ${current} INTERFACE_LINK_LIBRARIES)
+    if(NOT links)
+      continue()
+    endif()
+    foreach(link IN LISTS links)
+      # A PRIVATE dependency of a static library appears as $<LINK_ONLY:name>.
+      string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" link "${link}")
+      if(TARGET ${link} AND NOT link IN_LIST found)
+        get_target_property(type ${link} TYPE)
+        if(type STREQUAL "STATIC_LIBRARY")
+          list(APPEND found ${link})
+          list(APPEND queue ${link})
+        endif()
+      endif()
+    endforeach()
+  endwhile()
+  set(${out} ${found} PARENT_SCOPE)
 endfunction()
 
 # Finds the pinned llvm-cov and llvm-profdata (mise.toml), which read the line coverage of tests.
