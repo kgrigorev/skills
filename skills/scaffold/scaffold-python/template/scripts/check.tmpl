@@ -1,0 +1,365 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+# pyproject.toml names the one uv version (required-version). Agent shells do not activate mise,
+# so the uv on PATH may be another one: then run again under mise, which puts the uv from
+# mise.toml (checksum in mise.lock) first. CI installs the right uv with setup-uv and never
+# takes this branch.
+uv_required=$(sed -n 's/^required-version = "==\(.*\)"$/\1/p' pyproject.toml)
+uv_found=$(uv --version 2>/dev/null | cut -d ' ' -f 2) || uv_found=''
+if [ "$uv_found" != "$uv_required" ] && [ -z "${CHECK_UNDER_MISE:-}" ] &&
+  command -v mise >/dev/null 2>&1; then
+  CHECK_UNDER_MISE=1 exec mise --quiet exec -- scripts/check "$@"
+fi
+
+# The result must depend only on the commit, not on the caller's shell. These variables change
+# what the tools check: PYTEST_* (PYTEST_ADDOPTS can pass -p no:warnings or --noconftest),
+# PYTHON* (PYTHONPATH, PYTHONWARNINGS, ...), MYPY* (MYPYPATH), HYPOTHESIS_*, COVERAGE_*, RUFF_*,
+# UV_* (UV_PYTHON, UV_NO_SYNC, UV_INDEX_URL, UV_CONSTRAINT, ...) and GIT_* (GIT_DIR,
+# GIT_CONFIG_*, ...). Kept: the UV_* variables that only say where files go; setup-uv sets them
+# in CI.
+for name in $(env | sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' |
+  grep -E '^(PYTEST_|PYTHON|MYPY|HYPOTHESIS_|COVERAGE_|RUFF_|UV_|GIT_|VIRTUAL_ENV$)' |
+  grep -vxE 'UV_CACHE_DIR|UV_PYTHON_INSTALL_DIR|UV_PYTHON_BIN_DIR|UV_TOOL_DIR|UV_TOOL_BIN_DIR'); do
+  unset "$name"
+done
+# The same hash seed everywhere, so set iteration order cannot differ between runs.
+export PYTHONHASHSEED=0
+# Hypothesis runs the code that installed packages register under its "hypothesis" entry point
+# when it is imported, before tests/conftest.py. pytest's --disable-plugin-autoload does not
+# cover that, so a [project.entry-points] table could change Hypothesis's settings.
+export HYPOTHESIS_NO_PLUGINS=1
+# git reads only the repository's own config: a global core.excludesFile or core.attributesFile
+# must not hide files from the searches below. quotePath=false: git prints a non-ASCII file name
+# as it is, not quoted, so the layout check below can match it.
+git() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 command git -c core.quotePath=false "$@"; }
+
+step() { printf '\n==> %s\n' "$1"; }
+# The environment is synced once below; later commands must not change it.
+run() { uv run --no-sync "$@"; }
+
+step 'Environment (exactly uv.lock)'
+uv sync --locked --quiet
+printf '%s, %s, %s, %s, %s\n' "$(uv --version)" "$(run python --version)" \
+  "$(run ruff --version)" "$(run mypy --version)" "$(run pytest --version)"
+
+step 'Format (ruff format). Fix: uv run ruff format'
+run ruff format --diff
+
+step 'Lint (ruff check, rules in pyproject.toml). Safe fixes: uv run ruff check --fix'
+run ruff check
+
+step 'No switched-off checks'
+# Comments that switch off ruff (also in its flake8: form), mypy, other type checkers, the
+# formatter (fmt:, and yapf:, which ruff format honours too) or coverage; skipped,
+# expected-to-fail, uncollected or deselected tests; silenced warnings; Hypothesis settings that
+# run fewer examples; pytest hooks and plugins, also bound by assignment, and the plugin
+# manager; code that runs at exit or ends the process (atexit, _exit); the APIs the conftest's
+# own checks use (sys.monitoring, warnings.filters). ruff's banned-api (pyproject.toml) catches
+# the same APIs under an alias, and casts.
+# tests/conftest.py is a gate file and is exempt: it holds the Hypothesis profiles and the hooks
+# that fail skipped, dropped and uncollected tests. It is the only conftest.py: the layout check
+# below rejects any other. .agents/ holds vendored agent skills (SKILL.md, step 4): no code of
+# this project, nothing imports it, and the gates skip it.
+switch_off='#[[:space:]]*(noqa|type:[[:space:]]*ignore|pyright:|mypy:|ty:|pyrefly:|ruff:|flake8:|fmt:|yapf:|isort:|pragma[:[:space:]]*no)|no_type_check|(pytest|unittest)\.(mark\.)?(skip|xfail|importorskip|expectedFailure)|SkipTest|pytest\.exit([^[:alnum:]_]|$)|filterwarnings|simplefilter|catch_warnings|@settings\(|max_examples|load_profile|suppress_health_check|(^|[^[:alnum:]_])pytest_[a-z_]+[[:space:]]*[(=]|pytest_plugins|pluginmanager|collect_ignore|__test__|atexit|(^|[^[:alnum:]_])_exit([^[:alnum:]_]|$)|sys\.monitoring|warnings\.filters'
+# git grep reads the working tree, skips deleted and ignored files, and has one regex engine
+# everywhere. -i: the tools accept `# NOQA` and `# PRAGMA NO COVER`. -a: a .gitattributes that
+# marks code as binary must not hide it. Exit 1 means no match; any other non-zero exit is an
+# error, not a pass.
+rc=0
+git grep -naiE --untracked -e "$switch_off" -- '*.py' ':!tests/conftest.py' ':!.agents/' || rc=$?
+case $rc in
+  0) echo 'The lines above switch off a check. Remove them and fix the cause.' >&2; exit 1 ;;
+  1) ;;
+  *) echo "git grep failed (exit $rc)." >&2; exit 1 ;;
+esac
+# Code shapes that a text search cannot see reliably, found in the parsed code (Python's ast
+# module) instead, so comments, strings and line breaks change nothing:
+# - TYPE_CHECKING other than as the whole test of an `if` with no else: mypy checks only the
+#   TYPE_CHECKING branch and coverage measures only the other one, so the code that runs is
+#   never type-checked. mypy treats any name MYPY the same way.
+# - A name assert_never that is not typing.assert_never: coverage skips the line
+#   `assert_never(x)` (pyproject.toml), so another function under that name hides real code.
+# - Code under `if TYPE_CHECKING:` other than imports: coverage skips the block and mypy reads
+#   it, so a declaration there can stand in for the code that runs (a stub in place).
+# - Tests that expect or catch AssertionError, Exception or BaseException: a failing assert
+#   raises AssertionError, so the test passes because of the bug. tests/conftest.py also fails
+#   a passing test that caught an AssertionError, whatever caught it. So no test can expect
+#   one, and library code raises a specific exception instead.
+# - Imports from Hypothesis's private modules (hypothesis._settings, hypothesis.internal):
+#   ruff's banned-api does not see hypothesis.settings under those paths.
+# - Control characters and line separators, which most diffs do not show, and coverage's own
+#   pragma comments as coverage reads them (Python's \s also matches Unicode spaces, which the
+#   search above does not).
+# - In the package, any line that coverage skips other than the shapes that hide no code that
+#   runs: `if TYPE_CHECKING:`, a function whose body is `...`, the `python -m` guard and
+#   `assert_never(x)`. coverage's own parser decides what it skips, so a pragma split over two
+#   lines or a pattern inside a string is seen too.
+ast_check=$(cat <<'PY'
+import ast
+import os
+import re
+import sys
+import tomllib
+
+from coverage.config import DEFAULT_EXCLUDE, DEFAULT_PARTIAL
+from coverage.misc import join_regex
+from coverage.parser import PythonParser
+
+# Coverage's own patterns for its pragma comments. The others (if TYPE_CHECKING:, a `...` body)
+# hide no code that runs.
+PRAGMA = re.compile(
+    "|".join(pattern for pattern in DEFAULT_EXCLUDE + DEFAULT_PARTIAL if "pragma" in pattern)
+)
+CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85\u2028\u2029]")
+with open("pyproject.toml", "rb") as file:
+    REPORT = tomllib.load(file).get("tool", {}).get("coverage", {}).get("report", {})
+EXCLUDE = join_regex(
+    REPORT.get("exclude_lines", DEFAULT_EXCLUDE) + REPORT.get("exclude_also", [])
+)
+BROAD = {"AssertionError", "Exception", "BaseException"}
+
+
+def name_of(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def broad(node):
+    items = node.elts if isinstance(node, ast.Tuple) else [node]
+    return any(name_of(item) in BROAD for item in items)
+
+
+def type_checking(node):
+    return isinstance(node, ast.If) and name_of(node.test) == "TYPE_CHECKING"
+
+
+def private_hypothesis(node):
+    if isinstance(node, ast.Import):
+        modules = [alias.name for alias in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        modules = [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
+    else:
+        return False
+    return any(
+        module.split(".")[0] == "hypothesis"
+        and any(part.startswith("_") or part == "internal" for part in module.split(".")[1:])
+        for module in modules
+    )
+
+
+def ellipsis_only(body):
+    return all(
+        isinstance(child, ast.Expr) and isinstance(child.value, ast.Constant)
+        and isinstance(child.value.value, (str, type(...)))
+        for child in body
+    ) and any(child.value.value is ... for child in body)
+
+
+def call_of(node, name):
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == name
+    )
+
+
+def main_guard(node):
+    test = node.test if isinstance(node, ast.If) else None
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+        and not node.orelse
+        and len(node.body) == 1
+        and call_of(node.body[0], "main")
+        and not node.body[0].value.args
+    )
+
+
+def may_skip(tree):
+    lines = set()
+    for node in ast.walk(tree):
+        if (
+            (type_checking(node) and not node.orelse)
+            or main_guard(node)
+            or (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and ellipsis_only(node.body)
+            )
+            or (
+                call_of(node, "assert_never")
+                and len(node.value.args) == 1
+                and isinstance(node.value.args[0], (ast.Name, ast.Attribute))
+            )
+            or (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and node.value.value is ...
+            )
+        ):
+            lines.update(range(node.lineno, node.end_lineno + 1))
+    return lines
+
+
+def skipped_by_coverage(text, path, tree):
+    parser = PythonParser(text=text, filename=path, exclude=EXCLUDE)
+    parser.parse_source()
+    code = {node.lineno for node in ast.walk(tree) if isinstance(node, ast.stmt)}
+    return sorted((parser.excluded & code) - may_skip(tree))
+
+
+def bound_names(node):
+    if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+        yield node.id
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        yield node.name
+    elif isinstance(node, ast.arg):
+        yield node.arg
+    elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+        yield node.name
+    elif isinstance(node, ast.MatchMapping) and node.rest:
+        yield node.rest
+    elif isinstance(node, (ast.Global, ast.Nonlocal)):
+        yield from node.names
+    elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+        yield node.name
+
+
+failed = False
+for path in sys.argv[1:]:
+    # git still lists a file that was deleted but not yet staged.
+    if not os.path.exists(path):
+        continue
+    with open(path, encoding="utf-8") as file:
+        text = file.read()
+    tree = ast.parse(text, path)
+    in_tests = path.startswith("tests/")
+    raises = {"raises", "RaisesExc", "RaisesGroup"}
+    allowed = {
+        id(node.test)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If) and not node.orelse
+    }
+    found = []
+    if path.startswith("src/"):
+        for number in skipped_by_coverage(text, path, tree):
+            found.append((number, "coverage skips this line (an exclusion pattern matches)"))
+    # Only \n: splitlines() also breaks at the separators that CONTROL looks for.
+    for number, line in enumerate(text.split("\n"), 1):
+        if CONTROL.search(line):
+            found.append((number, "a control character, which a diff does not show"))
+        if PRAGMA.search(line):
+            found.append((number, "a coverage pragma"))
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", 0)
+        if name_of(node) == "TYPE_CHECKING" and id(node) not in allowed:
+            found.append((line, "TYPE_CHECKING only as `if TYPE_CHECKING:`, with no else"))
+        if isinstance(node, ast.Name) and node.id == "MYPY":
+            found.append((line, "mypy treats the name MYPY as always true"))
+        if name_of(node) == "AssertionError" and path != "tests/conftest.py":
+            found.append((line, "AssertionError: a failing assert raises it"))
+        if type_checking(node) and not all(
+            isinstance(child, (ast.Import, ast.ImportFrom)) for child in node.body
+        ):
+            found.append((line, "only imports under `if TYPE_CHECKING:`"))
+        if private_hypothesis(node):
+            found.append((line, "a private Hypothesis module: use the public API"))
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                typing = isinstance(node, ast.ImportFrom) and node.module in {
+                    "typing",
+                    "typing_extensions",
+                }
+                if alias.name == "TYPE_CHECKING" and bound != alias.name:
+                    found.append((line, "TYPE_CHECKING under another name"))
+                if bound == "assert_never" and not (typing and alias.name == bound):
+                    found.append((line, "assert_never that is not typing.assert_never"))
+                if alias.name in raises and isinstance(node, ast.ImportFrom):
+                    raises.add(bound)
+        if "assert_never" in bound_names(node):
+            found.append((line, "assert_never that is not typing.assert_never"))
+        if in_tests and isinstance(node, ast.ExceptHandler) and node.type and broad(node.type):
+            found.append((line, "a test that catches a failing assert"))
+    for node in ast.walk(tree):
+        if in_tests and isinstance(node, ast.Call) and name_of(node.func) in raises:
+            expected = node.args[:1] + [
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg == "expected_exception"
+            ]
+            if any(broad(item) for item in expected):
+                found.append((node.lineno, "a test that expects a failing assert"))
+    for line, text in sorted(set(found)):
+        print(f"{path}:{line}: {text}")
+        failed = True
+sys.exit(1 if failed else 0)
+PY
+)
+if ! git ls-files -z --cached --others --exclude-standard -- '*.py' ':!.agents/' |
+  xargs -0 uv run --no-sync python -I -c "$ast_check"; then
+  echo 'The lines above hide code from the type checker or coverage, or make a failing check' \
+    'pass. Write them another way: see the comment in scripts/check.' >&2
+  exit 1
+fi
+# mypy checks src/ and tests/, coverage measures only the package, and pytest collects only
+# tests/test_*.py. Python anywhere else would be linted but never type-checked, measured or run.
+# A .pyi stub beside a module makes mypy read the stub instead of the code; the package ships
+# py.typed, so it needs none. mypy also skips files and folders whose names start with a dot,
+# which pytest still collects.
+layout='^src/{{module}}/([^./][^/]*/)*[^./][^/]*\.py$|^tests/([^./][^/]*/)*test_[^/]*\.py$'
+misplaced=$(git ls-files --cached --others --exclude-standard -- '*.py' '*.pyi' ':!.agents/' |
+  grep -vE "$layout|^tests/conftest\.py$" || true)
+if [ -n "$misplaced" ]; then
+  printf '%s\n' "$misplaced"
+  echo 'Move the files above: code goes in src/{{module}}/, tests and their fixtures in' \
+    'tests/test_*.py, in folders whose names do not start with a dot. No .pyi stubs.' >&2
+  exit 1
+fi
+# The tools read a file that git ignores, but the search above skips it and CI never gets it:
+# the check would pass here and fail in CI.
+ignored=$(git ls-files --others --ignored --exclude-standard -- 'src/*.py' 'src/*.pyi' \
+  'tests/*.py' 'tests/*.pyi')
+if [ -n "$ignored" ]; then
+  printf '%s\n' "$ignored"
+  echo 'git ignores the files above. Commit them or delete them.' >&2
+  exit 1
+fi
+# ruff uses the nearest config file, mypy and pytest prefer their own files over
+# pyproject.toml, and uv prefers uv.toml over [tool.uv]. Any of these would quietly replace the
+# settings there. A conftest.py other than tests/conftest.py is a pytest plugin; find also sees
+# one that git ignores, which the searches above skip.
+overrides=$(find . \( -path ./.venv -o -path ./.git -o -path ./.agents \) -prune -o \( \
+  -name ruff.toml -o -name .ruff.toml -o -name mypy.ini -o -name .mypy.ini -o -name uv.toml \
+  -o \( -name conftest.py ! -path ./tests/conftest.py \) \
+  -o -name pytest.toml -o -name .pytest.toml -o -name pytest.ini -o -name .pytest.ini \
+  -o -name tox.ini -o -name setup.cfg -o -name .coveragerc \
+  -o -name sitecustomize.py -o -name usercustomize.py \
+  -o \( -name pyproject.toml ! -path ./pyproject.toml \) \) -print)
+if [ -n "$overrides" ]; then
+  printf '%s\n' "$overrides"
+  echo 'Remove the files above: they override the settings in pyproject.toml.' >&2
+  exit 1
+fi
+
+step 'Types (mypy --strict, settings in pyproject.toml)'
+run mypy
+
+step 'Tests (warnings are errors, skipped tests fail) and branch coverage'
+# erase: a .coverage file from an earlier run must not stand in for this one.
+run coverage erase
+run coverage run -m pytest --hypothesis-profile=check
+run coverage report
+
+printf '\nAll checks passed.\n'

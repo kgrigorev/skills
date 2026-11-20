@@ -1,0 +1,90 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: ruff format, ruff check (all rules), a search for switched-off
+checks and code that hides from them, mypy --strict, pytest with warnings as errors and no
+skipped or uncollected tests, and 100 % branch coverage. The git hook and CI run it too.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/check`, `.githooks/`, `.github/`, `.claude/`, `tests/conftest.py`, `.python-version`,
+  `mise.toml`, `mise.lock`, the `[tool.*]` tables, `[build-system]`, `[project.entry-points]`
+  and the `dev` group in `pyproject.toml`, and existing tests.
+
+```sh
+uv run pytest -k banner                         # one test by name (or tests/test_core.py::test_x)
+uv run ruff format && uv run ruff check --fix   # format, then safe lint fixes
+```
+
+If uv says "Required uv version ... does not match", put `mise exec --` before the command.
+`scripts/check` does that itself.
+
+Sandboxed agents: uv writes to `~/.cache/uv` and `~/.local/share/uv`, and mise to its folders in
+`.claude/settings.json`. A cold cache or a changed `uv.lock` needs the network (`pypi.org`,
+`files.pythonhosted.org`, `releases.astral.sh`, `github.com`), and so does `gh`. Without these,
+`scripts/check` fails for reasons outside the code.
+
+## Python
+
+Read `CODING_STANDARDS.md` before writing or reviewing Python.
+
+The checks ban `print` outside `__main__.py`, relative imports, `Any`, TODO comments and
+commented-out code. Every module and function has a Google-style docstring, and mypy needs an
+annotation on every function. Do not use `cast`, `# noqa`, `# type: ignore`,
+`contextlib.suppress`, skips, xfails, warning filters or the `recwarn` fixture: fix the cause.
+Hypothesis settings live only in `tests/conftest.py`; run a state machine with
+`run_state_machine_as_test(Machine)` in a plain test. `TYPE_CHECKING` appears only as
+`if TYPE_CHECKING:`, with no `else` and only imports in it. Use `platform.system()`, not
+`sys.platform`. A test never expects or catches `AssertionError`,
+`Exception` or `BaseException`, and a test that catches a failing assert in any other way fails.
+Library code never names `AssertionError`: raise a specific exception. pytest loads only the
+plugins that `pyproject.toml` names. No code uses the plugin manager, `sys.monitoring`,
+`warnings.filters`, `atexit`, `ctypes` or `os.exec*`/`os.spawn*`/`os.fork`. Coverage skips
+only `if TYPE_CHECKING:`, `...` bodies, the `python -m` guard and `assert_never(x)`.
+
+The editor language server is pyright. When pyright and mypy disagree, mypy wins: it is the gate.
+
+## Layout
+
+- Logic goes in the library under `src/{{module}}/`. `__main__.py` only calls it.
+- Every `tests/test_*.py` file runs automatically. Python files go only in `src/{{module}}/`
+  and `tests/`, in folders whose names do not start with a dot; `scripts/check` rejects them
+  anywhere else. Vendored agent skills in `.agents/`
+  are not project code, and the gates skip them.
+- `.python-version` names the exact Python. uv installs it; never use a system Python.
+- A new dependency needs the owner's approval. Then `uv add <name>` updates `pyproject.toml` and
+  `uv.lock`. Commit both.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

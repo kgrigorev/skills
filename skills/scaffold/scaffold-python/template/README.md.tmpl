@@ -1,0 +1,41 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [Homebrew](https://brew.sh), then run in the repository:
+
+```sh
+brew bundle
+mise trust                             # once per clone: mise reads only trusted mise.toml files
+mise install                           # the uv from mise.toml, checked against mise.lock
+mise exec -- uv sync                   # Python from .python-version, dev tools from uv.lock
+git config core.hooksPath .githooks
+gh extension install github/gh-stack   # optional: stacked PRs
+```
+
+Homebrew installs mise and the GitHub CLI. mise installs the one uv version that
+`pyproject.toml` requires. uv installs Python and every other tool. With mise activated in your
+shell (`mise activate`, see the mise docs), plain `uv` is that version. The git hook runs the
+checks before each push. `gh stack` is optional: it helps to open and update stacked PRs.
+
+Editor: install pyright (`npm install -g pyright`) for the language server. It reads `.venv`.
+
+## Commands
+
+```sh
+scripts/check                 # every quality gate: format, lint, types, tests, coverage
+uv run {{package}}            # run the program
+uv run pytest                 # all tests
+uv run pytest -k banner       # tests whose name contains "banner"
+uv run ruff format            # format
+uv run ruff check --fix       # safe lint fixes
+uv run mypy                   # type check
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too. A weekly CI job
+(`.github/workflows/audit.yml`) looks for known vulnerabilities and outdated packages and runs the
+property tests with new random examples.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

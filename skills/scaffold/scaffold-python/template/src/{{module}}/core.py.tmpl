@@ -1,0 +1,17 @@
+"""The library: all the program's logic lives here."""
+
+from importlib.metadata import metadata
+
+
+def banner() -> str:
+    """Return the line the program prints when it starts: its name and its summary.
+
+    Both come from pyproject.toml, through the metadata of the installed package.
+    """
+    about = metadata("{{package}}")
+    return f"{about['Name']}: {about['Summary']}"
+
+
+def slug(text: str) -> str:
+    """Turn text into lower-case words joined by "-", for example "A b" -> "a-b"."""
+    return "-".join(text.lower().split())

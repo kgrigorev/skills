@@ -1,0 +1,215 @@
+[project]
+name = "{{package}}"
+version = "0.1.0"
+description = "{{synopsis}}"
+readme = "README.md"
+# The lower bound only. .python-version pins the exact Python that every machine and CI use.
+requires-python = ">={{python_minor}}"
+# A new dependency needs the owner's approval (CODING_STANDARDS.md).
+dependencies = []
+
+[project.scripts]
+{{package}} = "{{module}}.__main__:main"
+
+[dependency-groups]
+# Exact versions: a new ruff or mypy release adds rules, and scripts/check must give the same
+# result on every machine until someone bumps a version on purpose. Agents: owner approval.
+dev = []
+
+[build-system]
+# The same version as required-version below, so uv builds the package itself without a download.
+requires = ["uv_build=={{uv_version}}"]
+build-backend = "uv_build"
+
+[tool.uv]
+# uv refuses to run at any other version, so uv.lock is written and read the same way everywhere.
+# CI (astral-sh/setup-uv) installs this version; mise.toml and mise.lock install it locally.
+required-version = "=={{uv_version}}"
+# Only uv's own Python builds, never a system Python: the same interpreter on every machine.
+python-preference = "only-managed"
+
+# Settings below are quality gates. Agents: change them only with the owner's approval.
+
+[tool.ruff]
+# Lint and format every file, also one that .gitignore or a .ignore file names. ruff's default
+# exclude list still skips .venv and the tool caches.
+respect-gitignore = false
+# Vendored agent skills (SKILL.md files and their scripts) are not this project's code. "./": only
+# the folder at the root, not one of that name under tests/.
+extend-exclude = ["./.agents"]
+
+[tool.ruff.lint]
+# Every stable rule. The set grows only when the ruff pin is bumped. Preview rules stay off.
+select = ["ALL"]
+ignore = [
+  "COM812",                   # trailing commas: the formatter decides them
+  "CPY001",                   # copyright header in every file: not wanted
+  "TD",                       # TODO format rules: FIX002 already rejects every TODO
+  "TC001", "TC002", "TC003",  # moving imports under TYPE_CHECKING: import-time tuning, not a defect
+  "EM101", "EM102", "TRY003", # message text in `raise X("...")`: style only; the
+                              # `msg = ...; raise X(msg)` workaround catches no defect
+]
+
+[tool.ruff.lint.pydocstyle]
+# Google style (Args:, Returns:, Raises:). Also switches off the D rules that contradict it.
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "S101",    # pytest checks with assert
+  "D103",    # the test name says what it checks
+  "INP001",  # tests are not a package: pytest imports them with importlib
+  "PLR2004", # expected values in tests are literals
+  "FBT001",  # a bool parameter of a parametrized test is a value, not a mode switch
+]
+"src/*/__main__.py" = [
+  "T201", # the entry point prints the program's output
+]
+"tests/conftest.py" = [
+  "TID251", # the gate file uses hypothesis.settings, sys.monitoring, warnings.filters and atexit
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Absolute imports only: a reader sees where every name comes from.
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# APIs that overrule a check. ruff resolves aliases (`import typing as t`, `cast as coerce`),
+# which the text search in scripts/check cannot.
+"typing.cast".msg = "cast overrules the type checker. Narrow the type with isinstance or a TypeGuard."
+"typing_extensions.cast".msg = "cast overrules the type checker. Narrow the type with isinstance or a TypeGuard."
+"typing.no_type_check".msg = "no_type_check switches the type checker off."
+"typing_extensions.no_type_check".msg = "no_type_check switches the type checker off."
+"contextlib.suppress".msg = "suppress swallows errors. Catch the specific exception and handle it."
+"os._exit".msg = "os._exit ends the process before pytest reports failures and coverage saves data."
+# Code that runs at interpreter exit, after pytest and coverage, or that replaces the process,
+# can set the exit status of the run to 0. posix and nt are os under their platform names.
+"atexit".msg = "Code at exit runs after pytest and coverage and can change the result of the run."
+"posix".msg = "Use os, not posix."
+"nt".msg = "Use os, not nt."
+"ctypes".msg = "ctypes calls C directly, past every check (for example _exit)."
+"_ctypes".msg = "ctypes calls C directly, past every check (for example _exit)."
+"os.execl".msg = "A new or replaced process can change the exit status."
+"os.execle".msg = "A new or replaced process can change the exit status."
+"os.execlp".msg = "A new or replaced process can change the exit status."
+"os.execlpe".msg = "A new or replaced process can change the exit status."
+"os.execv".msg = "A new or replaced process can change the exit status."
+"os.execve".msg = "A new or replaced process can change the exit status."
+"os.execvp".msg = "A new or replaced process can change the exit status."
+"os.execvpe".msg = "A new or replaced process can change the exit status."
+"os.spawnl".msg = "A new or replaced process can change the exit status."
+"os.spawnle".msg = "A new or replaced process can change the exit status."
+"os.spawnlp".msg = "A new or replaced process can change the exit status."
+"os.spawnlpe".msg = "A new or replaced process can change the exit status."
+"os.spawnv".msg = "A new or replaced process can change the exit status."
+"os.spawnve".msg = "A new or replaced process can change the exit status."
+"os.spawnvp".msg = "A new or replaced process can change the exit status."
+"os.spawnvpe".msg = "A new or replaced process can change the exit status."
+"os.posix_spawn".msg = "A new or replaced process can change the exit status."
+"os.posix_spawnp".msg = "A new or replaced process can change the exit status."
+"os.fork".msg = "A new or replaced process can change the exit status."
+"os.forkpty".msg = "A new or replaced process can change the exit status."
+# tests/conftest.py uses both to catch a swallowed assert and a silenced warning.
+"sys.monitoring".msg = "sys.monitoring can switch off the caught-assert check in tests/conftest.py."
+"warnings.filters".msg = "A warning is a failure. Fix its cause."
+"pytest.skip".msg = "A skipped test checks nothing."
+"pytest.xfail".msg = "An expected failure checks nothing."
+"pytest.importorskip".msg = "A skipped test checks nothing."
+"pytest.exit".msg = "pytest.exit stops the run before the remaining tests."
+"unittest.skip".msg = "A skipped test checks nothing."
+"unittest.skipIf".msg = "A skipped test checks nothing."
+"unittest.skipUnless".msg = "A skipped test checks nothing."
+"unittest.expectedFailure".msg = "An expected failure checks nothing."
+"unittest.SkipTest".msg = "A skipped test checks nothing."
+"warnings.filterwarnings".msg = "A warning is a failure. Fix its cause."
+"warnings.simplefilter".msg = "A warning is a failure. Fix its cause."
+"warnings.catch_warnings".msg = "A warning is a failure. Fix its cause. pytest.warns tests an expected warning."
+"warnings.resetwarnings".msg = "A warning is a failure. Fix its cause."
+"hypothesis.settings".msg = "Hypothesis settings live in the profiles in tests/conftest.py."
+# mypy decides sys.platform and sys.version_info checks before it type-checks, and skips the
+# other branch. A test that sets sys.platform covers that branch, so nothing checks its types.
+# platform.system() is an ordinary call: mypy checks every branch. .python-version pins one
+# Python, so a version check has nothing to choose between.
+"sys.platform".msg = "mypy never type-checks the other branch. Use platform.system()."
+"sys.version_info".msg = ".python-version pins the Python version. Write code for that version."
+
+[tool.mypy]
+# strict turns on every optional check, including no untyped definitions and no implicit Any.
+strict = true
+# Read the standard library's types as CI (Linux) does, so macOS and CI give the same result.
+platform = "linux"
+warn_unreachable = true
+# Any switches the type checker off for a value. Use object, a Protocol or a TypedDict.
+disallow_any_explicit = true
+# Optional checks that strict leaves off; each catches real mistakes.
+enable_error_code = [
+  "deprecated",          # calls to APIs marked @deprecated
+  "exhaustive-match",    # match without a case for every value
+  "explicit-override",   # overriding a method without @override
+  "ignore-without-code", # belt and braces: scripts/check bans type: ignore anyway
+  "mutable-override",    # unsafe override of a mutable attribute
+  "possibly-undefined",  # a name bound only in some branches
+  "redundant-expr",      # conditions that are always true or false
+  "redundant-self",      # needless Self annotation
+  "truthy-bool",         # `if obj:` where obj is always true
+  "truthy-iterable",     # `if items:` on an Iterable that is always true
+  "unimported-reveal",   # leftover reveal_type
+  "unused-awaitable",    # a coroutine or Task that is never awaited
+]
+files = ["src", "tests"]
+# Module names from the folders: tests/unit/test_core.py is tests.unit.test_core, so two test
+# files with the same name in different folders do not clash. src holds the package.
+mypy_path = "src"
+explicit_package_bases = true
+
+[tool.pytest]
+minversion = "9.2"
+testpaths = ["tests"]
+# strict: unknown config keys and markers are errors, and an xfail test that passes fails.
+strict = true
+# importlib: tests import the installed package, never a copy found through sys.path.
+# --disable-plugin-autoload: pytest loads no plugin from an installed package's entry point, so
+# a plugin that drops tests or reports a failure as a pass cannot slip in through
+# [project.entry-points] or a new dependency. -p loads the one plugin the checks use. A new
+# test plugin goes here, with the owner's approval. Hypothesis's own entry points are switched
+# off in scripts/check (HYPOTHESIS_NO_PLUGINS).
+addopts = [
+  "--import-mode=importlib",
+  "-ra",
+  "--disable-plugin-autoload",
+  "-p",
+  "_hypothesis_pytestplugin",
+]
+# A warning is a failure. uv.lock fixes the dependencies, so the set of warnings is the same everywhere.
+filterwarnings = ["error"]
+# pytest skips folders named build, dist, venv, node_modules or .* by default, without a word:
+# tests/build/test_x.py would never run. Only caches are skipped here; Hypothesis warns when
+# its .hypothesis folder is not in the list.
+norecursedirs = ["__pycache__", ".hypothesis"]
+
+[tool.coverage.run]
+# Branch coverage: an `if` without a test for both outcomes counts as untested.
+branch = true
+source = ["{{module}}"]
+
+[tool.coverage.report]
+# Every line and branch of the library runs in a test. Code that no test needs can go.
+fail_under = 100
+show_missing = true
+skip_covered = true
+# The `python -m` guard runs only as a script; tests call main() directly. The pattern matches
+# the guard only when its block is the single line `main()` at the end of the file: coverage
+# skips a whole block when its first line matches, so a looser pattern would hide any code under
+# a guard in any module, also after a blank line.
+# `case _: assert_never(status)` ends an exhaustive match. mypy proves it never runs, so no test
+# can reach it. The pattern takes a whole line with a plain name as the argument, so a call
+# inside the parentheses or a comment on another line hides nothing.
+exclude_also = [
+  'if __name__ == "__main__":\n    main\(\)\n*\Z',
+  '^[ \t]*assert_never\([A-Za-z_][A-Za-z0-9_.]*\)$',
+]
+
+[tool.pyright]
+# For the editor and agent language server only (pyright-lsp). mypy in scripts/check is the gate.
+venvPath = "."
+venv = ".venv"
