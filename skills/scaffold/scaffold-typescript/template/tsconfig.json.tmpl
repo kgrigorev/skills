@@ -1,0 +1,45 @@
+{
+  // The type check is the build: Node runs the .ts files directly, so tsc never emits.
+  // Agents: change this file only with the owner's approval.
+  "compilerOptions": {
+    // Node 26 runs ES2025 natively.
+    "target": "es2025",
+    "lib": ["es2025"],
+    // Resolve imports the way Node does. TS 7 loads no @types by default, so list them.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "noEmit": true,
+    // Relative imports name the .ts file, as Node's type stripping needs.
+    "allowImportingTsExtensions": true,
+    // Only syntax Node can strip: no enum, namespace or parameter properties.
+    "erasableSyntaxOnly": true,
+    // Type-only imports must say `import type`, so stripping never drops a needed import.
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // TS 7 makes strict the default; stated here so the file reads on its own.
+    "strict": true,
+    // arr[i] and record[key] may be undefined; the type says so.
+    "noUncheckedIndexedAccess": true,
+    // `x?: string` means absent, never an explicit undefined.
+    "exactOptionalPropertyTypes": true,
+    // Reading a key of an index signature must use brackets: record["key"], a visible "may be missing".
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUncheckedSideEffectImports": true,
+    // Check our sources, not the .d.ts files of dependencies: their conflicts are not ours to fix.
+    // scripts/check rejects .d.ts files of our own, which this flag would also skip.
+    "skipLibCheck": true
+  },
+  // Every .ts file in the repository (node_modules is excluded by default), so a script in a
+  // new folder is type-checked too. "**" skips folders whose names start with ".", so
+  // scripts/check rejects .ts files there, and .mts, .cts, .tsx and .js files anywhere.
+  "include": ["**/*.ts"]
+}

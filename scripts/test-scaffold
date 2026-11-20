@@ -14,6 +14,7 @@
 #   # expect-output: <text>  optional, repeatable: the output of scripts/check also contains
 #                          <text>, so a red case fails for its own reason, not another one
 #   # env: NAME=value      optional, repeatable: set for scripts/check only
+#   # output: <text>       optional, repeatable: the output of scripts/check contains <text>
 # The rest of the file is a sh script that changes the project (cwd is the project root).
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -117,6 +118,14 @@ for file in $files; do
       fi
       ;;
     esac
+    if [ "$result" = ok ]; then
+      wants=$(sed -n 's/^# output: //p' "$file")
+      while IFS= read -r text; do
+        [ -z "$text" ] || grep -qF -- "$text" "$work/out" || { result="output lacks: $text"; break; }
+      done <<EOF
+$wants
+EOF
+    fi
   fi
   if [ "$result" = ok ]; then
     pass=$((pass + 1))

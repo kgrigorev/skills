@@ -1,0 +1,121 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Lint rules. Each rule beyond the default categories names the defect it prevents.
+  // Agents: change this file only with the owner's approval.
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "node", "promise", "vitest"],
+  // correctness: code that is wrong. suspicious: code that is most likely wrong. perf: needless work.
+  "categories": { "correctness": "error", "suspicious": "error", "perf": "error" },
+  "options": {
+    // Rules that need the TypeScript checker (oxlint-tsgolint, built on TS 7).
+    "typeAware": true,
+    // A warning fails too: a warning nobody must fix is noise.
+    "denyWarnings": true,
+    // A disable comment that suppresses nothing is an error (scripts/check rejects all of them anyway).
+    "reportUnusedDisableDirectives": "error"
+  },
+  "env": { "builtin": true, "node": true },
+  "rules": {
+    // tsc reports unused names too, but skips any name that starts with `_`, so a type guard
+    // `(_value: unknown): _value is T` that checks nothing passed. No name is exempt here. An
+    // unused parameter before a used one stays (`(_, index) => index`), as does a key left out
+    // with a rest pattern (`const { password: _password, ...visible } = user`).
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "args": "after-used",
+        "argsIgnorePattern": "^$",
+        "varsIgnorePattern": "^$",
+        "caughtErrors": "all",
+        "caughtErrorsIgnorePattern": "^$",
+        "destructuredArrayIgnorePattern": "^$",
+        "ignoreRestSiblings": true
+      }
+    ],
+    // tsc reports a path without a return (noImplicitReturns) and, unlike this rule, knows that a
+    // switch over every member of a union needs no default.
+    "typescript/consistent-return": "off",
+    // A retry loop, paging through results or ordered writes must await inside the loop. The rule
+    // cannot tell those from a missed Promise.all, and scripts/check rejects disable comments.
+    "eslint/no-await-in-loop": "off",
+
+    // `any` turns the checker off. These stop it at the source and wherever it spreads.
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-function-type": "error",
+    // `x!` claims a value exists without checking. Check, or change the type.
+    "typescript/no-non-null-assertion": "error",
+    // Data from outside (JSON, env, argv) is `unknown` until a type guard checks it.
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+
+    // Promises: a forgotten await loses errors; an async callback where void is expected hides them.
+    // `void promise` loses the error as well: await it, or handle it with .catch.
+    "typescript/no-floating-promises": ["error", { "ignoreVoid": false }],
+    "typescript/no-misused-promises": "error",
+    "typescript/require-await": "error",
+    "typescript/return-await": ["error", "error-handling-correctness-only"],
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/only-throw-error": "error",
+    "eslint/no-throw-literal": "error",
+    // An empty block, such as `catch {}`, drops an error or hides unfinished code. A catch that
+    // only rethrows adds nothing.
+    "eslint/no-empty": "error",
+    "eslint/no-useless-catch": "error",
+
+    // Control flow: every union member handled; no truthiness on nullable strings and numbers
+    // (0 and "" are valid values); no condition that is always true or false, except the literal
+    // `while (true)` of a loop that ends with a break.
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/strict-boolean-expressions": "error",
+    "typescript/no-unnecessary-condition": [
+      "error",
+      { "allowConstantLoopConditions": "only-allowed-literals" }
+    ],
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/prefer-optional-chain": "error",
+
+    // Expressions whose result is easy to misread. An arrow without braces may return a void call,
+    // as in `expect(() => validate(-1)).toThrow()` and `lines.forEach((line) => console.log(line))`.
+    "typescript/no-confusing-void-expression": ["error", { "ignoreArrowShorthand": true }],
+    "typescript/restrict-plus-operands": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/no-mixed-enums": "error",
+    "typescript/prefer-includes": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-invalid-void-type": "error",
+    "typescript/no-dynamic-delete": "error",
+    // Every @ts- directive switches the type checker off, with or without a description.
+    "typescript/ban-ts-comment": [
+      "error",
+      { "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true, "ts-check": false }
+    ],
+    // A triple-slash reference adds types from outside the project: `/// <reference lib="dom" />`
+    // declares `document`, which Node does not have, so the type check passes and the code fails.
+    "typescript/triple-slash-reference": [
+      "error",
+      { "lib": "never", "path": "never", "types": "never" }
+    ],
+    "eslint/eqeqeq": "error",
+    "eslint/no-self-compare": "error",
+    "eslint/no-param-reassign": "error",
+    "eslint/no-var": "error",
+    "eslint/prefer-const": "error",
+
+    // ESM only, and node: built-ins named as such.
+    "typescript/no-namespace": "error",
+    "typescript/no-require-imports": "error",
+    "unicorn/prefer-node-protocol": "error",
+    // An import cycle can read a binding before it is initialised.
+    "import/no-cycle": "error",
+
+    // Tests: none focused or skipped, none without an assertion, no todo left behind.
+    // vitest.config.ts also fails the run on any test that ends skipped, todo or expected-fail.
+    "vitest/no-focused-tests": "error",
+    "vitest/no-disabled-tests": "error",
+    "vitest/expect-expect": "error",
+    "vitest/warn-todo": "error"
+  }
+}

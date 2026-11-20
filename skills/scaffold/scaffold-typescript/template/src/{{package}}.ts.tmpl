@@ -1,0 +1,16 @@
+/**
+ * The {{package}} library: {{synopsis}}.
+ * All logic lives here, so the tests reach it without starting the program.
+ */
+
+/** The line the program prints first. */
+export const banner: string = "{{package}}: {{synopsis}}";
+
+/**
+ * Builds the greeting for a name.
+ * A blank name falls back to "world", so the output is never "Hello, !".
+ */
+export function greet(name: string): string {
+  const trimmed = name.trim();
+  return `Hello, ${trimmed === "" ? "world" : trimmed}!`;
+}

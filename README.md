@@ -26,6 +26,7 @@ all run it.
 | `scaffold-scala` | Scala 3 with Scala CLI: scalafmt, WartRemover, munit, ScalaCheck. |
 | `scaffold-rust` | Rust: Clippy, rustfmt, cargo-nextest, cargo-deny, proptest. |
 | `scaffold-go` | Go: golangci-lint with gofumpt, race-detector tests, rapid. |
+| `scaffold-typescript` | TypeScript on Node with pnpm: tsc, oxlint, oxfmt, vitest, fast-check, knip. |
 
 ## Install
 

@@ -1,0 +1,171 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+# Agent shells have no mise prompt hook, so the tools from mise.toml may be missing from PATH.
+# Re-run through `mise exec`, which puts exactly those versions first on PATH. Without mise,
+# pnpm still refuses a node or pnpm that differs from devEngines in package.json.
+if [ -z "${CHECK_UNDER_MISE:-}" ] && command -v mise >/dev/null 2>&1; then
+  # Which extra mise config files load is not the caller's choice.
+  unset MISE_ENV MISE_OVERRIDE_CONFIG_FILENAMES MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES
+  CHECK_UNDER_MISE=1 exec mise exec -- "$PWD/scripts/check" "$@"
+fi
+
+step() { printf '\n==> %s\n' "$1"; }
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+
+# The same commit gives the same result on every machine. NODE_OPTIONS can preload code into
+# every tool (one that resets the exit code turns failing tests green), and npm_config_* and
+# pnpm_config_* change how pnpm installs and runs. OXLINT_TSGOLINT_* swaps the program behind the
+# type-aware lint rules. Settings belong in the project's files.
+unset NODE_OPTIONS NODE_PATH
+for name in $(env | sed -n 's/^\([Nn][Pp][Mm]_[Cc][Oo][Nn][Ff][Ii][Gg]_[A-Za-z0-9_]*\)=.*/\1/p
+  s/^\([Pp][Nn][Pp][Mm]_[Cc][Oo][Nn][Ff][Ii][Gg]_[A-Za-z0-9_]*\)=.*/\1/p
+  s/^\(OXLINT_TSGOLINT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$name"
+done
+# The time zone and the locale change what dates and numbers look like (getHours,
+# toLocaleString), so a test could pass on one laptop and fail in CI.
+TZ=UTC LC_ALL=C LANG=C
+export TZ LC_ALL LANG
+# git reads ignore rules from the user's global excludes file and .git/info/exclude too. Those
+# differ between machines, so only the project's .gitignore files count here.
+ignore_rules='--exclude-per-directory=.gitignore'
+git() { command git -c core.excludesFile=/dev/null -c core.quotePath=false "$@"; }
+step 'Only mise.toml sets the tools'
+# mise also loads mise.local.toml, .tool-versions, .config/mise/ and more. Any of them could set
+# NODE_OPTIONS or put another node first on PATH, so inside the project only mise.toml counts.
+if command -v mise >/dev/null 2>&1; then
+  root=$(pwd)
+  root_physical=$(pwd -P)
+  extra_config=$(mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p' |
+    while IFS= read -r file; do
+      case $file in
+      ("$root/mise.toml" | "$root_physical/mise.toml") ;;
+      ("$root"/* | "$root_physical"/*) printf '%s\n' "$file" ;;
+      esac
+    done)
+  [ -z "$extra_config" ] ||
+    fail "mise loads these files: $extra_config. Remove them: only mise.toml sets the tools and their settings."
+fi
+
+step 'No pnpmfile'
+# pnpm loads a .pnpmfile.cjs in every command, `pnpm exec` included, and runs its code before any
+# gate below could reject it. Ignored by git or not, it must not exist. Any case: on macOS,
+# .PNPMFILE.cjs is the same file.
+for file in .[Pp][Nn][Pp][Mm][Ff][Ii][Ll][Ee].*; do
+  [ ! -e "$file" ] || fail "pnpm would run the code in $file before the checks. Remove it."
+done
+
+step 'Dependencies match pnpm-lock.yaml'
+printf 'node %s, pnpm %s\n' "$(node --version)" "$(pnpm --version)"
+# --frozen-lockfile fails when package.json and the lockfile disagree, instead of re-resolving.
+# --trust-lockfile skips the supply-chain policy check: it needs the registry and its verdict can
+# change with the date, so it runs in its own CI job (lockfile-policy in ci.yml).
+# --ignore-scripts: a "prepare" or "postinstall" script in package.json would run code before any
+# gate below, and could replace the tools they call. --ignore-pnpmfile: the same for a pnpmfile
+# that pnpm-workspace.yaml names.
+pnpm install --frozen-lockfile --trust-lockfile --ignore-scripts --ignore-pnpmfile --silent
+printf 'tsc %s, oxlint %s, oxfmt %s\n' "$(pnpm exec tsc --version | awk '{ print $2 }')" \
+  "$(pnpm exec oxlint --version | awk '{ print $2 }')" "$(pnpm exec oxfmt --version | awk '{ print $2 }')"
+
+step 'Only .ts sources, and only the gate configs'
+# Every gate below is set up for .ts files. A .js, .mts, .cts, .tsx or .TS file, or a .d.ts of
+# our own (skipLibCheck skips it), would escape the type check, the lint rules or the grep.
+# The git() wrapper above sets core.quotePath=false: git would otherwise print
+# "src/donn\303\251es.ts" in quotes, which does not end in .ts.
+others=$(git ls-files -co "$ignore_rules" -- ':(icase)*.[cm][jt]s' \
+  ':(icase)*.[jt]s' ':(icase)*.[jt]sx' | grep -v '\.ts$' || true)
+others="$others${others:+
+}$(git ls-files -co "$ignore_rules" -- '*.d.ts')"
+# tsc's "**/*.ts" skips folders and files whose names start with ".", but vitest and node still
+# run them, so such a file would never be type checked.
+others="$others${others:+
+}$(git ls-files -co "$ignore_rules" -- '*.ts' | grep -E '(^|/)\.' || true)"
+others=$(printf '%s\n' "$others" | sed '/^$/d')
+[ -z "$others" ] || fail "Only .ts sources outside hidden folders are checked here. Convert, move or remove: $others"
+# oxlint, oxfmt and knip skip ignored files, but tsc follows an import into one. A committed file
+# under dist/ or under a nested .gitignore would be type checked and run, but never linted.
+ignored=$(git ls-files -ci "$ignore_rules")
+[ -z "$ignored" ] || fail "These files are committed but ignored, so the linter skips them: $ignored"
+# knip reads a "knip" key in package.json even when --config names knip.jsonc.
+node -e 'process.exit("knip" in JSON.parse(require("node:fs").readFileSync("package.json", "utf8")) ? 1 : 0)' ||
+  fail 'package.json has a "knip" key. The knip settings live in knip.jsonc only.'
+step 'Format (oxfmt). Fix: pnpm fmt'
+# Only the root config and the .gitignore files count: a nested config or a .prettierignore
+# could exempt files.
+pnpm exec oxfmt --check -c .oxfmtrc.json --disable-nested-config --ignore-path .gitignore
+
+step 'Lint (oxlint with type information, rules in .oxlintrc.json)'
+# Same for the linter: no nested config, no .eslintignore.
+pnpm exec oxlint -c .oxlintrc.json --disable-nested-config --ignore-path .gitignore
+
+step 'No switched-off checks'
+# Searches the .ts files that git sees (committed or new, not ignored), by pattern.
+# Exit 1 is no match; a higher status is an error and fails the check. The patterns use POSIX
+# classes only: git grep -E on macOS has no \b or \s.
+search() {
+  pattern=$1
+  shift
+  status=0
+  # --text: a file with a NUL byte in it counts as binary, and git grep would skip it whole.
+  git grep --untracked --text -nE -e "$pattern" -- "$@" || status=$?
+  [ "$status" -le 1 ] || fail "git grep failed with status $status."
+  [ "$status" -eq 0 ]
+}
+# Comments that switch off the linter, the type checker, the formatter, coverage or knip. A knip
+# tag starts a line or follows a space, "*" or "{" (a JSDoc line may leave out its "*"), so an
+# address such as "ops@beta.example.com" passes.
+switch_off='(eslint|oxlint)-(disable|enable)|@ts-(ignore|expect-error|nocheck)|(biome|prettier|oxfmt|dprint)-ignore|(istanbul|c8|v8) ignore|(^|[[:space:]*{])@(public|beta|alias)([^[:alnum:]_]|$)'
+# vitest options that skip a test, searched in tests/ only. The reporter in vitest.config.ts fails
+# the run on a skipped, expected-to-fail (.fails) or retried test wherever its options come from;
+# this names the line first. `fails` and `retry` are left to the reporter: as words they also
+# name a count or an HTTP client option that a test passes (`{ fetch, retry: 2 }`).
+vitest_options='\.(skipIf|runIf)[[:space:]]*[(.]'
+if search "$switch_off" '*.ts' ':!vitest.config.ts' ||
+  search "$vitest_options" 'tests/*.ts'; then
+  fail 'The lines above switch off a check. Remove them and fix the cause.'
+fi
+# `declare` claims that a value exists with a type, and nothing checks the claim: the type check
+# passes and the code fails when it runs. It is the hand-written .d.ts rejected above, inside a
+# .ts file (`declare function`, `declare global`, `declare module`, a `declare` class field).
+# Anchored at the start of a line or right after a comment (`/* x */ declare`), so the word inside
+# a comment or a string does not count.
+gap='([[:space:]]|/\*([^*]|\*+[^*/])*\*+/)'
+if search "(^|\*/)[[:space:]]*(export$gap+)?declare$gap+[[:alpha:]_\$]" '*.ts'; then
+  fail 'The lines above declare a value without defining it. Import it from a typed module, or define it.'
+fi
+# Tests must give the same result on every run. The fast-check seed and run count are set in
+# tests/setup.ts only, and no module may hand a test other options. A `seed:` key is not searched:
+# a seeded generator in src/ takes one. tests/setup.ts fails a property test that ran with
+# another seed or run count, however the options reached it; this names the plain spellings first.
+if search 'configureGlobal|numRuns|interruptAfterTimeLimit|skipAllAfterTimeLimit' '*.ts' ':!tests/setup.ts' ':!vitest.config.ts'; then
+  fail 'The lines above change the fast-check seed, run count or time limit. tests/setup.ts sets them.'
+fi
+# tests/setup.ts reads stack traces to find who called the clock, and vitest keeps its settings in
+# its worker state. Code that changes either could hide a test's calls or switch off a check.
+# tests/setup.ts fails closed on most such changes; this names the plain spellings first.
+if search 'captureStackTrace|prepareStackTrace|stackTraceLimit|__vitest_' '*.ts' ':!tests/setup.ts'; then
+  fail 'The lines above change how stack traces are captured or reach into vitest. Remove them.'
+fi
+# Date["now"] and Math["random"] count, a Date[] type does not. The names are whole words, so a
+# `randomIntegers` arbitrary passes. tests/setup.ts fails a test that reaches these functions in
+# any other way (an alias, destructuring); this names the plain spellings first.
+nondeterministic='(^|[^[:alnum:]_$])(Date[[:space:]]*(\.[[:space:]]*now|\[[^]])|Math[[:space:]]*(\.[[:space:]]*random|\[))|new Date\(\)|performance\.now|(^|[^[:alnum:]_$])(hrtime|randomUUID|randomBytes|randomInt|getRandomValues)([^[:alnum:]_$]|$)'
+if search "$nondeterministic" 'tests/*.ts' ':!tests/setup.ts'; then
+  fail 'The lines above make a test depend on the clock or on random values. Pass fixed values.'
+fi
+
+step 'Type check (tsc, settings in tsconfig.json)'
+pnpm exec tsc -p tsconfig.json
+
+step 'Unused files, exports and dependencies (knip)'
+# A stale entry in knip.jsonc fails too, so the config cannot quietly widen over time.
+pnpm exec knip --config knip.jsonc --treat-config-hints-as-errors
+
+step 'Test (vitest)'
+pnpm exec vitest run --config vitest.config.ts
+
+printf '\nAll checks passed.\n'

@@ -1,0 +1,53 @@
+// Test settings. Agents: change this file only with the owner's approval.
+import { defineConfig } from "vitest/config";
+import type { Reporter, TestCase } from "vitest/node";
+
+/**
+ * Fails the run when a test did not really run and pass: skipped in any way (`.skip`, `.skipIf`,
+ * `.runIf`, `ctx.skip()`), `.todo`, expected to fail (`.fails`), or given retries.
+ * vitest itself reports those as success.
+ */
+function everyTestRuns(): Reporter {
+  const notRun: string[] = [];
+  return {
+    onTestCaseResult(test: TestCase) {
+      const why =
+        test.result().state === "skipped"
+          ? "skipped or todo"
+          : test.options.fails === true
+            ? "expected to fail (.fails)"
+            : test.options.retry !== undefined && test.options.retry !== 0
+              ? "retried"
+              : undefined;
+      if (why !== undefined)
+        notRun.push(`${test.module.relativeModuleId} > ${test.fullName}: ${why}`);
+    },
+    onTestRunEnd() {
+      if (notRun.length === 0) return;
+      console.error(`\nThese tests did not run as plain tests:\n  ${notRun.join("\n  ")}`);
+      process.exitCode = 1;
+    },
+  };
+}
+
+export default defineConfig({
+  test: {
+    include: ["tests/**/*.test.ts"],
+    setupFiles: ["tests/setup.ts"],
+    reporters: ["default", everyTestRuns()],
+    // A focused test (.only) fails the run, on every machine, not only on CI.
+    allowOnly: false,
+    // A run that finds no test files fails.
+    passWithNoTests: false,
+    // A test that makes no assertion fails.
+    expect: { requireAssertions: true },
+    // A flaky test fails instead of passing on a second try.
+    retry: 0,
+    // A snapshot that is missing fails, instead of being written on the first run.
+    // `vitest run -u` writes snapshots on purpose.
+    update: "none",
+    // vi.useFakeTimers() starts the fake clock at 0, not at the real time, so a test under fake
+    // timers cannot read today's date. vi.setSystemTime sets another fixed time.
+    fakeTimers: { now: 0 },
+  },
+});

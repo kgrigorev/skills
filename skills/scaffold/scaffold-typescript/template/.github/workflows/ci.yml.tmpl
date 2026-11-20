@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Install node and pnpm only from the URLs and checksums in mise.lock.
+  MISE_LOCKED: "1"
+  # mise runs this mise.toml without a trust record today. This keeps CI working if that changes.
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reads mise.toml and mise.lock: the same node and pnpm as on every laptop.
+      # mise itself is pinned. Without `version`, the action takes the newest release.
+      - uses: jdx/mise-action@v5
+        with:
+          version: {{mise_version}}
+
+      # The pnpm store is content-addressed, so a stale cache can only make the install slower.
+      - id: pnpm-store
+        run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - run: scripts/check
+
+  # pnpm's supply-chain policy (packages at least a day old, no exotic sources) asks the
+  # registry, and its verdict can change from fail to pass a day later. So it stays out of
+  # scripts/check and runs here. It is not a required check.
+  lockfile-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: {{mise_version}}
+      - run: pnpm install --frozen-lockfile --lockfile-only

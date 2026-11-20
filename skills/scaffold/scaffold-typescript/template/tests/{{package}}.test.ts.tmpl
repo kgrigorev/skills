@@ -1,0 +1,26 @@
+import * as fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import { banner, greet } from "../src/{{package}}.ts";
+
+describe("banner", () => {
+  it("names the program", () => {
+    expect(banner.startsWith("{{package}}: ")).toBe(true);
+  });
+});
+
+describe("greet", () => {
+  it("greets the world when the name is blank", () => {
+    expect(greet("  ")).toBe("Hello, world!");
+  });
+
+  // A property test: fast-check generates 200 strings (seed fixed in tests/setup.ts).
+  it("puts the trimmed name between the greeting and the mark", () => {
+    fc.assert(
+      fc.property(fc.string(), (name) => {
+        const trimmed = name.trim();
+        fc.pre(trimmed !== "");
+        expect(greet(name)).toBe(`Hello, ${trimmed}!`);
+      }),
+    );
+  });
+});
