@@ -1,0 +1,54 @@
+[package]
+name = "{{package}}"
+version = "0.1.0"
+edition = "2024"
+# The oldest Rust that builds this package is the pinned one in rust-toolchain.toml.
+# Cargo picks dependency versions that support it, and Clippy only suggests what it has.
+rust-version = "{{rust_minor}}"
+description = "{{synopsis}}"
+# Private: never published to crates.io. cargo-deny skips the license check for it.
+publish = false
+
+# A new dependency or feature needs the owner's approval. Add it with `cargo add`, which picks
+# the newest version that supports rust-version.
+[dependencies]
+
+[dev-dependencies]
+
+# scripts/check allows only the tables in this file, and in [package] only the usual
+# metadata keys. A [profile], [workspace], [[test]] or build script needs the owner's approval.
+
+# Lint levels. Agents: change this table only with the owner's approval.
+# scripts/check turns every warning into an error (CARGO_BUILD_WARNINGS=deny), so "warn" fails
+# the checks, while a plain `cargo build` still runs during development.
+# Code cannot switch a lint off: scripts/check rejects lint attributes in the code.
+[lints.rust]
+# No unsafe code. "forbid" cannot be lowered by an attribute in the code.
+unsafe_code = "forbid"
+# Every public item, and each crate, has a doc comment.
+missing_docs = "warn"
+# Old idioms that the 2018 edition replaced, such as hidden lifetimes in paths.
+rust_2018_idioms = { level = "warn", priority = -1 }
+# Paths written longer than needed.
+unused_qualifications = "warn"
+
+[lints.clippy]
+# Clippy's stricter group. It asks for `# Errors` doc sections, `#[must_use]`, careful casts.
+pedantic = { level = "warn", priority = -1 }
+# Calls that crash on bad input. Return a Result instead. clippy.toml allows them in tests.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+# Library code that ends the whole program. Return an error to main instead.
+exit = "warn"
+# Slicing a string inside a character crashes. Use char_indices or a parser.
+string_slice = "warn"
+# Unfinished code and debug output.
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+# `let _ = f();` and `f().ok();` throw away a Result or another value that must be used.
+# scripts/check rejects `_ = f();`.
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"

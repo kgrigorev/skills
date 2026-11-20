@@ -1,0 +1,19 @@
+//! {{synopsis}}.
+//!
+//! The library holds all the logic. `src/main.rs` only calls it, so tests reach every part.
+
+/// The line the program prints when it starts.
+#[must_use]
+pub fn banner() -> String {
+    String::from("{{package}}: {{synopsis}}")
+}
+
+/// Counts the words in `text`. A word is a run of characters without white space.
+///
+/// ```
+/// assert_eq!({{crate}}::word_count("one  two\nthree"), 3);
+/// ```
+#[must_use]
+pub fn word_count(text: &str) -> usize {
+    text.split_whitespace().count()
+}

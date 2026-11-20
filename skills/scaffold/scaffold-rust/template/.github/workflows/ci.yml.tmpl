@@ -1,0 +1,42 @@
+name: ci
+
+# Runs scripts/check, the same gates as the git hook and the agent hook.
+# A title edit does not rerun the checks: pr-title.yml checks titles. With `edited` here, a
+# title edit would start a new run, and the concurrency group would cancel the running check.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs mise at the pinned version, then the tools in mise.toml from the URLs and
+      # checksums in mise.lock, and the Rust toolchain that rust-toolchain.toml names.
+      - uses: jdx/mise-action@v5
+        with:
+          version: "{{mise_version}}"
+
+      # Caches downloaded crates and compiled dependencies, keyed on the rustc version and
+      # Cargo.lock. Only main saves, so pull requests do not push useful entries out.
+      # cargo-installed binaries are not used: the tools come from mise.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - run: scripts/check

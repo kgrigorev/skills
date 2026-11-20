@@ -1,0 +1,18 @@
+//! Tests for the public API of the `{{crate}}` library.
+
+use proptest::prelude::*;
+use {{crate}}::{banner, word_count};
+
+#[test]
+fn banner_starts_with_the_package_name() {
+    assert!(banner().starts_with("{{package}}"));
+}
+
+proptest! {
+    /// Joining two texts with a space adds up their word counts.
+    #[test]
+    fn word_count_adds_up_when_texts_are_joined(left in ".*", right in ".*") {
+        let joined = format!("{left} {right}");
+        prop_assert_eq!(word_count(&joined), word_count(&left) + word_count(&right));
+    }
+}

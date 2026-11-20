@@ -1,0 +1,12 @@
+# Clippy settings. Lint levels live in Cargo.toml [lints].
+# Agents: change this file only with the owner's approval.
+
+# Tests may crash on purpose: a crash is how a test reports a failure.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# Ends the program without unwinding, like `process::exit`, which the `exit` lint rejects.
+disallowed-methods = [
+  { path = "std::process::abort", reason = "return an error to main instead" },
+]

@@ -1,0 +1,49 @@
+name: scheduled
+
+# Checks whose result changes with time, not with the code. They never block a merge:
+# do not make them required checks.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths: [Cargo.lock]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: "{{mise_version}}"
+      # Fetches the RustSec advisory database. A new advisory can turn this red without a code
+      # change: update the crate, or ask the owner.
+      - run: mise exec -- cargo deny --locked check advisories
+
+  explore:
+    # scripts/check tries the same property-test cases every run. This job tries new random
+    # ones, many more of them. A failure prints the smallest failing input: turn it into a test.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: "{{mise_version}}"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          save-if: "false"
+      # The explore profile in .config/nextest.toml never stops a slow test.
+      - run: mise exec -- cargo nextest run --locked --profile explore --workspace --all-features --run-ignored all
+        env:
+          PROPTEST_CASES: "10000"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold Rust"
+  short_description: "New Rust project with agent rules and quality gates"

@@ -1,0 +1,44 @@
+# cargo-deny rules for the dependency graph. Agents: change this file only with the owner's approval.
+# scripts/check runs the bans, licenses and sources checks. They read only Cargo.lock and the
+# crates' manifests, so the result is the same on every machine and day. The advisories check
+# needs the RustSec database, which changes daily: .github/workflows/scheduled.yml runs it.
+
+[graph]
+all-features = true
+
+[licenses]
+# Permissive licenses that ask only for a notice. Add one only with the owner's approval.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+]
+# A license nobody uses yet is fine: the list is a policy, not an inventory.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# This package sets publish = false and has no license of its own.
+ignore = true
+
+[bans]
+# Two versions of one crate cost build time but are not a defect.
+multiple-versions = "allow"
+# A dependency without a version requirement ("*") can change under us.
+wildcards = "deny"
+# Path dependencies inside this repository are fine.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io: its releases are immutable and checksummed. No git dependencies.
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[advisories]
+# Online check, run by .github/workflows/scheduled.yml only.
+yanked = "deny"
+unmaintained = "workspace"

@@ -1,0 +1,15 @@
+# cargo-nextest settings. scripts/check runs the default profile.
+# Agents: change this file only with the owner's approval.
+# Fail-fast and zero retries are the defaults. scripts/check allows only these two profiles and
+# timeout and output keys in them. Retries, filters, overrides and scripts hide flaky, skipped
+# or faked tests.
+
+[profile.default]
+# A test still running after 60 s is stopped and fails, so a hang shows up as a red test
+# instead of a stuck run.
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+[profile.explore]
+# The weekly property search in .github/workflows/scheduled.yml runs many more cases, so a
+# test may take minutes. It reports slow tests but never stops them; the job timeout does.
+slow-timeout = { period = "120s" }

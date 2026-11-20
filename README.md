@@ -24,6 +24,7 @@ all run it.
 | --- | --- |
 | `scaffold-haskell` | Haskell: cabal, Ormolu, HLint, hspec, QuickCheck. |
 | `scaffold-scala` | Scala 3 with Scala CLI: scalafmt, WartRemover, munit, ScalaCheck. |
+| `scaffold-rust` | Rust: Clippy, rustfmt, cargo-nextest, cargo-deny, proptest. |
 
 ## Install
 
