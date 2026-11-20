@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold Scala"
+  short_description: "New Scala 3 project with agent rules and quality gates"

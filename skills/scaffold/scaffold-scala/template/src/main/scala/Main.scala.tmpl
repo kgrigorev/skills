@@ -1,0 +1,5 @@
+package {{namespace}}
+
+/** Prints a greeting for the words given on the command line. */
+@main def run(words: String*): Unit =
+  println({{module}}.greet(words.mkString(" ")))

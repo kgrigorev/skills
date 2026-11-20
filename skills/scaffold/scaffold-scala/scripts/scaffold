@@ -1,0 +1,73 @@
+#!/bin/sh
+# Renders the Scala 3 project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  lower-case words joined by "-", for example "my-tool". The Scala package drops the
+#             "-" (mytool), and the main object joins the words (MyTool).
+#   synopsis: one line, for example "A tool that renames photos".
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Go developer new to Scala 3". AGENTS.md and CODING_STANDARDS.md use it.
+#
+# Every version is fixed in the template. The script never asks a tool for the "current" version.
+# It installs the JDK and Scala CLI with mise, writes mise.lock, formats the Scala files, runs
+# `git init` when needed and points git at the project's hooks. It does not commit.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+
+# shellcheck source-path=SCRIPTDIR source=scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+check_inputs "$package" "$synopsis" "$reader"
+require_tools mise git
+require_hidden "$template"
+[ -f "$template/.scalafmt.conf.tmpl" ] ||
+  fail 'template/.scalafmt.conf.tmpl is missing. Reinstall the skill with its hidden files.'
+
+# my-tool -> mytool (Scala package) and MyTool (main object and test suite).
+namespace=$(printf '%s' "$package" | tr -d -)
+module=$(printf '%s' "$package" | awk -F- '{
+  for (i = 1; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2)
+}')
+# A Scala keyword cannot name a package. Main.scala holds the entry point `run`, so "main" and
+# "run" would clash with it.
+case $namespace in
+abstract | case | catch | class | def | do | else | enum | export | extends | false | final | \
+  finally | for | given | if | implicit | import | lazy | match | new | null | object | override | \
+  package | private | protected | return | sealed | super | then | throw | trait | true | try | \
+  type | val | var | while | with | yield | main | run)
+  fail "package \"$package\" gives the Scala name \"$namespace\", which is reserved. Pick another name." ;;
+esac
+
+set_var package "$package"
+set_var namespace "$namespace"
+set_var module "$module"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# mise refuses a config file it does not trust yet. Then install the JDK and Scala CLI, and record
+# their download URLs and checksums for every common platform, so CI on Linux gets the same bytes.
+mise trust --quiet mise.toml
+mise lock --platform linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,macos-x64,macos-arm64,windows-x64
+mise install --locked java scala-cli
+# scalafmt sorts imports, and the order depends on the package name.
+mise exec --locked -- scala-cli fmt project.scala src
+
+printf 'Created %s (package %s, object %s) in %s\n' "$package" "$namespace" "$module" "$(pwd)"
+printf 'scala-cli %s, %s, Scala %s, scalafmt %s\n' \
+  "$(mise exec --locked -- scala-cli version --cli-version)" \
+  "$(mise exec --locked -- java -version 2>&1 | head -n 1)" \
+  "$(sed -n 's,^//> using scala ,,p' project.scala)" "$(sed -n 's/^version *= *//p' .scalafmt.conf)"
+list_files
+printf 'mise.lock\n'

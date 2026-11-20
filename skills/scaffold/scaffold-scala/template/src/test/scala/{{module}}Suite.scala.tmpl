@@ -1,0 +1,18 @@
+package {{namespace}}
+
+import munit.ScalaCheckSuite
+import org.scalacheck.Prop.forAll
+
+class {{module}}Suite extends ScalaCheckSuite:
+
+  // A fixed seed makes every run check the same inputs, so the same commit always gives the same
+  // result. A failing property prints its seed; paste it here to replay the failure.
+  override def scalaCheckInitialSeed: String = "TO7zgUWdv-WPJuetViT8r85tY3TprSjGhdyoESCTTkI="
+
+  test("a blank name greets the world"):
+    assertEquals({{module}}.greet("   "), "Hello, world!")
+
+  property("the greeting holds the trimmed name"):
+    forAll { (name: String) =>
+      {{module}}.greet(name).contains(name.trim)
+    }

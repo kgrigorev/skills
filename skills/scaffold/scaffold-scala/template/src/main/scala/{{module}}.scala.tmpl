@@ -1,0 +1,9 @@
+package {{namespace}}
+
+/** Builds the greeting that the command line prints. */
+object {{module}}:
+
+  /** Greets `name`, or the world when `name` is blank. Surrounding spaces are dropped. */
+  def greet(name: String): String =
+    val trimmed = name.trim
+    if trimmed.isEmpty then "Hello, world!" else s"Hello, $trimmed!"

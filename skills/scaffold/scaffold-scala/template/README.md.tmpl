@@ -1,0 +1,41 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+Install [mise](https://mise.jdx.dev/getting-started.html), then run in the repository:
+
+```sh
+mise trust
+mise install                           # the JDK and Scala CLI from mise.toml
+git config core.hooksPath .githooks
+gh extension install github/gh-stack   # optional: stacked PRs
+```
+
+mise installs the exact JDK and Scala CLI versions in `mise.toml`, checked against `mise.lock`.
+Scala CLI then downloads the Scala compiler, scalafmt and the libraries that `project.scala` and
+`.scalafmt.conf` name. The first `scripts/check` downloads about 150 MB; later runs need no
+network. The git hook runs the checks before each push. `gh stack` is optional: it helps to open
+and update stacked PRs.
+
+A global Coursier or Scala CLI repository setting, such as `COURSIER_REPOSITORIES`, changes where
+the libraries come from. Use one only for a mirror of Maven Central.
+
+Editor: install the "Scala (Metals)" extension, then run
+`mise exec -- scala-cli setup-ide project.scala src` once. Metals compiles with the Bloop server,
+which can show green for code that `scripts/check` rejects. The check is the gate.
+
+## Commands
+
+```sh
+scripts/check                                                        # every quality gate
+mise exec -- scala-cli run project.scala src --server=false -- Ada   # run the program
+mise exec -- scala-cli test project.scala src --server=false         # tests only
+mise exec -- scala-cli fmt project.scala src                         # format
+```
+
+`scripts/check` is the single list of gates. The git hook and CI run it too.
+`.github/workflows/deps.yml` reports newer dependency and tool versions once a week.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).

@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # A fixed runner image, so a new Ubuntu release cannot change the result of a commit.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # Actions are pinned by commit, because a tag can be moved to other code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Installs the JDK and Scala CLI from mise.toml. Because mise.lock exists, the action runs
+      # `mise install --locked`: the same versions, with checksums checked on every download.
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          version: 2026.11.9
+
+      # Coursier downloads the compiler, libraries, test runner and scalafmt. Every version is
+      # pinned in these files, so a cache keyed on them holds exactly what the run needs.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/scalacli
+          key: scala-${{ runner.os }}-${{ hashFiles('project.scala', '.scalafmt.conf', 'mise.lock') }}
+          restore-keys: scala-${{ runner.os }}-
+
+      - run: scripts/check

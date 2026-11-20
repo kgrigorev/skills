@@ -1,0 +1,37 @@
+name: deps
+
+# Weekly report of newer dependency and tool versions. It asks Maven Central and GitHub, so its
+# answer changes over time. That is why it is not in scripts/check and never blocks a PR.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+        with:
+          version: 2026.11.9
+
+      # The report goes to the job summary. A failed lookup shows up there and does not fail
+      # the job.
+      - name: Report newer versions
+        run: |
+          {
+            echo '## Dependencies'
+            echo '```'
+            scala-cli --power dependency-update project.scala 2>&1 || true
+            echo '```'
+            echo '## Tools'
+            echo '```'
+            mise outdated 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
