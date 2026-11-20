@@ -1,4 +1,5 @@
-# expect: red Test (sanitizers on
+# expect: red Configure (CMakePresets.json
+# expect-output: gtest_discover_tests takes the target and DISCOVERY_MODE PRE_TEST only
 # An ENVIRONMENT test property that runs each property once.
 . "$(dirname "$0")/lib/attack"
 break_property

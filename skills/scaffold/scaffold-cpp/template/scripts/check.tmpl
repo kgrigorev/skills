@@ -414,7 +414,7 @@ gtest_discover_tests'
 file_modes='READ STRINGS GLOB GLOB_RECURSE RELATIVE_PATH TO_CMAKE_PATH TO_NATIVE_PATH REAL_PATH
 READ_SYMLINK SIZE TIMESTAMP MD5 SHA1 SHA224 SHA256 SHA384 SHA512 SHA3_224 SHA3_256 SHA3_384
 SHA3_512'
-cmake_modules='FetchContent GoogleTest GNUInstallDirs CMakeDependentOption CMakePrintHelpers'
+cmake_modules='FetchContent GoogleTest CTest GNUInstallDirs CMakeDependentOption CMakePrintHelpers'
 # The functions and macros the project defines may be called too; the scan reads their bodies. A
 # function named like a CMake command does not count: defined after a real call of that command,
 # it would let the call through.
@@ -470,7 +470,8 @@ unpinned=$(CMAKE_FILES=$cmake_files DEFINED=$defined CMAKE_COMMANDS=$cmake_comma
     for (i = 2; i <= count; i++) {
       if (args[i] == "URL" && args[i + 1] ~ /^https:\/\//) url = 1
       if (args[i] == "URL_HASH" && args[i + 1] ~ /^SHA256=[0-9a-f]+$/ && length(args[i + 1]) == 71) hash = 1
-      if (args[i] ~ /^(GIT_|SVN_|HG_|CVS_|SOURCE_DIR$|DOWNLOAD_COMMAND$|PATCH_COMMAND$|UPDATE_COMMAND$|FIND_PACKAGE_ARGS$|OVERRIDE_FIND_PACKAGE$)/) {
+      # A variable can hold more arguments, such as PATCH_COMMAND, so arguments are literal.
+      if (args[i] ~ /\$\{/ || args[i] ~ /^(GIT_|SVN_|HG_|CVS_|SOURCE_DIR$|DOWNLOAD_COMMAND$|PATCH_COMMAND$|UPDATE_COMMAND$|FIND_PACKAGE_ARGS$|OVERRIDE_FIND_PACKAGE$)/) {
         url = 0; break }
     }
     if (!url || !hash)
@@ -538,9 +539,12 @@ step 'Configure (CMakePresets.json, preset dev)'
 # given here too. The downloaded dependencies and the compiled objects stay.
 # The trace records each command CMake runs and the file it comes from, for the check below.
 # -Wno-author: a fresh configure would print GoogleTest's CMake policy warnings on every run.
+# CMAKE_SUPPRESS_REGENERATION: otherwise ninja runs CMake again during the build when a file
+# CMake depends on has changed, without the trace and with a filled cache, after the checks.
 rm -f build/dev/CMakeCache.txt
 mkdir -p build/dev
 if cmake --preset dev --log-level=WARNING -Wno-author -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
+  -DCMAKE_SUPPRESS_REGENERATION=ON \
   --trace-expand --trace-format=json-v1 --trace-redirect=build/dev/trace.json >build/dev/configure.log 2>&1; then
   configured=1
 else
@@ -566,14 +570,19 @@ trace_problems=$(CMAKE_FILES=$cmake_scripts CMAKE_COMMANDS=$cmake_commands FILE_
       "GTest::gmock_main rapidcheck rapidcheck_gtest", list, " ")
     for (i = 1; i <= n; i++) trusted[list[i]] = 1
   }
-  # The JSON strings of the args array, unescaped, into arg[1..count].
-  function parse(text,   i, c, value, inside) {
+  # The JSON strings of the args array, unescaped, into arg[1..count]. The trace shows ${list}
+  # as one argument, which CMake then splits on ; (an empty one disappears), so each argument is
+  # split here too.
+  function parse(text,   i, j, c, value, inside, pieces, piece) {
     count = 0; inside = 0
     for (i = 1; i <= length(text); i++) {
       c = substr(text, i, 1)
       if (!inside) { if (c == "\"") { inside = 1; value = "" }; continue }
       if (c == "\\") { c = substr(text, ++i, 1); value = value (c == "n" ? "\n" : c == "t" ? "\t" : c); continue }
-      if (c == "\"") { arg[++count] = value; inside = 0; continue }
+      if (c == "\"") {
+        pieces = split(value, piece, ";")
+        for (j = 1; j <= pieces; j++) if (piece[j] != "") arg[++count] = piece[j]
+        inside = 0; continue }
       value = value c
     }
   }
@@ -599,11 +608,32 @@ trace_problems=$(CMAKE_FILES=$cmake_scripts CMAKE_COMMANDS=$cmake_commands FILE_
     if (name == "function" || name == "macro") { defined[tolower(arg[1])] = 1; next }
     if (!(name in allowed) && !(name in defined)) { bad("CMake ran " command ", which is not on the list of CMake commands in scripts/check"); next }
     if (name == "file" && !(arg[1] in read_only)) bad("CMake ran file(" arg[1] "), which is not a read-only mode")
-    # Without LANGUAGES, project() enables C too. LANGUAGES comes last.
-    if (name == "project") { languages = 0
-      for (i = 2; i <= count; i++) { if (arg[i] == "LANGUAGES") languages = i
-        else if (languages && arg[i] != "CXX") bad("project() enables the language " arg[i] "; the project is C++ only") }
-      if (!languages || languages == count) bad("project() must end with LANGUAGES CXX") }
+    # Without LANGUAGES, project() enables C too. The languages run up to the next keyword.
+    if (name == "project") { languages = 0; listing = 0
+      for (i = 2; i <= count; i++) {
+        if (arg[i] == "LANGUAGES") { languages = i; listing = 1 }
+        else if (arg[i] ~ /^(VERSION|COMPAT_VERSION|DESCRIPTION|HOMEPAGE_URL|SPDX_LICENSE)$/) listing = 0
+        else if (listing && arg[i] != "CXX") bad("project() enables the language " arg[i] "; the project is C++ only") }
+      if (!languages) bad("project() must say LANGUAGES CXX") }
+    # Programs and downloads that CMake runs for the project. find_package runs a Find module,
+    # which may run a program that a project variable names (GIT_EXECUTABLE for FindGit), so only
+    # Threads is allowed. FetchContent may fetch only GoogleTest and rapidcheck, by URL and
+    # SHA-256 and nothing more: a PATCH_COMMAND in a list variable would run a script.
+    # gtest_discover_tests writes its arguments into a script that ctest runs, so it takes the
+    # target and DISCOVERY_MODE PRE_TEST only.
+    if (name == "find_package" && (arg[1] != "Threads" || count > 2 || (count == 2 && arg[2] !~ /^(REQUIRED|QUIET)$/)))
+      bad("find_package(" arg[1] ") is not allowed; only find_package(Threads REQUIRED) is")
+    if (name == "fetchcontent_declare") {
+      if (arg[1] !~ /^(googletest|rapidcheck)$/) bad("FetchContent_Declare(" arg[1] ") is not GoogleTest or rapidcheck")
+      for (i = 2; i <= count; i++) {
+        if ((arg[i] == "URL" && arg[i + 1] ~ /^https:\/\//) || (arg[i] == "URL_HASH" && arg[i + 1] ~ /^SHA256=[0-9a-f]+$/) ||
+          (arg[i] == "DOWNLOAD_NO_PROGRESS" && arg[i + 1] ~ /^(TRUE|FALSE|ON|OFF)$/)) { i++; continue }
+        if (arg[i] !~ /^(SYSTEM|EXCLUDE_FROM_ALL)$/)
+          bad("FetchContent_Declare gets " arg[i] "; only URL, URL_HASH, DOWNLOAD_NO_PROGRESS, SYSTEM and EXCLUDE_FROM_ALL are allowed") } }
+    if (name == "fetchcontent_makeavailable")
+      for (i = 1; i <= count; i++) if (arg[i] !~ /^(googletest|rapidcheck)$/) bad("FetchContent_MakeAvailable(" arg[i] ") is not GoogleTest or rapidcheck")
+    if (name == "gtest_discover_tests" && (count != 3 || arg[1] !~ /^[A-Za-z0-9_.+-]+$/ || arg[2] != "DISCOVERY_MODE" || arg[3] != "PRE_TEST"))
+      bad("gtest_discover_tests takes the target and DISCOVERY_MODE PRE_TEST only")
     if (name ~ /^target_/ && (arg[1] in trusted)) bad(command " changes the target " arg[1] ", which is GoogleTest or rapidcheck")
     if (name == "set_target_properties")
       for (i = 1; i <= count && arg[i] != "PROPERTIES"; i++) if (arg[i] in trusted) bad(command " changes the target " arg[i] ", which is GoogleTest or rapidcheck")
@@ -749,7 +779,8 @@ bad_rules=$(awk -v cxx="$(mise where conda:clangxx)/bin/clang++" -v toolchain="$
   /^rule / { name = $2; next }
   !/^  command = / { next }
   # The rules CMake itself writes. Any other rule, such as a C rule, is not one the checks read.
-  name ~ /^(CUSTOM_COMMAND|RERUN_CMAKE|CLEAN|HELP|phony)$/ { next }
+  # No RERUN_CMAKE: a project that turns CMAKE_SUPPRESS_REGENERATION back off gets one.
+  name ~ /^(CUSTOM_COMMAND|CLEAN|HELP|phony)$/ { next }
   name !~ /^CXX_/ { print "rule " name " is not a rule the check knows: " substr($0, 13); next }
   { command = $0; sub(/^  command = /, "", command) }
   name ~ /^CXX_COMPILER__/ {
@@ -848,7 +879,15 @@ printf '%s\n' $cpp_files | grep -E '\.cpp$' | grep -vxF "${test_files:-/}" | lin
 printf '%s\n' "$test_files" | grep -E '\.cpp$' | lint --checks=-bugprone-unchecked-optional-access
 
 step 'Build (warnings are errors)'
+# The build must not change what the checks above read (CMake run again, a step that writes
+# build.ninja).
+build_files() { cksum build/dev/build.ninja build/dev/CMakeFiles/rules.ninja build/dev/compile_commands.json; }
+checked_build_files=$(build_files)
 cmake --build --preset dev
+if [ "$(build_files)" != "$checked_build_files" ]; then
+  echo 'The build changed build.ninja, rules.ninja or compile_commands.json after the checks.' >&2
+  exit 1
+fi
 
 step 'Every project file is compiled, and the compiler reads only checked files'
 # ninja records each file that the compiler read for an object. A file the gates above skip
@@ -908,6 +947,10 @@ step 'Test (sanitizers on, fixed property seed)'
 # code that wrote it. The check below would catch the skip; deleting the file stops a revert from
 # leaving the build folder broken.
 rm -f build/dev/CTestCustom.cmake build/dev/CTestCustom.ctest
+# gtest_discover_tests writes each test list (*_tests.cmake) when ctest first runs after a build,
+# and keeps it while it is newer than the test binary. A list edited by hand in the ignored build
+# folder would outlive a revert, so every run lists the tests again.
+find build/dev -name '*_tests.cmake' -exec rm -f {} +
 # ctest runs the scripts that a CTestTestfile.cmake includes, and a script can change the tests
 # in the real run only, not in --show-only below (TEST_INCLUDE_FILES). Only the scripts that
 # gtest_discover_tests writes next to it may be included. The walk follows the subdirs() that

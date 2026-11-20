@@ -17,8 +17,12 @@ The git hook and CI run it too.
 - When a check stays red after two honest attempts, stop and report what you tried.
 - Fix the cause of a red check. Gate files change only with the owner's explicit approval:
   `scripts/`, `.githooks/`, `.github/`, `.claude/`, `.clang-tidy`, `.clang-format`, `.clangd`,
-  `CMakePresets.json`, `cmake/`, `mise.toml`, `mise.lock`, the standard and the include order in
-  `CMakeLists.txt`, and existing tests.
+  `CMakePresets.json`, `cmake/`, `mise.toml`, `mise.lock`, and existing tests.
+- In `CMakeLists.txt` files, change only the list of targets: add a `.cpp` to a target, add a
+  library, an executable or a test executable with `gtest_discover_tests`, and link them.
+  Anything else in CMake (a new command, module, option, flag or folder setting) needs the
+  owner's approval, and the owner reviews every CMake change. CMake can run programs, and the
+  checks cannot see all of them.
 
 The commands below need `mise trust` once in each new git worktree; `scripts/check` does not.
 
@@ -49,10 +53,11 @@ name as `this->abort()`).
 CMake files may use only the commands on the list in `scripts/check` (the usual project, target
 and test commands; not `execute_process`, `add_custom_command`, `configure_file` or writing
 `file()` modes), `include` only named modules and project `.cmake` files, and `add_subdirectory`
-only project folders. A trace of what CMake ran is checked the same way, so a file or command
-built at run time counts too. `project()` says `LANGUAGES CXX`, and CMake code leaves the
-GoogleTest and rapidcheck targets alone. The compiler may read nothing from `build/` but
-GoogleTest and rapidcheck, and only files under `tests/` may use them.
+only project folders. A trace of what CMake ran is checked against the same list. `project()`
+says `LANGUAGES CXX`, `find_package` takes only `Threads`, FetchContent fetches only GoogleTest
+and rapidcheck, and CMake code leaves their targets alone. The compiler may read nothing from
+`build/` but GoogleTest and rapidcheck, and only files under `tests/` may use them. These checks
+make a CMake cheat hard, not impossible; the owner's review of CMake changes is the last gate.
 Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call Apple's
 clang.
 

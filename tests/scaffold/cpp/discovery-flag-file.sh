@@ -1,4 +1,5 @@
-# expect: red Test (sanitizers on
+# expect: red Configure (CMakePresets.json
+# expect-output: gtest_discover_tests takes the target and DISCOVERY_MODE PRE_TEST only
 # Discovery reads a gtest flag file with --gtest_filter, so the failing test is never registered and the count still matches.
 . "$(dirname "$0")/lib/attack"
 break_banner

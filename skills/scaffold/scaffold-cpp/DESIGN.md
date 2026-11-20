@@ -95,7 +95,19 @@ Every other gate states its reason in a comment in its own file.
   project CMake file, CMake's own modules, the files CMake writes into `build/dev/CMakeFiles`, or
   GoogleTest and rapidcheck; a command from a project file must pass the same list, enable no
   language but C++ (`project(... LANGUAGES CXX)`), and leave the GoogleTest and rapidcheck targets
-  alone. A new dependency therefore needs `scripts/check` changed too, with the owner.
+  alone. The trace shows a list variable as one argument, so the check splits it on `;` as CMake
+  does. Commands that make CMake run something take only safe arguments: `find_package` only
+  `Threads` (a Find module may run a program a project variable names, such as `GIT_EXECUTABLE`),
+  `FetchContent_Declare` only GoogleTest and rapidcheck by URL and SHA-256 (a `PATCH_COMMAND` in a
+  list variable would run a script), and `gtest_discover_tests` only the target and
+  `DISCOVERY_MODE PRE_TEST` (its arguments are written into a script that ctest runs). A new
+  dependency therefore needs `scripts/check` changed too, with the owner.
+- CMake runs only once, in the traced configure: `CMAKE_SUPPRESS_REGENERATION` stops ninja from
+  running it again during the build (without the trace, with a filled cache), a `RERUN_CMAKE`
+  rule fails, and the check fails if the build changes `build.ninja`, `rules.ninja` or
+  `compile_commands.json`. The test lists that `gtest_discover_tests` writes (`*_tests.cmake`)
+  are deleted before each ctest run, so a list edited in the ignored build folder does not
+  outlive a revert.
 - `ninja -t deps` lists every file the compiler read. The check requires that set, inside the
   project, to equal the `.cpp` and `.hpp` files the other gates read. This closes `#include` of
   any other extension, untracked or ignored headers, and files that nothing compiles (never
@@ -185,6 +197,13 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
   `scripts/check`, and the test preset's environment (for example `max_size=2` in `RC_PARAMS`,
   so properties try only tiny inputs). A CI label gate for gate files would add a step to each
   legitimate change and still trust whoever sets the label; hashing them would do the same.
+- CMake code. CMake is a programming language, and its own modules, FetchContent and the
+  scripts that ctest runs read project input in many places. Three rounds of review each found
+  new ways for a short CMake change to run a program or change a test after the source
+  searches, so AGENTS.md lets agents change only the list of targets in `CMakeLists.txt`, and
+  the owner reviews every CMake change. The checks above (the command list, the trace, the
+  build graph, the rules and the per-test reports) make such a change hard and visible, but do
+  not close it.
 - Tests without assertions, deleted tests, and tests whose assertions sit under a condition that
   is false. No tool can tell a weak test from a strong one.
 - A swallowed error: `catch (...) { return 0; }` or `catch (const std::exception &)` with a
@@ -206,9 +225,10 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
 - A dependency's own CMake code. FetchContent runs GoogleTest's and rapidcheck's CMake files,
   which the scan does not read; their URL and SHA-256 pin them, and a new dependency needs the
   owner.
-- A file under `build/dev/_deps/*-src` changed by hand after the download. CI downloads afresh
-  only when its build cache misses (the cache key holds `cmake/**`, and `restore-keys` falls
-  back to an older cache), so such a change stays local.
+- A file under `build/dev/_deps/*-src` changed after the download, by hand or by CMake code that
+  got past the checks. CI caches `build/dev` and restores an older cache through
+  `restore-keys`, so such a change could outlive the commit that made it; the owner's review of
+  CMake changes is what stops the second case.
 
 ## Toolchain
 

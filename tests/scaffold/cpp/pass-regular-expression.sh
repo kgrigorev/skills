@@ -1,4 +1,5 @@
-# expect: red Test (sanitizers on
+# expect: red Configure (CMakePresets.json
+# expect-output: gtest_discover_tests takes the target and DISCOVERY_MODE PRE_TEST only
 # PASS_REGULAR_EXPRESSION makes a failing test pass.
 . "$(dirname "$0")/lib/attack"
 break_banner
