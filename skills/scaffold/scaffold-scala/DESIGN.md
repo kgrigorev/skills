@@ -34,13 +34,14 @@ Every other gate states its reason in a comment in its own file.
   added `-Wconf` or `-source:3.4`. Both are gate files, so a change costs one approval.
 - **scalafmt runs on the JVM, through `scala-cli run --dep`, not as `scala-cli fmt`.** That
   command downloads scalafmt's native binary, built with Scala Native. Its runtime corrupts
-  memory now and then (scalameta/scalafmt#5254; scala-native#4916 and #4917 are fixed upstream,
-  but no scalafmt release has the fixes yet). On `ubuntu-24.04` the binary failed about one run
-  in 6,000 when formatting 300 files: a segfault, a `ClassCastException`, or a formatted file
-  read as empty and reported unformatted. A file read as empty could pass unformatted too, so
-  re-running after a failure would not be enough. The JVM build costs about half a second more
-  per check. Go back to `scala-cli fmt` once a scalafmt release built with those fixes passes a
-  long stress run on Linux.
+  memory now and then (scalameta/scalafmt#5254, closed by a Scala Native upgrade that did not
+  stop it; scala-native#4916 and #4917 are fixed upstream, but no scalafmt release has the fixes
+  yet). On `ubuntu-24.04` the binary failed about one run in 6,000 when formatting 300 files: a
+  segfault, a `ClassCastException`, or a formatted file read as empty and reported unformatted.
+  A file read as empty could pass unformatted too, so re-running after a failure would not be
+  enough. The JVM build costs about half a second more per check. Go back to `scala-cli fmt` once
+  a scalafmt release built with those fixes passes a long stress run on Linux, and delete the
+  attack case `format-without-native-binary`, which fails when the check uses the native binary.
 - **The scalafmt settings exist twice too, in `.scalafmt.conf` and in `scripts/check`.** A line
   such as `project.excludePaths` would skip files from the format check and look harmless.
 - **`Throw`, `SeqApply` and `SeqUpdated` are on.** They close the rest of "calls that throw on
@@ -72,7 +73,7 @@ Every other gate states its reason in a comment in its own file.
 - **mise may load no project file besides `mise.toml`, and the tools that run are the files mise
   installed.** mise also reads `.mise.toml`, `.config/mise.toml`, `mise.<env>.toml`,
   `.tool-versions` and more, without a trust prompt for some. One of them could put a fake
-  `scala-cli` first on PATH (`[env] _.path`) that forwards `version` and `fmt` and fakes `test`.
+  `scala-cli` first on PATH (`[env] _.path`) that forwards `version` and `run` and fakes `test`.
   The check asks mise itself (`mise config ls --json`) instead of listing file names, and compares
   `command -v` with `mise which` for `scala-cli` and `java`.
 - **No symlinks in `src/`, and file names of letters, digits, `_`, `.` and `-`.** Scala CLI

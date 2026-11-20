@@ -161,8 +161,11 @@ step 'Format (scalafmt, rules in .scalafmt.conf). Fix: scripts/format'
 # built with Scala Native, whose runtime corrupts memory now and then (scalameta/scalafmt#5254). On
 # CI it segfaulted, or read a formatted file as empty and reported it unformatted; a file read as
 # empty can pass unformatted too. The version comes from .scalafmt.conf, fixed by the step above.
-# -S is the Scala version scalafmt itself is built with. scripts/format runs the same command.
-scala-cli run --server=false -S 2.13.18 \
+# -S is the Scala version scalafmt itself is built with. --auto-setup-ide=false keeps this run from
+# writing an IDE config (.bsp/) for scalafmt instead of the project, and the warning flag keeps a
+# newer scalafmt release from printing a hint to bump .scalafmt.conf. scripts/format runs the same.
+scala-cli run --server=false --auto-setup-ide=false \
+  --suppress-outdated-dependency-warning -S 2.13.18 \
   --dep "org.scalameta:scalafmt-cli_2.13:$(sed -n 's/^version = //p' .scalafmt.conf)" \
   --main-class org.scalafmt.cli.Cli -- --check --non-interactive --respect-project-filters \
   --config .scalafmt.conf project.scala src

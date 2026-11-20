@@ -3,7 +3,8 @@
 # scripts/check explains why it is not `scala-cli fmt`.
 set -eu
 cd "$(dirname "$0")/.."
-mise exec -- scala-cli run --server=false -S 2.13.18 \
+mise exec --locked -- scala-cli run --server=false --auto-setup-ide=false \
+  --suppress-outdated-dependency-warning -S 2.13.18 \
   --dep "org.scalameta:scalafmt-cli_2.13:$(sed -n 's/^version = //p' .scalafmt.conf)" \
   --main-class org.scalafmt.cli.Cli -- --non-interactive --respect-project-filters \
   --config .scalafmt.conf project.scala src

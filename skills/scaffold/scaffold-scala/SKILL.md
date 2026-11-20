@@ -46,7 +46,7 @@ Paths below are relative to this skill's folder unless they start with `<target>
 
 3. **Verify.** Run `<target>/scripts/check`. It runs through `mise exec` on its own, so mise
    does not need to be activated in the shell. The first run downloads the compiler and
-   libraries, about 150 MB. Done when its last line is `All checks passed.` On red, read the
+   libraries, about 100 MB. Done when its last line is `All checks passed.` On red, read the
    output and fix the cause in `<target>`. When the template is at fault, tell the user what to
    change in `kgrigorev/skills`. This installed copy is overwritten on update. After two honest
    attempts, stop and report what is red.
