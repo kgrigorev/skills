@@ -16,4 +16,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'X'
   test("a port parses"):
     assertEquals(Port.parse(" 80 "), 80)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

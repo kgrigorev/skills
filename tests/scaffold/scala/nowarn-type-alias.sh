@@ -16,5 +16,5 @@ object X:
   /** y */
   def y: Int = 2
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
 grep -q '^  type Quiet = nowarn' src/main/scala/X.scala

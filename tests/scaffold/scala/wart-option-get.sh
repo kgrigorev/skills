@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(o: Option[Int]): Int = o.get
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

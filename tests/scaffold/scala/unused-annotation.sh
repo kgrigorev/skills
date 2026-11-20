@@ -12,4 +12,4 @@ object X:
   /** y */
   def y: Int = f(2)
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

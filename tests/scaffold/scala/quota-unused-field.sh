@@ -19,4 +19,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'X'
   test("taking seats moves them from unused to used"):
     assertEquals(Seats.take(Seats(1, 3), 2), Some(Seats(3, 1)))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

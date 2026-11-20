@@ -9,4 +9,4 @@ class TrySuite extends munit.FunSuite:
   test("a greeting names the person"):
     Try(assertEquals(SampleTool.greet("Ada"), "Hi, Ada!"))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

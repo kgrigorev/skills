@@ -10,4 +10,4 @@ object X:
     while n > 10 do println(n)
     n
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

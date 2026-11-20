@@ -8,4 +8,4 @@ object X:
   /** y */
   def y: String | Null = null
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

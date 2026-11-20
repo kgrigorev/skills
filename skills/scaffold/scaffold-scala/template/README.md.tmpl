@@ -32,7 +32,7 @@ which can show green for code that `scripts/check` rejects. The check is the gat
 scripts/check                                                        # every quality gate
 mise exec -- scala-cli run project.scala src --server=false -- Ada   # run the program
 mise exec -- scala-cli test project.scala src --server=false         # tests only
-mise exec -- scala-cli fmt project.scala src                         # format
+scripts/format                                                       # format
 ```
 
 `scripts/check` is the single list of gates. The git hook and CI run it too.

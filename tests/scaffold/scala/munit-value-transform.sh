@@ -9,4 +9,4 @@ class SampleToolSuite extends munit.FunSuite:
   test("ok"):
     assertEquals(1, 1)
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

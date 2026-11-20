@@ -14,4 +14,4 @@ class HelperSuite extends munit.FunSuite:
   test("greets Ada"):
     check("Ada", "Hi, Ada!")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

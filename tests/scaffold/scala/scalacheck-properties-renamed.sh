@@ -9,5 +9,5 @@ import org.scalacheck.{Prop, Properties as Props}
 object BrokenProps extends Props("p"):
   property.update("broken", Prop.forAll((n: Int) => n != n)): Unit
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
 grep -q 'Props("p")' src/test/scala/P.scala

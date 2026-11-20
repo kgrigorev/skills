@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(s: String): String = s.toLowerCase
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

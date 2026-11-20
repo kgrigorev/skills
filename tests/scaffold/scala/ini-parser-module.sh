@@ -72,4 +72,4 @@ class IniSuite extends munit.FunSuite:
     val sections = Map("a" -> Map("include" -> "b"), "b" -> Map("x" -> "1"))
     assertEquals(Ini.resolve(sections, "a"), "b")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

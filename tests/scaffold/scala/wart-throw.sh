@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(n: Int): Int = if n > 0 then n else throw new IllegalArgumentException("neg")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

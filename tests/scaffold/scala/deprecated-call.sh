@@ -11,4 +11,4 @@ object X:
   /** y */
   def y: Int = old
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

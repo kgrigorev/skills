@@ -7,4 +7,4 @@ class SampleToolSuite extends munit.FunSuite:
   test("broken".fail):
     assertEquals(SampleTool.greet("a"), "nope")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -13,5 +13,5 @@ class ParserSuite extends FunSuite:
   test(parses(ExpectedToBreakUntilTheUpstreamParserIsFixedNextWeekSeeTheTrackerIssue)):
     assertEquals(SampleTool.greet("a"), "nope")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
 grep -q '^  Fail as Expected' src/test/scala/ParserSuite.scala

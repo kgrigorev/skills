@@ -27,4 +27,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'EOF'
     val now = java.time.Instant.EPOCH
     assert(Clock.same(now, now))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

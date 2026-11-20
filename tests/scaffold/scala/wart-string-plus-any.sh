@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(n: Int): String = "n=" + n
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

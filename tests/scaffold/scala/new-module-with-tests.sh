@@ -44,4 +44,4 @@ class LedgerSuite extends munit.FunSuite:
   test("the total skips lines that do not parse"):
     assertEquals(Ledger.total(List("d,c,1.5", "bad", "d,c,2")), BigDecimal(3.5))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

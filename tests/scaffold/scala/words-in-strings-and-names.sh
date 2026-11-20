@@ -41,4 +41,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'EOF'
   test("tags are split on commas"):
     assertEquals(Rules.tags("food, rent,"), List(Tag("food"), Tag("rent")))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

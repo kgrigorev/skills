@@ -14,4 +14,4 @@ class FixtureSuite extends munit.FunSuite:
   test("a name is not the world"):
     assertNotEquals(SampleTool.greet("Ada"), SampleTool.greet(""))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

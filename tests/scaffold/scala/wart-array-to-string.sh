@@ -8,4 +8,4 @@ object X:
   /** y */
   def y: String = Array(1, 2).toString
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -10,4 +10,4 @@ class FutureSuite extends munit.FunSuite:
     Future(assertEquals(SampleTool.greet("a"), "nope"))(using munitExecutionContext)
       .recover { case _ => () }(using munitExecutionContext)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

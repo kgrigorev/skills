@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(a: Matchable): Boolean = a.isInstanceOf[String]
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

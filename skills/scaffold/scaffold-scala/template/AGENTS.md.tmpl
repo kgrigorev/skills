@@ -26,7 +26,7 @@ mise exec -- scala-cli test project.scala src --server=false --test-only '{{name
 # one test by name (a munit glob)
 mise exec -- scala-cli test project.scala src --server=false --test-only '{{namespace}}.{{module}}Suite' -- '*blank*'
 # format
-mise exec -- scala-cli fmt project.scala src
+scripts/format
 # compile only, or with a long explanation of each error
 mise exec -- scala-cli compile project.scala src --server=false
 mise exec -- scala-cli compile project.scala src --server=false -O -explain

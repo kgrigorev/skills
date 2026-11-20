@@ -23,4 +23,4 @@ object Lookup:
   /** The value. */
   def value: String = Macros.missing
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -12,4 +12,4 @@ class InterceptSuite extends munit.FunSuite:
   test("broken"):
     expecting[munit.FailException](assertEquals(SampleTool.greet("a"), "nope"))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

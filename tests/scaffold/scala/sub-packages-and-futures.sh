@@ -35,4 +35,4 @@ class NumbersSuite extends munit.FunSuite:
     val error = intercept[NumberFormatException]("ten".toInt)
     assert(error.getMessage.nonEmpty)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

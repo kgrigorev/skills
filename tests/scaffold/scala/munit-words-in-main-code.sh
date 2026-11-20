@@ -34,4 +34,4 @@ class PostSuite extends munit.FunSuite:
     assertEquals(Post("a", List("x")).tags, List("x"))
     assertEquals(PixelValueTransform(2).applyTo(3), 6)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

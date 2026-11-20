@@ -11,4 +11,4 @@ object X:
   /** y */
   def y(using m: Int): Int = m
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

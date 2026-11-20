@@ -71,4 +71,4 @@ class CliSuite extends munit.FunSuite:
   test("a file of blank lines is empty"):
     assertEquals(Names.parse("\n \n"), Left(Cli.Problem.Empty))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

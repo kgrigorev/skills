@@ -10,4 +10,4 @@ object X:
     val Some(v) = o.runtimeChecked
     v
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
