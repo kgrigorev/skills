@@ -60,6 +60,9 @@ fi
 export CI=true
 # munit lets tests tagged Flaky fail when this is set.
 unset MUNIT_FLAKY_OK
+# Every JVM that Scala CLI starts reads these, so one could load a -javaagent into scalafmt, the
+# compiler or the tests. Scala CLI downloads without a JVM, so a proxy set here is not needed.
+unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 
 step 'Tools that run match mise.toml'
 # Printed in the re-run, or when CHECK_UNDER_MISE was set from outside and the re-run skipped.
