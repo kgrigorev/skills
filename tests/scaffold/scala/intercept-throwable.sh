@@ -7,4 +7,4 @@ class InterceptSuite extends munit.FunSuite:
   test("broken"):
     val _ = intercept[Throwable](assertEquals(SampleTool.greet("a"), "nope"))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

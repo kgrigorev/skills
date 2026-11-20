@@ -156,8 +156,19 @@ if [ "$(grep -vE '^[[:space:]]*(#|$)' .scalafmt.conf)" != "$expected_fmt" ]; the
   fail 'Restore .scalafmt.conf.'
 fi
 
-step 'Format (scalafmt, rules in .scalafmt.conf). Fix: mise exec -- scala-cli fmt project.scala src'
-scala-cli fmt --check project.scala src
+step 'Format (scalafmt, rules in .scalafmt.conf). Fix: scripts/format'
+# scalafmt runs on the JVM, not as the native binary that `scala-cli fmt` downloads. That binary is
+# built with Scala Native, whose runtime corrupts memory now and then (scalameta/scalafmt#5254). On
+# CI it segfaulted, or read a formatted file as empty and reported it unformatted; a file read as
+# empty can pass unformatted too. The version comes from .scalafmt.conf, fixed by the step above.
+# -S is the Scala version scalafmt itself is built with. --auto-setup-ide=false keeps this run from
+# writing an IDE config (.bsp/) for scalafmt instead of the project, and the warning flag keeps a
+# newer scalafmt release from printing a hint to bump .scalafmt.conf. scripts/format runs the same.
+scala-cli run --server=false --auto-setup-ide=false \
+  --suppress-outdated-dependency-warning -S 2.13.18 \
+  --dep "org.scalameta:scalafmt-cli_2.13:$(sed -n 's/^version = //p' .scalafmt.conf)" \
+  --main-class org.scalafmt.cli.Cli -- --check --non-interactive --respect-project-filters \
+  --config .scalafmt.conf project.scala src
 
 step 'Build settings only in project.scala, in their fixed shapes'
 # Scala CLI reads `//> using` lines from every source file, so one line in a source file could

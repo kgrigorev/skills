@@ -15,7 +15,7 @@ gh extension install github/gh-stack   # optional: stacked PRs
 
 mise installs the exact JDK and Scala CLI versions in `mise.toml`, checked against `mise.lock`.
 Scala CLI then downloads the Scala compiler, scalafmt and the libraries that `project.scala` and
-`.scalafmt.conf` name. The first `scripts/check` downloads about 150 MB; later runs need no
+`.scalafmt.conf` name. The first `scripts/check` downloads about 100 MB; later runs need no
 network. The git hook runs the checks before each push. `gh stack` is optional: it helps to open
 and update stacked PRs.
 
@@ -32,7 +32,7 @@ which can show green for code that `scripts/check` rejects. The check is the gat
 scripts/check                                                        # every quality gate
 mise exec -- scala-cli run project.scala src --server=false -- Ada   # run the program
 mise exec -- scala-cli test project.scala src --server=false         # tests only
-mise exec -- scala-cli fmt project.scala src                         # format
+scripts/format                                                       # format
 ```
 
 `scripts/check` is the single list of gates. The git hook and CI run it too.

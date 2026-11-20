@@ -8,4 +8,4 @@ class SampleToolSuite extends munit.FunSuite:
     assume(false, "later")
     assertEquals(SampleTool.greet("a"), "nope")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

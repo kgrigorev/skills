@@ -12,4 +12,4 @@ object X:
     val b = mutable.ListBuffer(1)
     b.size
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -11,4 +11,4 @@ object X:
   /** y */
   def same(a: Int, b: String): Boolean = a == b
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -12,4 +12,4 @@ class SampleToolSuite extends ScalaCheckSuite:
   property("x"):
     forAll((n: Int) => n < 1000)
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

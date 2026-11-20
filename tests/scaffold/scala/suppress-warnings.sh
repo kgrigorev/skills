@@ -12,4 +12,4 @@ object X:
     n = 2
     n
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

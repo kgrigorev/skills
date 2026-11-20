@@ -9,4 +9,4 @@ class ThreadSuite extends munit.FunSuite:
     worker.start()
     worker.join()
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

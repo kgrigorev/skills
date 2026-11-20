@@ -12,4 +12,4 @@ object DynamicTestRunner:
 X
 perl -pi -e 's/"Hello, world!"\)/"Hello, World!")/' src/test/scala/SampleToolSuite.scala
 grep -q 'Hello, World!' src/test/scala/SampleToolSuite.scala
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

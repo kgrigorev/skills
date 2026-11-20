@@ -8,4 +8,4 @@ object X:
   /** y */
   def y(xs: List[Int]): List[Int] = xs.updated(5, 0)
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

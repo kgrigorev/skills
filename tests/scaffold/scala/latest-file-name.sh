@@ -23,4 +23,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'X'
     val releases = List(Map("version" -> "2"), Map("version" -> "10"))
     assertEquals(LatestRelease.latest(releases), Some(Map("version" -> "10")))
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

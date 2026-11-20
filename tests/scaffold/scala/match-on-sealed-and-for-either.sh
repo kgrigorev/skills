@@ -37,4 +37,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'EOF'
   test("a negative amount is described"):
     assertEquals(Totals.describe(Totals.Problem.Negative(-2)), "negative: -2")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

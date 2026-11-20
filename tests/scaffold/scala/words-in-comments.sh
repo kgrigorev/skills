@@ -21,4 +21,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'EOF'
   test("comment and blank lines are dropped"):
     assertEquals(Filter.dataLines(List("# head", " ", "a")), List("a"))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

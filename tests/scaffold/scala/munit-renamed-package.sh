@@ -11,4 +11,4 @@ class SampleToolSuite extends m.FunSuite:
   test(broken(m.Fail)):
     assertEquals(SampleTool.greet("a"), "nope")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

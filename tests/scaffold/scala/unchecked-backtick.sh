@@ -10,4 +10,4 @@ object X:
     val Some(v) = o: @`unchecked`
     v
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

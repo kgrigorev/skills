@@ -11,4 +11,4 @@ class HookSuite extends munit.FunSuite:
   test("broken"):
     assertEquals(SampleTool.greet("a"), "nope")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -24,4 +24,4 @@ cat >> src/test/scala/SampleToolSuite.scala <<'EOF'
   test("counts adds up repeated words"):
     assertEquals(Words.counts(List("a", "b", "a")), Map("a" -> 2, "b" -> 1))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

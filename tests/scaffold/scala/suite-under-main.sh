@@ -8,4 +8,4 @@ class BrokenSuite extends munit.FunSuite:
   test("broken"):
     assertEquals(SampleTool.greet("a"), "nope")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

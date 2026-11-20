@@ -78,4 +78,4 @@ class LedgerSuite extends munit.FunSuite:
     try assertEquals(Ledger.add((1, 2)), 3)
     finally assertNotEquals(side, Side.Second)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

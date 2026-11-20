@@ -19,4 +19,4 @@ class GreetPropertySuite extends ScalaCheckSuite:
       SampleTool.greet(name) == s"Hello, $name!"
     }
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

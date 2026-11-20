@@ -10,4 +10,4 @@ object X:
   def y  :  Int   =   2
   // format: on
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

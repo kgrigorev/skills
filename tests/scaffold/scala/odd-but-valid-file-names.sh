@@ -18,4 +18,4 @@ class CsvReaderSuite extends munit.FunSuite:
   test("empty fields are kept"):
     assertEquals(CsvReader.fields("a,,b"), List("a", "", "b"))
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

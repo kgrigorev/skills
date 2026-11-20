@@ -13,6 +13,6 @@ class NotesSuite extends munit.FunSuite:
   test("notes are kept"):
     assert(notes.nonEmpty)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
 # shellcheck disable=SC2016 # a literal ${ in Scala code
 grep -q '^  // \${test("broken".fail)' src/test/scala/NotesSuite.scala

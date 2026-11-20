@@ -57,4 +57,4 @@ class MoneySuite extends munit.FunSuite:
       Left(Money.TransferError.BadAmount(Money.NotDecimal("x")))
     )
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

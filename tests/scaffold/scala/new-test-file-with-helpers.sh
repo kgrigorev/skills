@@ -15,4 +15,4 @@ class GreetingSuite extends munit.FunSuite:
   test("spaces around a name are dropped"):
     assertEquals(SampleTool.greet("  Grace  "), "Hello, Grace!")
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

@@ -10,4 +10,4 @@ object X:
     case Some(v) => 1
     case None    => 0
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

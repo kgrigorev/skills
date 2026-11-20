@@ -54,4 +54,4 @@ class CsvPropertySuite extends ScalaCheckSuite:
   test("a field with a comma is quoted"):
     assertEquals(Csv.write(List("a,b", "c")), "\"a,b\",c")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

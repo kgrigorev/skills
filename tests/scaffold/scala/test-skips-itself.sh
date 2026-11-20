@@ -9,4 +9,4 @@ class SkipSuite extends munit.FunSuite:
     java.util.Optional.empty[Unit]().orElseThrow(() => org.junit.AssumptionViolatedException("later"))
     assertEquals(SampleTool.greet("a"), "nope")
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null

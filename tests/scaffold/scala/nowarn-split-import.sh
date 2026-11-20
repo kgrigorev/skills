@@ -15,5 +15,5 @@ object X:
   @tailrec
   def sum(n: Int, acc: Int = 0): Int = if n <= 0 then acc else sum(n - 1, acc + n)
 X
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
 grep -q '^  nowarn as quietly' src/main/scala/X.scala

@@ -8,4 +8,4 @@ object X:
   /** y */
   def first(xs: List[Int]): Int = xs(0)
 EOF
-mise exec -- scala-cli fmt project.scala src >/dev/null
+scripts/format >/dev/null
