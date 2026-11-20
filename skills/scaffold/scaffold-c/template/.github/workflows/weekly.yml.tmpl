@@ -1,0 +1,50 @@
+name: weekly
+
+# Slow or random checks that do not block a merge. A red run here is a bug to fix this week.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MISE_LOCKED: "1"
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
+jobs:
+  release-build:
+    # The release preset (-O3, _FORTIFY_SOURCE=3) is not part of scripts/check.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.8
+      - run: mise exec -- cmake --preset release && mise exec -- cmake --build --preset release
+
+  fuzz:
+    # A random seed and a time limit find new failing inputs. The result differs between runs,
+    # so this is not part of scripts/check.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.8
+      - run: mise exec -- cmake --preset dev && mise exec -- cmake --build --preset dev
+      - run: |
+          mkdir -p crashes
+          for target in build/dev/*_property; do
+            ASAN_OPTIONS=detect_leaks=1 "$target" -max_total_time=300 -rss_limit_mb=0 \
+              -artifact_prefix=crashes/
+          done
+      # Reproduce a crash with build/dev/<name>_property crashes/<file>.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crashes
+          path: crashes/

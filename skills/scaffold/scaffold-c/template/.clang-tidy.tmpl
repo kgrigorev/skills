@@ -1,0 +1,45 @@
+# clang-tidy runs on every project file during the build (cmake/gates.cmake), and any finding
+# fails the build. Agents: change this file only with the owner's approval.
+# Turned off, with the reason:
+# - bugprone-easily-swappable-parameters: flags most functions with two size_t parameters.
+# - clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling: asks for memcpy_s and
+#   other Annex K functions, which glibc and macOS do not ship.
+# - misc-include-cleaner: false findings for macOS SDK headers and Unity's macros.
+# - misc-no-recursion: recursion is not a bug. CODING_STANDARDS.md asks for a bounded depth.
+# - misc-use-internal-linkage: -Wmissing-prototypes already rejects a non-static function without a
+#   declaration, and this check cannot be told about libFuzzer's entry point.
+# - readability-identifier-length, readability-magic-numbers: flag i, n and every literal.
+# - readability-named-parameter: C23 allows an unnamed parameter in a definition, the plain way to
+#   say a callback does not use it. -Wunused-parameter still rejects a named one that is unused.
+# Not turned on: concurrency-* (mt-unsafe flags getenv and strerror), performance-* and
+# portability-* (little applies to C; performance-no-int-to-ptr is the one kept). cert-* is on as a
+# whole: most of its C checks are other names for checks above, and a finding is reported once.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-no-int-to-ptr,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-use-internal-linkage,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-named-parameter
+CheckOptions:
+  # `if (ptr)` is plain C. An integer used as a bool, as in `if (strcmp(a, b))`, is still an error.
+  # In C, `&&`, `||` and `!` give an int, so `return a && b;` from a bool function is an error too.
+  # Compare instead (`(a && b) != 0`), or return early.
+  readability-implicit-bool-conversion.AllowPointerConditions: true
+  # Every value a project function returns is used, or dropped on purpose with (void). This list
+  # replaces the default one, which names C++ functions and C functions without side effects.
+  # cert-err33-c checks the C library functions that report errors.
+  bugprone-unused-return-value.CheckedFunctions: '^::{{c_name}}_'
+  bugprone-unused-return-value.AllowCastToVoid: true
+WarningsAsErrors: '*'
+# Project headers are checked through the files that include them. Unity's headers are SYSTEM.
+HeaderFilterRegex: '.*'

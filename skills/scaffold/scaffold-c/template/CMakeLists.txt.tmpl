@@ -1,0 +1,35 @@
+# Builds the {{package}} library, the {{package}} program and its tests.
+# The gates live in cmake/gates.cmake. scripts/check rejects lines here that weaken them.
+cmake_minimum_required(VERSION 3.25...4.5)
+project({{package}} VERSION 0.1.0 LANGUAGES C)
+
+# C23 without compiler extensions, so the code means what the standard says.
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+# clangd, clang-tidy and scripts/check read every file's flags from build/dev/compile_commands.json.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(BUILD_TESTING "Build the tests" ON)
+if(BUILD_TESTING)
+  enable_testing()
+  # Before the gates, so the test framework is built without them.
+  add_subdirectory(third_party/unity SYSTEM)
+endif()
+
+# Every target below gets the warnings, -Werror and clang-tidy. scripts/check fails when a
+# target comes before this line.
+include(cmake/gates.cmake)
+
+add_library({{c_name}} src/{{c_name}}.c)
+target_include_directories({{c_name}} PUBLIC include)
+
+# The target has its own name, so a one-word package name does not clash with the library.
+add_executable({{c_name}}_app app/main.c)
+set_target_properties({{c_name}}_app PROPERTIES OUTPUT_NAME {{package}})
+target_link_libraries({{c_name}}_app PRIVATE {{c_name}})
+
+if(BUILD_TESTING)
+  add_unity_test({{c_name}}_test test/{{c_name}}_test.c {{c_name}})
+  add_property_test({{c_name}}_property test/{{c_name}}_property.c {{c_name}})
+endif()

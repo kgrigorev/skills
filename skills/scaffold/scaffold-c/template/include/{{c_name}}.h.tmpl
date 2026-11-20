@@ -1,0 +1,12 @@
+/// The {{package}} library: everything the program does, so tests can reach it.
+#ifndef {{header_guard}}
+#define {{header_guard}}
+
+#include <stddef.h>
+
+/// Writes the program's banner into `out`, which holds `capacity` bytes.
+/// Like snprintf: the text is cut to fit and always ends with '\0' when capacity > 0.
+/// Returns the length of the whole banner, so a result >= capacity means the text was cut.
+[[nodiscard]] size_t {{c_name}}_banner(char *out, size_t capacity);
+
+#endif

@@ -1,0 +1,36 @@
+/// Property test: for every buffer size, {{c_name}}_banner writes a terminated prefix of the banner
+/// and never writes past the end of the buffer. libFuzzer calls the function below with generated
+/// inputs. AddressSanitizer reports any write past the end.
+#include "{{c_name}}.h"
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size == 0) {
+        return 0;
+    }
+    const size_t capacity = data[0];
+    // An exact-size heap buffer, so a write one byte too far is caught.
+    char *out = malloc(capacity == 0 ? 1 : capacity);
+    if (out == nullptr) {
+        abort();
+    }
+    char full[256];
+    const size_t length = {{c_name}}_banner(full, sizeof full);
+    if ({{c_name}}_banner(out, capacity) != length) {
+        abort();
+    }
+    if (capacity > 0) {
+        const size_t written = strlen(out);
+        if (written >= capacity || strncmp(out, full, written) != 0) {
+            abort();
+        }
+    }
+    free(out);
+    return 0;
+}

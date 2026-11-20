@@ -1,0 +1,16 @@
+/// The {{package}} library.
+#include "{{c_name}}.h"
+
+#include <string.h>
+
+static const char banner[] = "{{package}}: {{synopsis}}";
+
+size_t {{c_name}}_banner(char *out, size_t capacity) {
+    const size_t length = sizeof banner - 1;
+    if (capacity > 0) {
+        const size_t copied = length < capacity ? length : capacity - 1;
+        memcpy(out, banner, copied);
+        out[copied] = '\0';
+    }
+    return length;
+}

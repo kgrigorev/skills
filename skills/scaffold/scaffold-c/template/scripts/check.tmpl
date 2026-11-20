@@ -1,0 +1,487 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+cd "$(dirname "$0")/.."
+
+# mise.toml pins every tool. Run under `mise exec`, so the pinned versions win even in a shell
+# where mise is not activated, such as an agent's Bash tool or a git hook. The absolute path
+# makes the script work from any folder.
+if [ "${SCRIPTS_CHECK_UNDER_MISE:-}" != 1 ]; then
+  command -v mise >/dev/null 2>&1 || {
+    echo 'mise is not on PATH. Install it: https://mise.jdx.dev/getting-started.html' >&2
+    exit 1
+  }
+  SCRIPTS_CHECK_UNDER_MISE=1 exec mise exec -- "$(pwd -P)/scripts/check" "$@"
+fi
+
+step() { printf '\n==> %s\n' "$1"; }
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+# The tools see only these variables. A variable from the caller's shell or from a mise config,
+# such as CFLAGS, LSAN_OPTIONS or CMAKE_C_COMPILER_LAUNCHER, cannot change a result.
+run() { env -i PATH="$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" "$@"; }
+
+root=$(pwd -P)
+# The test framework, vendored unchanged. It is the only C code built without the gates, and only
+# these files of it are exempt from the searches below.
+unity=third_party/unity
+unity_files="$unity/CMakeLists.txt $unity/LICENSE.txt $unity/unity.c $unity/unity.h $unity/unity_internals.h"
+# Files git would commit: tracked or new, minus what the repository's .gitignore files list and
+# tracked files deleted from disk. A personal global ignore file does not change the result.
+files() {
+  git ls-files -co --exclude-per-directory=.gitignore -- "$@" | while IFS= read -r file; do
+    if [ -e "$file" ]; then printf '%s\n' "$file"; fi
+  done
+}
+# Every C file of the project. The build checks below fail when a compiled or included project
+# file is not in this list, so the format and the searches cannot miss one.
+c_files=$(files '*.c' '*.h' '*.inc' ":!:$unity/*")
+# Build files that agents edit. cmake/gates.cmake holds the gates and is the owner's.
+cmake_files=$(files 'CMakeLists.txt' '*/CMakeLists.txt' '*.cmake' ":!:$unity/*" ':!:cmake/gates.cmake')
+
+step 'Tool versions (pinned in mise.toml and mise.lock)'
+pinned() { sed -n "s/^\"*$1\"* = \"\(.*\)\"$/\1/p" mise.toml; }
+for pair in conda:clang=clang conda:clang-tools=clang-tidy conda:clang-format=clang-format \
+  conda:llvm-tools=llvm-cov conda:llvm-tools=llvm-profdata \
+  cmake=cmake ninja=ninja; do
+  tool=${pair%=*}
+  bin=${pair##*=}
+  dir=$(mise where "$tool@$(pinned "$tool")") || fail "mise has not installed $tool. Run: mise install"
+  path=$(command -v "$bin") || fail "$bin is not on PATH."
+  case $path in
+  "$dir"/*) printf '%s %s\n' "$bin" "$(pinned "$tool")" ;;
+  *) fail "$bin runs from $path, not from the version that mise.toml pins ($dir)." ;;
+  esac
+done
+clang_dir=$(mise where "conda:clang@$(pinned conda:clang)")
+# A version in mise.toml that mise.lock does not hold runs here, but CI cannot install it.
+drift=$(mise lock --dry-run --json 2>/dev/null) || drift='mise lock failed'
+[ "$drift" = '[]' ] || fail "$drift
+mise.toml and mise.lock name different versions. Run \`mise lock\` and commit both files."
+# Another mise config in the repository, such as mise.local.toml, could change a tool.
+configs=$(mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p' |
+  grep -F "$root/" | grep -vxF "$root/mise.toml" || true)
+[ -z "$configs" ] || fail "$configs
+Only mise.toml configures mise in this repository. Remove the files above."
+
+step 'Format (clang-format, rules in .clang-format). Fix: scripts/format'
+# shellcheck disable=SC2086 # file names have no spaces
+run clang-format --dry-run --Werror $c_files
+
+step 'No switched-off checks'
+# In C source: comments, attributes and macros that switch off a warning, clang-tidy, the
+# analyzer, clang-format, a sanitizer or a test. Directives are read from tokens below.
+# __has_feature and __has_extension can ask whether a sanitizer is on; a plain word such as
+# name_sanitizer is fine.
+c_off='NOLINT|_Pragma|clang-format[[:space:]]+off|__clang_analyzer__|__has_(feature|extension)|__SANITIZE_|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|maybe_unused|__attribute__.*unused|gnu::(__)?unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|TEST_(IGNORE|PASS)'
+# In CMake, in any letter case: anything that changes warnings, clang-tidy or how a test passes.
+# Comments are left out, so a comment may use any word.
+cmake_off='CLANG_TIDY|SKIP_LINTING|WARNING_AS_ERROR|compile_options|COMPILE_FLAGS|_FLAGS|-Wno-|[[:space:]"(]-w([[:space:]")]|$)|add_test|set_tests_properties|set_property|set_directory_properties|set_source_files_properties|DISABLED|WILL_FAIL|SKIP_RETURN_CODE|REGULAR_EXPRESSION|EXCLUDE_FROM_ALL'
+# Prints CMake files as file:line:code, without `#` comments and `#[[...]]` bracket comments.
+# A `#` inside a quoted argument is not a comment.
+cmake_code() {
+  awk '
+    FNR == 1 { quoted = 0; bracket = "" }
+    {
+      text = $0
+      out = ""
+      while (text != "") {
+        if (bracket != "") {
+          at = index(text, bracket)
+          if (at == 0) break
+          text = substr(text, at + length(bracket))
+          bracket = ""
+        } else if (quoted) {
+          if (match(text, /^([^"\\]|\\.)*"/)) {
+            out = out substr(text, 1, RLENGTH)
+            text = substr(text, RLENGTH + 1)
+            quoted = 0
+          } else {
+            out = out text
+            text = ""
+          }
+        } else if (match(text, /^[^"#]+/)) {
+          out = out substr(text, 1, RLENGTH)
+          text = substr(text, RLENGTH + 1)
+        } else if (substr(text, 1, 1) == "\"") {
+          out = out "\""
+          text = substr(text, 2)
+          quoted = 1
+        } else if (match(text, /^#\[=*\[/)) {
+          bracket = "]" substr(text, 3, RLENGTH - 3) "]"
+          text = substr(text, RLENGTH + 1)
+        } else {
+          text = ""
+        }
+      }
+      print FILENAME ":" FNR ":" out
+    }' "$@"
+}
+# Preprocessor directives, read from clang's own tokens of each file, so a comment, a line splice
+# or the digraph `%:` cannot hide one:
+# - `#line` and line markers: the compiler would read the code as another file.
+# - every #pragma except `#pragma once`.
+# - #define or #undef of a name that Unity defines or declares, of setUp and tearDown, or of a
+#   function that ends a test (abort, exit, longjmp): `#define abort() return 0` would turn a
+#   failed property into a passed one. A name of the project's own, such as TEST_BUFFER_SIZE, is
+#   fine.
+# - #define or #undef of a name with a lower-case letter, such as a function name, in a file under
+#   test/: `#define {{c_name}}_parse stub_parse` would point the test at a stub of its own instead
+#   of the library. A test's own macros are upper case (TEST_BUFFER_SIZE).
+# - #if, #ifdef and the like in a test file (under test/): a test that is compiled only sometimes
+#   does not run here.
+unity_names=$(
+  run clang -std=c23 -E -dD -x c "$unity/unity.h" | awk -v unity="$unity/" '
+    BEGIN { split("setUp tearDown suiteSetUp suiteTearDown abort exit _Exit quick_exit longjmp", fixed, " ")
+      for (i in fixed) print fixed[i] }
+    /^# [0-9]+ "/ { file = $3; gsub(/"/, "", file); next }
+    index(file, unity) != 1 { next }
+    $1 == "#define" { name = $2; sub(/\(.*/, "", name); print name; next }
+    { while (match($0, /Unity[A-Za-z0-9_]*/)) { print substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH) } }' |
+    sort -u | tr '\n' ' '
+)
+# One clang run lexes every file. Each token is a line: kind, spelling in single quotes,
+# Loc=<file:line:column>, flags.
+directives() {
+  # shellcheck disable=SC2086 # file names have no spaces
+  run clang -std=c23 -fsyntax-only -Xclang -dump-raw-tokens -x c $c_files 2>&1 |
+    awk -v banned=" $unity_names " '
+      BEGIN { q = sprintf("%c", 39) }
+      # A token spelled over several lines (a line splice) continues on lines of its own.
+      $0 !~ ("^[a-z_]+ +" q) { next }
+      {
+        kind = $1
+        spelling = $0
+        sub("^[a-z_]+ +" q, "", spelling)
+        sub(q "[ \t]+Loc=<.*$", "", spelling)
+        loc = $0
+        sub(/.*Loc=</, "", loc)
+        sub(/:[0-9]+>.*/, "", loc)
+        line = loc
+        sub(/.*:/, "", line)
+        sub(/:[0-9]+$/, "", loc)
+        if (loc != file) {
+          file = loc; start = 1; want = ""
+          in_test = file ~ /^test\/.*\.c$/
+          in_test_dir = file ~ /^test\//
+        }
+      }
+      # Comments and spaces do not end a line; a newline does. A directive starts with the first
+      # # (or %:) on a line.
+      kind == "comment" { next }
+      kind == "unknown" {
+        if (index(spelling, "\\n")) { start = 1; want = "" }
+        next
+      }
+      /\[StartOfLine\]/ { start = 1 }
+      start && kind == "hash" {
+        start = 0
+        want = "directive"
+        at = file ":" line ": "
+        next
+      }
+      { start = 0 }
+      want == "directive" {
+        want = ""
+        directive = spelling
+        if (kind == "numeric_constant") print at "a line marker"
+        else if (kind != "raw_identifier") next
+        else if (directive == "line") print at "#line"
+        else if (directive == "pragma") want = "pragma"
+        else if (directive == "define" || directive == "undef") want = "macro"
+        else if (in_test && directive ~ /^(if|ifdef|ifndef|elif|elifdef|elifndef|else)$/)
+          print at "#" directive " in a test file"
+        next
+      }
+      want == "pragma" {
+        want = ""
+        if (spelling != "once") print at "#pragma " spelling
+        next
+      }
+      want == "macro" {
+        want = ""
+        if (index(banned, " " spelling " ") || (in_test_dir && spelling ~ /[a-z]/))
+          print at "#" directive " " spelling
+      }'
+}
+# shellcheck disable=SC2086 # file names have no spaces
+found=$(
+  {
+    grep -nE "$c_off" $c_files /dev/null || true
+    directives
+    cmake_code $cmake_files | grep -iE "^[^:]+:[0-9]+:.*($cmake_off)" || true
+  }
+)
+[ -z "$found" ] || fail "$found
+The lines above switch off a check. Remove them and fix the cause."
+# A lint or format config in a subfolder, in any letter case, replaces the root one there.
+nested=$(find . \( -path ./build -o -path ./.git \) -prune -o \( -iname '[._]clang-tidy' -o \
+  -iname '[._]clang-format' -o -iname '.clang-format-ignore' \) -print |
+  grep -vxE '\./\.clang-(tidy|format)' || true)
+[ -z "$nested" ] || fail "$nested
+The files above override the root lint or format rules. Remove them."
+# Unity is built without the gates, and its counts decide whether a test passed. Any other file in
+# its folder, ignored by git or not, would be exempt from the searches too (macOS's .DS_Store is
+# never read).
+# shellcheck disable=SC2086 # file names have no spaces
+extra=$(find "$unity" ! -type d ! -name .DS_Store | sort | grep -vxF "$(printf '%s\n' $unity_files)" || true)
+[ -z "$extra" ] || fail "$extra
+These files are not part of Unity 2.7.0 as vendored. Remove them."
+# shellcheck disable=SC2086 # file names have no spaces
+[ "$(run cmake -E sha256sum $unity_files)" = "44faafa986e325f6d5152cddba20fa7c0a4dc7d4503fc1bbaf6e53e05f6a3746  $unity/CMakeLists.txt
+ec6cf55f05ba2aa538b9677b2481b9ac14a87c63594fce8a0677d4f71c583980  $unity/LICENSE.txt
+a6cc4b143075a03317d72c760b5ed67a4a12eeda1242f575464ad23f34042275  $unity/unity.c
+b30ba4db1e0be1a1f6c862d359d73c91025a114977e41d3dad17103363804334  $unity/unity.h
+35bffad23ebc533977291e7a848c646027513572268fbfa9bd03d5ec21ee818a  $unity/unity_internals.h" ] ||
+  fail "$unity/ differs from Unity 2.7.0 as vendored. Restore it: git checkout -- $unity"
+
+step 'Build (clang-tidy on every changed file, warnings are errors, sanitizers on)'
+# Ninja does not track the tools or .clang-tidy, so a change to them would leave old results in
+# place, and CMake refuses a build folder made for another path. Start from a clean build folder
+# when any of them changed, or when the project moved.
+inputs=$( (printf '%s\n' "$root" && cat mise.lock CMakePresets.json .clang-tidy) | cksum)
+if [ "$(cat build/dev/.check-inputs 2>/dev/null || true)" != "$inputs" ]; then
+  rm -rf build/dev
+fi
+run cmake --preset dev --log-level=WARNING
+printf '%s\n' "$inputs" >build/dev/.check-inputs
+run cmake --build --preset dev
+
+step 'Every project file is built with the gates'
+# Read from the build itself, so no CMake spelling can skip a gate: every compile command for a
+# project file must run clang-tidy and the pinned clang with the gate flags, and nothing that
+# turns them off. A file that only a target outside `all` lists is never built or tested.
+gate_flags="-std=c23 -Wall -Wextra -Wpedantic -Wconversion -Wdouble-promotion -Wshadow -Wundef \
+-Wvla -Wcast-qual -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes \
+-Wmissing-variable-declarations -Wformat=2 -Wimplicit-fallthrough -Wcomma -Werror \
+-fsanitize=address,undefined -fno-sanitize-recover=all"
+off_flags='-w|--no-warnings|-Wno-.*|--warn-.*|--define-macro.*|--undefine-macro.*|-Wp,.*|-X.*|-mllvm|-include.*|--include.*|-imacros.*|-isystem.+|-idirafter.*|-iwithprefix.*|-iwithsysroot.*|--(no-)?system-header-prefix.*|--config|-fno-sanitize.*|-fsanitize-recover.*|-fsanitize-(ignore|black)list.*|-std=.*|-DNDEBUG.*|-[DU](TEST_|UNITY_|RUN_TEST).*|@.*'
+rm -f build/dev/check-objects build/dev/check-preprocess
+# shellcheck disable=SC2086 # file names have no spaces
+report=$(run ninja -C build/dev -t commands all | awk -v root="$root/" -v unity="$root/$unity" \
+  -v clang="$clang_dir/" -v gate_flags="$gate_flags" -v off_flags="^($off_flags)\$" \
+  -v banned=" $unity_names " \
+  -v files=" $(printf '%s ' $c_files)" '
+  / -c / {
+    source = $NF
+    if (match($0, / -o [^ ]+ -c /)) print substr($0, RSTART + 4, RLENGTH - 8) > "build/dev/check-objects"
+    if (source == unity "/unity.c") {
+      # Unity is built without the gates, but with no flag that changes what it counts.
+      for (i = 2; i <= NF; i++)
+        if ($i ~ /^(-[DUIX]|-Wp,|-include|-imacros|-iquote|-idirafter|-isystem|-fno-coverage|-fprofile-list|--|@)/ && !($i == "-isystem" && $(i + 1) == unity))
+          print substr(source, length(root) + 1) ": built with " $i "."
+      next
+    }
+    if (index(source, root) != 1 || index(source, unity "/") == 1) next
+    file = substr(source, length(root) + 1)
+    built[file] = 1
+    if (index(files, " " file " ") == 0) print file ": built, but git ignores it."
+    if ($0 !~ /__run_co_compile --tidy="clang-tidy(;--extra-arg-before=--driver-mode=gcc)?" --source=[^ ]+ -- /) {
+      print file ": built without clang-tidy."
+      next
+    }
+    n = split(substr($0, index($0, " -- ") + 4), arg, " ")
+    if (index(arg[1], clang) != 1) print file ": built with " arg[1] ", not the pinned clang."
+    split("", seen)
+    for (i = 2; i <= n; i++) {
+      seen[arg[i]] = 1
+      if (arg[i] == "-isystem" && arg[i + 1] == unity) { i++; continue }
+      if (arg[i] ~ /^(--config|-resource-dir)=/ && index(arg[i], "=" clang) > 0) continue
+      if (arg[i] == "-fno-sanitize-recover=all" || arg[i] == "-std=c23") continue
+      if (arg[i] ~ off_flags || arg[i] ~ /^(--config|-resource-dir)/ || arg[i] == "-isystem")
+        print file ": built with " arg[i] (arg[i] == "-isystem" ? " " arg[i + 1] : "") "."
+      # A macro named like a Unity name or a function (lower case) would turn an assertion into a
+      # no-op or point a test at a stub. The <target>_EXPORTS that CMake gives a shared library
+      # passes.
+      if (arg[i] ~ /^-[DU]/) {
+        name = substr(arg[i], 3)
+        sub(/[(=].*/, "", name)
+        if (index(banned, " " name " ") || (name ~ /[a-z]/ && name !~ /_EXPORTS$/)) print file ": built with " arg[i] "."
+      }
+    }
+    m = split(gate_flags, flag, " ")
+    for (i = 1; i <= m; i++) if (!(flag[i] in seen)) print file ": built without " flag[i] "."
+    # The same command, preprocessed, for the search below.
+    pp = substr($0, index($0, " -- ") + 4)
+    sub(/ -MD -MT [^ ]+ -MF [^ ]+/, "", pp)
+    sub(/ -o [^ ]+ -c /, " -E ", pp)
+    print pp > "build/dev/check-preprocess"
+  }
+  END {
+    n = split(files, listed, " ")
+    for (i = 1; i <= n; i++)
+      if (listed[i] ~ /\.c$/ && !(listed[i] in built)) print listed[i] ": not built. Add it to a target after include(cmake/gates.cmake)."
+  }')
+[ -z "$report" ] || fail "$report
+Every project file must be built by the default target, after include(cmake/gates.cmake)."
+# A file that a project file includes must be one the format and the searches read. Only the
+# objects of the current build count: the deps log keeps entries for objects that are gone.
+# shellcheck disable=SC2046 # file names have no spaces
+deps=$(run ninja -C build/dev -t deps $(cat build/dev/check-objects))
+included=$(printf '%s\n' "$deps" | sed -n "s|^    $root/||p" | grep -vxE "$unity/unity(\.c|\.h|_internals\.h)" | sort -u)
+# shellcheck disable=SC2086 # file names have no spaces
+unlisted=$(printf '%s\n' "$included" | grep -vxF "$(printf '%s\n' $c_files)" || true)
+[ -z "$unlisted" ] || fail "$unlisted
+These files are included but are not .h or .inc files that git tracks. Rename or track them."
+# The pinned clang ships libraries (zlib, openssl, iconv, ...) next to it, and its default
+# config puts their headers on the include path. Code that uses them builds here and nowhere
+# else, so it must declare a real dependency instead.
+toolchain_headers=$(printf '%s\n' "$deps" | grep -E '/conda-clang/[^/]+/include/' || true)
+[ -z "$toolchain_headers" ] || fail "$toolchain_headers
+These headers come from the compiler's own folder, not from a declared dependency."
+# A file from outside the repository must come through an include folder: the compiler's own
+# list (the C library and the OS), or an -I folder that CMake declares for a dependency, which
+# review sees. `#include "../../x.h"` or "/tmp/x.h" would bring in code that no search reads and
+# that CI does not have. The SDK's SDKSettings.json is read by the compiler, not included.
+{
+  run clang -xc -E -v - </dev/null 2>&1 | sed -n '/<\.\.\.> search starts here:/,/^End of search list/p' |
+    sed -n 's/^ //p' | sed 's/ (framework directory)$//'
+  tr ' ' '\n' <build/dev/check-preprocess | sed -n 's/^-I\(..*\)$/\1/p'
+} >build/dev/check-include-dirs
+outside=$(printf '%s\n' "$deps" | awk -v root="$root/" -v clang="$clang_dir/" '
+  BEGIN { while ((getline line <"build/dev/check-include-dirs") > 0) dir[++n] = line }
+  /^    / {
+    path = substr($0, 5)
+    if (index(path, root) == 1 || index(path, clang) == 1) next
+    for (i = 1; i <= n; i++) {
+      sdk = dir[i]
+      sub(/\/usr\/include$/, "", sdk)
+      if (dir[i] == "") continue
+      if (index(path, dir[i] "/") == 1 || path == sdk "/SDKSettings.json") next
+    }
+    print path
+  }' | sort -u)
+[ -z "$outside" ] || fail "$outside
+These files are included from outside the repository, not through an include folder."
+
+step 'No switched-off checks after macro expansion'
+# The compiler sees code after macros expand, so a macro could hide a pragma or an attribute from
+# the search above. Search the project's lines of the preprocessed code too.
+# An unused attribute counts only inside __attribute__((...)) or [[...]]: a variable named
+# `unused` passed to a macro, as in `f((unused))` or `f(a, unused)`, is fine.
+pp_off='#[[:space:]]*pragma|no_sanitize|no_address_safety_analysis|disable_sanitizer_instrumentation|__attribute(__)?[[:space:]]*\([[:space:]]*\((([^()]|\([^()]*\))*[^[:alnum:]_])?(__)?unused(__)?([^[:alnum:]_]|$)|\[[[:space:]]*\[[^]]*unused|clang::suppress|__(asan|lsan|ubsan|sanitizer)_|__declspec'
+# A line marker without the flag 1 (enter an include) or 2 (back from one) that names another file
+# comes from `#line` or a hand-written marker in any spelling. Lines after it would be credited to
+# that file and skipped here.
+rm -f build/dev/check-renamed
+found=$(
+  while IFS= read -r command; do
+    echo '#check-next-file'
+    (cd build/dev && run sh -c "$command")
+  done <build/dev/check-preprocess | awk -v root="$root/" -v unity="$root/$unity/" '
+    $0 == "#check-next-file" { file = ""; next }
+    /^# [0-9]+ "/ {
+      name = $3
+      gsub(/"/, "", name)
+      flags = " " $4 " " $5 " " $6 " "
+      if (file != "" && name != file && index(flags, " 1 ") == 0 && index(flags, " 2 ") == 0 &&
+        index(file, root) == 1 && index(file, unity) != 1)
+        print substr(file, length(root) + 1) ":" line ": a #line or line marker names " name > "build/dev/check-renamed"
+      file = name
+      line = $2 - 1
+      next
+    }
+    { line++ }
+    index(file, root) == 1 && index(file, unity) != 1 { print substr(file, length(root) + 1) ":" line ": " $0 }' |
+    grep -E "^[^:]+:[0-9]+: .*($pp_off)" | grep -vE ': [[:space:]]*#[[:space:]]*pragma[[:space:]]+once[[:space:]]*$' || true
+  cat build/dev/check-renamed 2>/dev/null || true
+)
+found=$(printf '%s\n' "$found" | sed '/^$/d' | sort -u)
+[ -z "$found" ] || fail "$found
+After macro expansion, the lines above switch off a check. Remove them and fix the cause."
+
+step 'No switched-off checks or dropped results in the syntax tree (clang-query)'
+# clang-query matches the parsed code, so no spelling, line break, macro or #line can hide what it
+# finds. Each name below says what it found.
+# - An attribute that hides an unused function (unused, maybe_unused, used: a test that main
+#   never runs), keeps a function out of line coverage (no_profile_instrument_function), lets a
+#   test's stub replace a library function (weak, alias), switches a sanitizer off or suppresses
+#   clang-tidy or the analyzer. Also an asm label, which can give a plain name the symbol of a
+#   sanitizer hook such as __lsan_disable.
+# - A call to a project function whose result is dropped without (void). clang-tidy's
+#   bugprone-unused-return-value covers only the {{c_name}}_ functions; this covers static helpers.
+# - Any use of Unity's state (`Unity.CurrentTestFailed = 0` in tearDown, or TEST_IS_IGNORED = 1
+#   in setUp, turns a failure into a pass) other than TEST_PROTECT and TEST_ABORT.
+# - In the library (src/): exit() called or taken as a pointer, since the library reports errors
+#   to its caller (CODING_STANDARDS.md); and main or a libFuzzer hook, which a test that links the
+#   library whole would run instead of its own.
+# - main or LLVMFuzzerInitialize in a property test: either could end the run before libFuzzer
+#   tried every input.
+cat >build/dev/check-query <<'X'
+set bind-root false
+set output diag
+match decl(anyOf(hasAttr("attr::Unused"), hasAttr("attr::Used"), hasAttr("attr::NoSanitize"), hasAttr("attr::DisableSanitizerInstrumentation"), hasAttr("attr::Suppress"), hasAttr("attr::AsmLabel"), hasAttr("attr::NoProfileFunction"), hasAttr("attr::Weak"), hasAttr("attr::WeakRef"), hasAttr("attr::Alias")), unless(isExpansionInSystemHeader())).bind("an attribute or asm label that switches a check off")
+match declRefExpr(to(varDecl(hasName("Unity"))), unless(isExpansionInSystemHeader()), unless(anyOf(isExpandedFromMacro("TEST_PROTECT"), isExpandedFromMacro("TEST_ABORT")))).bind("Unity state used outside TEST_PROTECT and TEST_ABORT: use the TEST_ macros")
+match callExpr(anyOf(hasParent(compoundStmt()), hasParent(caseStmt()), hasParent(defaultStmt()), hasParent(labelStmt())), unless(hasType(voidType())), unless(isExpansionInSystemHeader()), callee(functionDecl(unless(isExpansionInSystemHeader())))).bind("a dropped result: use it, or drop it on purpose with (void)")
+X
+{
+  cat build/dev/check-query
+  echo 'match declRefExpr(to(functionDecl(hasAnyName("exit", "_exit", "_Exit", "quick_exit"))), unless(isExpansionInSystemHeader())).bind("exit in the library: return an error to the caller")'
+  echo 'match functionDecl(isDefinition(), anyOf(hasName("main"), matchesName("^::LLVMFuzzer")), unless(isExpansionInSystemHeader())).bind("main or a libFuzzer hook in the library: tests link the library")'
+} >build/dev/check-query-library
+{
+  cat build/dev/check-query
+  echo 'match functionDecl(isDefinition(), hasAnyName("main", "LLVMFuzzerInitialize"), unless(isExpansionInSystemHeader())).bind("main or LLVMFuzzerInitialize in a property test: libFuzzer runs the property")'
+} >build/dev/check-query-property
+found=$(
+  while IFS= read -r command; do
+    source=${command##* }
+    flags=${command#* }
+    flags=${flags% -E *}
+    queries=$root/build/dev/check-query
+    [ "${source#"$root"/src/}" = "$source" ] || queries=$root/build/dev/check-query-library
+    # The leading ( keeps bash 3.2, macOS's sh, from ending $( ) at the pattern's ).
+    case " $flags " in (*' -fsanitize=fuzzer '*) queries=$root/build/dev/check-query-property ;; esac
+    if ! output=$(cd build/dev && run sh -c "clang-query -f $queries $source -- $flags" 2>&1); then
+      printf '%s\nclang-query failed on %s.\n' "$output" "$source"
+      continue
+    fi
+    printf '%s\n' "$output" | sed -n 's/^\(.*:[0-9]*\):[0-9]*: note: "\(.*\)" binds here$/\1: \2/p' |
+      sed "s|^$root/||"
+  done <build/dev/check-preprocess | sort -u
+)
+[ -z "$found" ] || fail "$found
+Fix the lines above."
+
+step 'Test (sanitizers on; the property test runs a fixed seed)'
+# ctest reads CTestCustom.cmake or CTestCustom.ctest in the build folder. CTEST_CUSTOM_TESTS_IGNORE
+# there drops a test from both ctest runs below, so the counts would still agree. CMake or a hand
+# can write one, and git ignores build/, so the check removes it and fails.
+custom=$(find build/dev -iname 'CTestCustom.*' ! -type d)
+if [ -n "$custom" ]; then
+  # shellcheck disable=SC2086 # file names have no spaces
+  rm -f $custom
+  fail "$custom
+ctest reads these files, and they can drop tests. scripts/check removed them. Remove what wrote them."
+fi
+# ctest runs the CTestTestfile.cmake files each time, and they include TEST_INCLUDE_FILES first: a
+# script there could change a test after the list below was read. Only the lines CMake writes for
+# add_test and for subdirectories inside build/dev may be in them. awk, not grep: a regex error
+# must stop the check, not pass it.
+extra=$(find build/dev -name CTestTestfile.cmake -exec awk '
+  /^subdirs\("/ && !/^subdirs\("\// && !/\.\./ { next }
+  !/^(#.*|add_test\(.*|set_tests_properties\(.*)?$/ { print FILENAME ": " $0 }' {} +)
+[ -z "$extra" ] || fail "$extra
+ctest would run these lines (TEST_INCLUDE_FILES, or tests from outside build/dev). Remove what
+added them."
+# Every test must be one that add_unity_test or add_property_test made, with no test property
+# added (cmake/gates.cmake reads CMake's own list of tests).
+run ctest --test-dir build/dev --show-only=json-v1 >build/dev/check-tests.json
+run cmake -DGATES_TESTS_JSON=build/dev/check-tests.json -P cmake/gates.cmake
+if ! run ctest --preset dev >build/dev/ctest.log 2>&1; then
+  cat build/dev/ctest.log
+  exit 1
+fi
+cat build/dev/ctest.log
+# A test marked DISABLED, skipped or left out by a preset filter passes ctest. It must not pass
+# the check.
+total=$(run ctest --test-dir build/dev -N | sed -n 's/^Total Tests: //p')
+if grep -qE 'Not Run|did not run|\*\*\*Skipped' build/dev/ctest.log ||
+  ! grep -qxE "100% tests passed(, 0 tests failed)? out of $total" build/dev/ctest.log; then
+  fail "Not all of the $total tests ran. Every test must run."
+fi
+
+printf '\nAll checks passed.\n'

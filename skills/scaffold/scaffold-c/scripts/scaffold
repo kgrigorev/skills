@@ -1,0 +1,81 @@
+#!/bin/sh
+# Renders the C project template into a folder.
+# Usage: scaffold <target-dir> <package> <synopsis> <reader>
+#   package:  lower case, words joined by "-", for example "my-tool". The C prefix follows from
+#             it: my-tool becomes my_tool.
+#   synopsis: one line, for example "A tool that renames photos". The sample program prints it.
+#   reader:   who reads the code, completing "The reader is ...", for example
+#             "a Python developer new to C". AGENTS.md and CODING_STANDARDS.md use it.
+# The template's mise.toml pins the compiler, clang-tidy, clang-format, CMake and Ninja. The script
+# writes mise.lock for every platform and installs the tools, so it needs the network once.
+# It never overwrites a file, runs `git init` when needed and points git at the project's hooks.
+# It does not commit.
+set -eu
+
+if [ "$#" -ne 4 ]; then
+  echo 'Usage: scaffold <target-dir> <package> <synopsis> <reader>' >&2
+  exit 2
+fi
+target=$1
+package=$2
+synopsis=$3
+reader=$4
+template=$(cd "$(dirname "$0")/../template" && pwd)
+# shellcheck source=SCRIPTDIR/scaffold-lib.sh
+. "$(dirname "$0")/scaffold-lib.sh"
+
+require_hidden "$template"
+check_inputs "$package" "$synopsis" "$reader"
+
+# my-tool -> my_tool, the prefix of every public C name.
+c_name=$(printf '%s' "$package" | tr - _)
+# The library target is named c_name. CMake reserves some target names, and a C keyword would
+# make a confusing prefix.
+case " $c_name " in
+*' all '* | *' clean '* | *' help '* | *' install '* | *' package '* | *' test '* | *' unity '* | \
+  *' auto '* | *' bool '* | *' break '* | *' case '* | *' char '* | *' const '* | *' constexpr '* | \
+  *' continue '* | *' default '* | *' do '* | *' double '* | *' else '* | *' enum '* | \
+  *' extern '* | *' false '* | *' float '* | *' for '* | *' goto '* | *' if '* | *' inline '* | \
+  *' int '* | *' long '* | *' main '* | *' nullptr '* | *' register '* | *' restrict '* | \
+  *' return '* | *' short '* | *' signed '* | *' sizeof '* | *' static '* | *' struct '* | \
+  *' switch '* | *' true '* | *' typedef '* | *' typeof '* | *' union '* | *' unsigned '* | \
+  *' void '* | *' volatile '* | *' while '*)
+  fail "package \"$package\": pick another name. \"$c_name\" is a C keyword or a reserved CMake name." ;;
+esac
+# The sample program prints "<package>: <synopsis>" from a 128-byte buffer.
+[ "$(printf '%s: %s' "$package" "$synopsis" | wc -c)" -lt 128 ] ||
+  fail 'synopsis: keep "<package>: <synopsis>" under 128 bytes.'
+
+require_tools mise git
+if [ "$(uname -s)" = Darwin ]; then
+  # The pinned clang finds the macOS SDK through the Xcode Command Line Tools.
+  xcrun --show-sdk-path >/dev/null 2>&1 ||
+    fail 'the Xcode Command Line Tools are missing. Run: xcode-select --install'
+fi
+
+set_var package "$package"
+set_var c_name "$c_name"
+set_var header_guard "$(printf '%s_H' "$c_name" | tr '[:lower:]' '[:upper:]')"
+set_var synopsis "$synopsis"
+set_var reader "$reader"
+
+render_template "$template" "$target"
+cd "$target"
+finish_project
+
+# mise.lock pins every package by URL and checksum for every platform, so CI and other machines
+# install the same files. mise.toml sets `locked`, so the lock must exist before the install.
+mise trust --quiet mise.toml
+mise lock --quiet
+mise install --quiet
+scripts/format
+
+version() { sed -n "s/^\"*$1\"* = \"\(.*\)\"$/\1/p" mise.toml; }
+printf 'Created %s (C prefix %s_) in %s\n' "$package" "$c_name" "$(pwd)"
+printf 'clang %s, clang-tidy %s, clang-format %s, cmake %s, ninja %s, Unity 2.7.0\n' \
+  "$(version conda:clang)" "$(version conda:clang-tools)" "$(version conda:clang-format)" \
+  "$(version cmake)" "$(version ninja)"
+{
+  list_files
+  echo mise.lock
+} | sort

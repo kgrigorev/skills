@@ -1,0 +1,42 @@
+# {{package}}
+
+{{synopsis}}.
+
+## Setup
+
+On macOS, install the Xcode Command Line Tools: `xcode-select --install`. The pinned clang finds
+the macOS SDK through them.
+
+Install [mise](https://mise.jdx.dev/getting-started.html), for example `brew install mise`. Then
+run in the repository:
+
+```sh
+mise trust
+mise install
+git config core.hooksPath .githooks
+gh extension install github/gh-stack   # optional: stacked PRs
+```
+
+`mise.toml` pins clang, clang-tidy, clang-format, clangd and llvm-cov (one LLVM release from
+conda-forge), CMake and Ninja. `mise.lock` pins every download by checksum, for macOS and Linux.
+The first install downloads about 1 GB. CI installs the same files. The git hook runs the checks
+before each push. `gh stack` is optional: it helps to open and update stacked PRs.
+
+Your editor's clangd must be the pinned one: start the editor from a shell where mise is
+activated, or point it at `mise which clangd`.
+
+## Commands
+
+```sh
+scripts/check                                  # every quality gate: format, lint, build, test
+scripts/format                                 # format every C file
+mise exec -- cmake --build --preset dev        # build after scripts/check ran once
+mise exec -- ctest --preset dev                # run the tests
+build/dev/{{package}}                          # run the program
+mise exec -- cmake --preset release && mise exec -- cmake --build --preset release
+```
+
+The release build lands in `build/release/`. `scripts/check` is the single list of gates. The git
+hook and CI run it too.
+
+AI agents follow [AGENTS.md](AGENTS.md). Reviews apply [CODING_STANDARDS.md](CODING_STANDARDS.md).
