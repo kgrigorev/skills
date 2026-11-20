@@ -44,34 +44,70 @@ Every other gate states its reason in a comment in its own file.
 - Only GoogleTest and rapidcheck are trusted under `build/`. They are known by target (the
   objects of `gtest`, `gtest_main` and `rapidcheck`, from sources under
   `build/dev/_deps/{googletest,rapidcheck}-src/`), not by folder: a project target can write its
-  output into any folder, but cannot take one of those target names. Any other file the compiler
-  reads under `build/`, `-I` into `build/` and `-isystem` anywhere else fail. A generated header
-  is code that no gate read. A project folder named `_deps` is rejected, since `.clang-tidy`
-  skips that path.
-- `rules.ninja` must run the pinned tools as CMake writes them: the compile rule and the
-  executable link rule exactly, the static library rule step by step (`rm`, `ar qc`, `ranlib`,
-  and the `touch` CMake adds on macOS). `CMAKE_AR` and `CMAKE_RANLIB` must be the pinned LLVM
-  tools, and `CMAKE_MAKE_PROGRAM` the pinned ninja, which the check passes on each configure so a
-  value once forced into the cache cannot outlive the CMake line. No target may set a launcher, a code check
-  (`CXX_INCLUDE_WHAT_YOU_USE`, `CXX_CPPCHECK`, ..., which run any program on each compile) or a
-  pre-link or post-build step. This closes rule variables such as `CMAKE_CXX_ARCHIVE_FINISH`
-  without listing them. Shared libraries and C++ modules are not used, so their rules fail.
+  output into any folder, but cannot take one of those target names. Their compile commands get
+  the sanitizer and hardening flags and otherwise only their own kinds of flag (warnings, a
+  standard, `-DGTEST_HAS_PTHREAD`, headers from their own sources): no `-include`, response file
+  or other macro, so a project option given to them (`target_compile_options(gtest ...)`, an
+  `add_compile_options` before the dependencies) cannot change their code. Their objects may
+  read only their own sources, and project objects outside `tests/` may not read them at all,
+  however the header gets there. Any other file the compiler reads under `build/`, `-I` into
+  `build/` and `-isystem` anywhere else fail. A generated header is code that no gate read. A
+  project folder named `_deps` is rejected, since `.clang-tidy` skips that path.
+- `rules.ninja` may hold only the C++ rules and CMake's own (custom command, re-run, clean,
+  help): a C rule (`LINKER_LANGUAGE C`) would link with no check reading it. The C++ rules must
+  run the pinned tools as CMake writes them: the compile rule and the executable link rule
+  exactly, the static library rule step by step (`rm`, `ar qc`, `ranlib`, and the `touch` CMake
+  adds on macOS). `CMAKE_AR` and `CMAKE_RANLIB` must be the pinned LLVM tools, and
+  `CMAKE_MAKE_PROGRAM` the pinned ninja, which the check passes on each configure. No target may
+  set a launcher, a code check (`CXX_INCLUDE_WHAT_YOU_USE`, `CXX_CPPCHECK`, ..., which run any
+  program on each compile) or a pre-link or post-build step. This closes rule variables such as
+  `CMAKE_CXX_ARCHIVE_FINISH` without listing them. Shared libraries and C++ modules are not
+  used, so their rules fail.
 - `build.ninja` is read as a graph: an executable or a static library is made only from objects
   a checked compile step makes, an executable links only archives built here, a static library
   gets no extra archiver arguments (`STATIC_LIBRARY_OPTIONS`), and every compiled object is in
   `compile_commands.json` (`EXPORT_COMPILE_COMMANDS OFF` would hide one from the flag check).
-  Prebuilt `.o`, `.a`, `.so`, `.dylib` and similar files in the project are rejected.
+  An executable's link step also gets its folder's compile flags, which no compile command
+  shows when it links only an object library, so they must come from the short list every
+  compile gets. Every executable is in the default build: one left out (`EXCLUDE_FROM_ALL`) would
+  keep an old binary. Prebuilt `.o`, `.a`, `.so`, `.dylib` and similar files in the project are
+  rejected.
+- Each run starts from an empty CMake cache. A value that a CMake line once forced into it (a
+  launcher, `CMAKE_PROJECT_INCLUDE`, a build tool) would otherwise outlive the line, locally and
+  in a CI build cache. The downloaded dependencies and the compiled objects stay, so this costs
+  a second or two.
 - CMake files may call only the commands on a list in the check (the usual project, target,
   test, `FetchContent` and control-flow commands, `install`, read-only `file()` modes) and the
-  functions and macros the project defines, whose bodies the scan reads. Anything else can run a
-  program or write a file when CMake or the build runs (`execute_process`, `add_custom_command`,
-  `configure_file`, `write_file`, `cmake_language`, a module function such as
-  `configure_package_config_file`), after the source searches, and so change or add code. A
-  list of what to reject would miss the next spelling. `include` takes a module from a short
-  list or a tracked project `.cmake` file, and `add_subdirectory` a project folder (with
-  `EXCLUDE_FROM_ALL` or `SYSTEM` at most), named literally: CMake splits an unquoted `;` into
-  more arguments and a variable can hold anything. The gate files `cmake/strict.cmake` and
-  `cmake/toolchain.cmake` may use any command; the owner reviews those.
+  functions and macros the project defines, whose bodies the scan reads; a function named like
+  a CMake command does not count. Anything else can run a program or write a file when CMake or
+  the build runs (`execute_process`, `add_custom_command`, `configure_file`, `write_file`,
+  `cmake_language`, a module function such as `configure_package_config_file`), after the
+  source searches, and so change or add code. A list of what to reject would miss the next
+  spelling. `include` takes a module from a short list or a tracked project `.cmake` file, and
+  `add_subdirectory` a project folder (with `EXCLUDE_FROM_ALL` or `SYSTEM` at most), named
+  literally: CMake splits an unquoted `;` into more arguments and a variable can hold anything.
+  The gate files `cmake/strict.cmake` and `cmake/toolchain.cmake` may use any command; the
+  owner reviews those.
+- That scan reads CMake files as written, but CMake builds commands and file names while it runs
+  (`CMAKE_PROJECT_INCLUDE` makes `project()` run any file, a function can be defined after a
+  call). So the configure step also writes a trace of every command CMake ran
+  (`--trace-format=json-v1`), and the check reads it: each command must come from a tracked
+  project CMake file, CMake's own modules, the files CMake writes into `build/dev/CMakeFiles`, or
+  GoogleTest and rapidcheck; a command from a project file must pass the same list, enable no
+  language but C++ (`project(... LANGUAGES CXX)`), and leave the GoogleTest and rapidcheck targets
+  alone. The trace shows a list variable as one argument, so the check splits it on `;` as CMake
+  does. Commands that make CMake run something take only safe arguments: `find_package` only
+  `Threads` (a Find module may run a program a project variable names, such as `GIT_EXECUTABLE`),
+  `FetchContent_Declare` only GoogleTest and rapidcheck by URL and SHA-256 (a `PATCH_COMMAND` in a
+  list variable would run a script), and `gtest_discover_tests` only the target and
+  `DISCOVERY_MODE PRE_TEST` (its arguments are written into a script that ctest runs). A new
+  dependency therefore needs `scripts/check` changed too, with the owner.
+- CMake runs only once, in the traced configure: `CMAKE_SUPPRESS_REGENERATION` stops ninja from
+  running it again during the build (without the trace, with a filled cache), a `RERUN_CMAKE`
+  rule fails, and the check fails if the build changes `build.ninja`, `rules.ninja` or
+  `compile_commands.json`. The test lists that `gtest_discover_tests` writes (`*_tests.cmake`)
+  are deleted before each ctest run, so a list edited in the ignored build folder does not
+  outlive a revert.
 - `ninja -t deps` lists every file the compiler read. The check requires that set, inside the
   project, to equal the `.cpp` and `.hpp` files the other gates read. This closes `#include` of
   any other extension, untracked or ignored headers, and files that nothing compiles (never
@@ -139,7 +175,7 @@ Every other gate states its reason in a comment in its own file.
   address too. A plain `abort(...)` is rejected as a call, inside a class too (call a member
   as `this->abort()`), and inside a `#define`. A member function of the same name
   (`void abort()`, `job.abort()`, `Job::abort()`) is fine. A namespace alias of `std` is
-  rejected, since `sys::terminate()` would not read as `std::`. `assert` stays, for
+  rejected, and so is `using namespace std;` (`using namespace std::literals;` is fine), since `sys::terminate()` would not read as `std::`. The address of a plain `abort` (`&_Exit`, `= abort;`) is rejected too. `assert` stays, for
   preconditions.
 - `.clang-format-ignore` is rejected with the nested `.clang-tidy` and `.clang-format` files: it
   makes clang-format skip the files it lists. clang-format also reads one in any folder above
@@ -161,6 +197,13 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
   `scripts/check`, and the test preset's environment (for example `max_size=2` in `RC_PARAMS`,
   so properties try only tiny inputs). A CI label gate for gate files would add a step to each
   legitimate change and still trust whoever sets the label; hashing them would do the same.
+- CMake code. CMake is a programming language, and its own modules, FetchContent and the
+  scripts that ctest runs read project input in many places. Three rounds of review each found
+  new ways for a short CMake change to run a program or change a test after the source
+  searches, so AGENTS.md lets agents change only the list of targets in `CMakeLists.txt`, and
+  the owner reviews every CMake change. The checks above (the command list, the trace, the
+  build graph, the rules and the per-test reports) make such a change hard and visible, but do
+  not close it.
 - Tests without assertions, deleted tests, and tests whose assertions sit under a condition that
   is false. No tool can tell a weak test from a strong one.
 - A swallowed error: `catch (...) { return 0; }` or `catch (const std::exception &)` with a
@@ -182,9 +225,10 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
 - A dependency's own CMake code. FetchContent runs GoogleTest's and rapidcheck's CMake files,
   which the scan does not read; their URL and SHA-256 pin them, and a new dependency needs the
   owner.
-- A file under `build/dev/_deps/*-src` changed by hand after the download. CI downloads afresh
-  only when its build cache misses (the cache key holds `cmake/**`, and `restore-keys` falls
-  back to an older cache), so such a change stays local.
+- A file under `build/dev/_deps/*-src` changed after the download, by hand or by CMake code that
+  got past the checks. CI caches `build/dev` and restores an older cache through
+  `restore-keys`, so such a change could outlive the commit that made it; the owner's review of
+  CMake changes is what stops the second case.
 
 ## Toolchain
 
@@ -210,7 +254,8 @@ The owner reviews every PR. These are the known ways past the gates, and why eac
   `name = "version"`, so no inline table carries options. The missing config path lies in the
   git-ignored `build/`, so the check deletes it before each run.
 - `scripts/check` unsets what the caller's shell could pass to the tools: `GTEST_*`, `CMAKE_*`,
-  `CTEST_*`, `*SAN_*`, `LD_*`, `DYLD_*`, the compiler flag variables, `CCC_*`
+  `CTEST_*`, `TESTBRIDGE_*` (GoogleTest reads `TESTBRIDGE_TEST_ONLY` as a filter), `*SAN_*`, `LD_*`,
+  `DYLD_*`, the compiler flag variables, `CCC_*`
   (`CCC_OVERRIDE_OPTIONS` edits clang's command line), `COMPILER_PATH` and `GCC_EXEC_PREFIX`
   (where clang finds the linker), the include path variables and `SDKROOT`. CI has none of
   them.
