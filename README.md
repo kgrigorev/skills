@@ -28,6 +28,7 @@ all run it.
 | `scaffold-go` | Go: golangci-lint with gofumpt, race-detector tests, rapid. |
 | `scaffold-typescript` | TypeScript on Node with pnpm: tsc, oxlint, oxfmt, vitest, fast-check, knip. |
 | `scaffold-python` | Python with uv: ruff, mypy, pytest, Hypothesis, branch coverage. |
+| `scaffold-cpp` | C++ with CMake and pinned LLVM: clang-tidy, sanitizers, GoogleTest, rapidcheck. |
 
 ## Install
 

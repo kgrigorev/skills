@@ -1,0 +1,69 @@
+# Coding standards
+
+The reviewer applies these to every C++ change. `scripts/check` already enforces formatting,
+warnings, the clang-tidy rules, sanitizers and test runs, so they are not repeated here.
+
+The reader is {{reader}}. Every rule serves that reader.
+
+## Plain modern C++
+
+Use values, `struct`s, `enum class`, `std::optional`, `std::expected`, `std::variant`,
+`std::span`, `std::string_view`, ranges and RAII, plus the approved extras below. Templates beyond
+simple function templates, inheritance hierarchies, macros, `new` and `delete`, raw owning
+pointers and threads need the owner's approval first. Once approved, they go into the list.
+
+Approved extras:
+
+- None.
+
+Enumerators are CamelCase (`Colour::DarkRed`). ALL_CAPS names look like macros, and the check
+rejects the word `DISABLED`.
+
+## Comments
+
+A reader can follow a file from top to bottom by its comments alone.
+
+- Every header starts with a comment that says what the module is for.
+- Every declaration in a header has a `//` comment that says what it is for and why.
+- Explain a C++ idiom briefly the first time a file uses it, if the reader may not know it. For
+  example `std::expected`, a `[[nodiscard]]` attribute or a range adaptor. One short sentence,
+  sometimes with the equivalent in a language the reader knows.
+- No filler, no praise of the code, no restating the code in words.
+
+## Errors and types
+
+- Expected failures are values: return `std::expected<T, Error>` with the module's error type.
+  Exceptions are for the unexpected only, such as a full disk. `main` turns them into exit code 1.
+  The check rejects `std::abort` and `std::terminate`; `assert` is for preconditions only.
+- A `catch` that returns a default value hides the error, and no check sees it. Catch only what
+  the code can handle, and say why in a comment.
+- Give distinct meanings distinct types: `struct UserId { int value; };` instead of a bare `int`,
+  so two arguments cannot be swapped.
+- Mark a function `[[nodiscard]]` when ignoring its result is a bug. `std::ignore = f();` and
+  `(void)f();` throw the result away; the check allows both, so the reviewer asks why.
+- No `void*`. A cast to `void*` and back passes every check, and the type is gone.
+
+## Functions and names
+
+- Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
+  nesting. Helpers go in an anonymous namespace.
+- `const` by default.
+- Names say what a value is: `environment`, `argument`. Single letters only in tiny lambdas.
+- Use the same name for the same concept everywhere: in code, tests and docs.
+
+## Dependencies
+
+A new `FetchContent` entry or system library needs the owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- A pure function with a clear law gets a rapidcheck property.
+- Test names describe behaviour.
+- Every test asserts something (`EXPECT_*`, `ASSERT_*`, `RC_ASSERT`). The check runs the tests,
+  but a test without an assertion passes, and so does a deleted one or one whose assertions sit
+  under a false condition.
+- A property skips an input with `RC_PRE(condition)`, not with `return`. The check rejects a bare
+  `return;` in test files.
+- `ASSERT_TRUE(value.has_value())` before `*value` or `value->` is fine in tests: the check turns
+  off clang-tidy's optional check there, and the hardened standard library stops a bad access.

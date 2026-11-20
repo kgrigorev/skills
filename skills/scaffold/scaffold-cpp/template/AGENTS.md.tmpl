@@ -1,0 +1,104 @@
+# AGENTS.md
+
+{{synopsis}}. The owner reviews every change.
+Write code that {{reader}} can read. Setup is in `README.md`.
+
+## Checks
+
+`scripts/check` runs every gate: clang-format, a search for switched-off checks, clang-tidy, a
+build with warnings as errors, and the tests with AddressSanitizer, UndefinedBehaviorSanitizer and
+a hardened standard library. It also reads what the compiler really got: a flag outside its list,
+a file the gates skip, a library from the machine, a test property, a skipped test or a test
+that did not finish with a passing GoogleTest report fails it.
+The git hook and CI run it too.
+
+- Work in small steps and keep `scripts/check` green after each one.
+- Done means `scripts/check` is green. Show the command and the end of its output.
+- When a check stays red after two honest attempts, stop and report what you tried.
+- Fix the cause of a red check. Gate files change only with the owner's explicit approval:
+  `scripts/`, `.githooks/`, `.github/`, `.claude/`, `.clang-tidy`, `.clang-format`, `.clangd`,
+  `CMakePresets.json`, `cmake/`, `mise.toml`, `mise.lock`, and existing tests.
+- In `CMakeLists.txt` files, change only the list of targets: add a `.cpp` to a target, add a
+  library, an executable or a test executable with `gtest_discover_tests`, and link them.
+  Anything else in CMake (a new command, module, option, flag or folder setting) needs the
+  owner's approval, and the owner reviews every CMake change. CMake can run programs, and the
+  checks cannot see all of them.
+
+The commands below need `mise trust` once in each new git worktree; `scripts/check` does not.
+
+```sh
+mise exec --locked -- cmake --build --preset dev        # build (after one scripts/check)
+mise exec --locked -- ctest --preset dev -R 'Greet\.'   # tests whose name matches
+build/dev/{{namespace}}_test --gtest_filter='Greet.*'     # the same, from the test binary
+scripts/format                                           # format
+```
+
+Sandboxed agents: mise writes to `~/.local/share/mise`, `~/.local/state/mise` and its cache
+(`~/Library/Caches/mise` on macOS, `~/.cache/mise` on Linux). The first run downloads the tools
+and the test libraries and needs the network. So does the first check in each new git worktree:
+it downloads and builds GoogleTest and rapidcheck again into that worktree's `build/` (about 20 s).
+
+## C++
+
+Read `CODING_STANDARDS.md` before writing or reviewing C++.
+
+The checks enforce C++23 without compiler extensions, include what you use
+(`misc-include-cleaner`), no C-style casts, no implicit narrowing, and internal linkage for
+helpers. They also reject in code (comments and strings are not searched): pragmas other than
+`#pragma once`, token pasting (`##`), `asm`, names outside ASCII, `#define` or `#undef` of a
+reserved name, `#if` on any macro except `__APPLE__`, `__linux__`, `__cplusplus`, `__cpp_*` and
+`__has_include(<header>)`, `#include` by macro, an alias of the `std` namespace or
+`using namespace std;`, and `std::abort`, `std::terminate` and `_Exit` (call a member of that
+name as `this->abort()`).
+CMake files may use only the commands on the list in `scripts/check` (the usual project, target
+and test commands; not `execute_process`, `add_custom_command`, `configure_file` or writing
+`file()` modes), `include` only named modules and project `.cmake` files, and `add_subdirectory`
+only project folders. A trace of what CMake ran is checked against the same list. `project()`
+says `LANGUAGES CXX`, `find_package` takes only `Threads`, FetchContent fetches only GoogleTest
+and rapidcheck, and CMake code leaves their targets alone. The compiler may read nothing from
+`build/` but GoogleTest and rapidcheck, and only files under `tests/` may use them. These checks
+make a CMake cheat hard, not impossible; the owner's review of CMake changes is the last gate.
+Every tool comes from `mise.toml`: run it through `mise exec -- <tool>`. Never call Apple's
+clang.
+
+## Layout
+
+- Logic goes in the library under `src/`. `app/main.cpp` only calls it.
+- `tests/` holds GoogleTest tests and rapidcheck properties (`RC_GTEST_PROP`). Only files under
+  `tests/` may include GoogleTest or rapidcheck. Each test
+  executable links `GTest::gtest_main` and is registered with `gtest_discover_tests`, with no
+  extra arguments. The check runs every test that each one lists.
+- C++ files end in `.cpp` (source) or `.hpp` (header). The check rejects other extensions, and
+  any `.cpp` or `.hpp` that nothing compiles.
+- Add every new `.cpp` to `CMakeLists.txt` by name, without globbing. Define new targets below
+  `include(cmake/strict.cmake)`, so they get the strict flags.
+- A new dependency goes in `cmake/dependencies.cmake` with an exact URL and SHA-256, after the
+  owner approves it.
+
+## Writing
+
+For chat replies, commits, PRs, code comments and docs. Many readers are not native English
+speakers.
+
+- Short sentences and plain words. Lead with the result. Then what the reader needs to act: what
+  changed, what failed, what is left, what you did not verify.
+- Say what a technical idea does before you name it.
+- A chat reply fits one screen. Use a table for parallel facts and a numbered list for steps.
+  Keep every risk and open question.
+- Name files by repo-relative path.
+- Docs state rules and pointers, never project status. Status goes stale.
+- Commits and PRs describe the change only, with no tool or AI attribution.
+- PR title: `type(scope): what changed`, at most 72 characters. CI checks it. PR body: fill
+  `.github/pull_request_template.md`, one line per slot. One concern per PR, about 200 changed
+  lines at most. Open it with `gh pr create --assignee @me`, so the owner is assigned. Stack
+  bigger work as PRs whose base is the branch below. Squash merges make the PR title and body the
+  commit on `main`.
+
+## Review
+
+Review each PR on its own. Before a stack merges, review it once as a whole for problems between
+PRs only:
+
+```sh
+git diff $(git merge-base origin/main <top>)..<top>
+```

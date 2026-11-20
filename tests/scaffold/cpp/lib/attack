@@ -1,0 +1,149 @@
+# shellcheck shell=sh
+# Helpers for the scaffold-cpp attacks. An attack sources this file: . "$(dirname "$0")/lib/attack"
+# The runner renders the project as sample-tool, so the C++ namespace is sample_tool.
+
+# Adds src/extra.hpp, which declares `int sample_tool::extra(int)`, and src/extra.<ext> with the
+# body from stdin, and adds the source to the library.
+# Usage: add_extra [ext] <<'X' ... X
+add_extra() {
+  ext=${1:-cpp}
+  cat >src/extra.hpp <<'H'
+// Extra helpers.
+#pragma once
+
+namespace sample_tool {
+
+// Returns a number.
+[[nodiscard]] int extra(int value);
+
+} // namespace sample_tool
+H
+  cat >"src/extra.$ext"
+  add_to_library "src/extra.$ext"
+}
+
+# Adds a source file to the library target.
+# Usage: add_to_library <file>
+add_to_library() {
+  FILE=$1 perl -pi -e 's|^add_library\(sample_tool_lib src/sample_tool\.cpp|$& $ENV{FILE}|' CMakeLists.txt
+  grep -qF "$1)" CMakeLists.txt
+}
+
+# Adds a test file to the test executable.
+# Usage: add_test_file <file>
+add_test_file() {
+  FILE=$1 perl -pi -e 's|^add_executable\(sample_tool_test tests/sample_tool_test\.cpp|$& $ENV{FILE}|' CMakeLists.txt
+  grep -qF "$1)" CMakeLists.txt
+}
+
+# Appends test code from stdin to the test file, in its own anonymous namespace, and includes the
+# given standard headers.
+# Usage: add_tests [header...] <<'X' ... X
+add_tests() {
+  {
+    printf '\nnamespace {\n\n'
+    cat
+    printf '\n} // namespace\n'
+  } >>tests/sample_tool_test.cpp
+  for header in "$@"; do
+    HEADER=$header perl -pi -e 's|^#include <string>$|#include <$ENV{HEADER}>\n$&|' tests/sample_tool_test.cpp
+  done
+}
+
+# Makes the test file include src/extra.hpp.
+include_extra_in_tests() {
+  perl -pi -e 's|^#include "sample_tool.hpp"$|#include "extra.hpp"\n$&|' tests/sample_tool_test.cpp
+}
+
+# Appends a line to CMakeLists.txt.
+cmake_append() { printf '%s\n' "$1" >>CMakeLists.txt; }
+
+# Writes <dir>/clang-tidy, a fake that finds nothing.
+fake_tidy() {
+  mkdir -p "$1"
+  printf '#!/bin/sh\necho "LLVM version 23.1.5"\nexit 0\n' >"$1/clang-tidy"
+  chmod +x "$1/clang-tidy"
+}
+
+# extra() with a reinterpret_cast, which clang-tidy rejects.
+cast_body() {
+  cat <<'X'
+#include "extra.hpp"
+
+namespace sample_tool {
+
+int extra(int value) {
+  const long wide = value;
+  return *reinterpret_cast<const int *>(&wide);
+}
+
+} // namespace sample_tool
+X
+}
+
+# extra() with a shadowed name, which the compiler rejects (-Wshadow-all).
+shadow_body() {
+  cat <<'X'
+#include "extra.hpp"
+
+namespace sample_tool {
+
+int extra(int value) {
+  const int total = value;
+  const auto add = [total](int value) { return total + value; };
+  return add(1);
+}
+
+} // namespace sample_tool
+X
+}
+
+# A test that overflows a signed int, which UBSan stops.
+overflow_test() {
+  add_tests limits <<'X'
+TEST(Overflow, Adds) {
+  const volatile int big = std::numeric_limits<int>::max();
+  const int sum = big + 1;
+  EXPECT_NE(sum, 0);
+}
+X
+}
+
+# A test that reads past the end of a std::array, which the hardened standard library stops.
+out_of_bounds_test() {
+  add_tests array cstddef <<'X'
+struct Pair {
+  std::array<int, 2> first{};
+  int second = 0;
+};
+
+TEST(Bounds, Reads) {
+  const Pair pair;
+  const volatile std::size_t index = 2;
+  EXPECT_EQ(pair.first[index], 0);
+}
+X
+}
+
+# A test of extra(INT_MAX), which overflows unless extra() is uninstrumented.
+extra_overflow_test() {
+  include_extra_in_tests
+  add_tests limits <<'X'
+TEST(Extra, Adds) { EXPECT_NE(sample_tool::extra(std::numeric_limits<int>::max()), 0); }
+X
+}
+
+# Makes the Banner test fail.
+break_banner() {
+  perl -pi -e 's|starts_with\("sample-tool"\)|starts_with("nope")|' tests/sample_tool_test.cpp
+  grep -q '"nope"' tests/sample_tool_test.cpp
+}
+
+# Makes the Greet property fail for names of 3 or more characters.
+break_property() {
+  perl -pi -e 's|== "Hello, " \+ name \+ "!"|== "Hello, " + name + "!" \&\& name.size() < 3|' tests/sample_tool_test.cpp
+  grep -q 'name.size() < 3' tests/sample_tool_test.cpp
+}
+
+# Formats the C++ files with the pinned clang-format.
+fmt() { scripts/format; }

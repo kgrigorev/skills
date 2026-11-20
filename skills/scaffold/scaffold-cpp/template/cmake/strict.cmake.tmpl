@@ -1,0 +1,31 @@
+# The strict settings for every target the project defines. CMakeLists.txt includes this file
+# after the dependencies, so their targets keep their own flags and their warnings do not fail
+# the build, while every target added later gets these flags without having to ask for them.
+# scripts/check rejects a project file compiled without -Werror.
+# Agents: change this file only with the owner's approval.
+include_guard(GLOBAL)
+
+# clang-tidy and clangd come from another mise folder than the compiler and need the compiler's
+# own headers, such as <stdarg.h>. Naming that folder in compile_commands.json lets them find it.
+execute_process(
+  COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
+  OUTPUT_VARIABLE project_resource_dir OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+
+add_compile_options(
+  "-resource-dir=${project_resource_dir}"
+  # Warnings are errors, so a build is either clean or red.
+  -Werror -Wall -Wextra -Wpedantic
+  # Silent narrowing and sign changes between number types.
+  -Wconversion -Wsign-conversion -Wdouble-promotion
+  # A name that hides another name in an outer scope, including fields and lambdas.
+  -Wshadow-all
+  # C-style casts, casts that drop const, and 0 or NULL used as a pointer.
+  -Wold-style-cast -Wcast-qual -Wzero-as-null-pointer-constant
+  # Class hierarchies that delete through the wrong type or hide a virtual function.
+  -Wnon-virtual-dtor -Woverloaded-virtual
+  # Format strings that are not literals, and switch cases that fall through silently.
+  -Wformat=2 -Wimplicit-fallthrough
+  # Stray semicolons, undefined macros in #if, the comma operator, and functions without a
+  # declaration, which usually belong in an anonymous namespace.
+  -Wextra-semi -Wundef -Wcomma -Wmissing-prototypes)

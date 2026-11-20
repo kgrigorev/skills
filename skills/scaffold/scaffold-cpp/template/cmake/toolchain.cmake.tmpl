@@ -1,0 +1,25 @@
+# Picks the compiler that mise.toml pins. Agents: change it only with the owner's approval.
+#
+# mise puts a launcher script for clang++ on PATH. clang-tidy and clangd find the C++ standard
+# library and clang's config file next to the compiler named in compile_commands.json, and the
+# launcher's folder has neither. So the build names the real binary behind the launcher, which
+# clang reports as "InstalledDir".
+find_program(clang_launcher clang++ REQUIRED)
+execute_process(
+  COMMAND "${clang_launcher}" --version
+  OUTPUT_VARIABLE clang_version_text COMMAND_ERROR_IS_FATAL ANY)
+string(REGEX MATCH "clang version ([0-9.]+)" _ "${clang_version_text}")
+set(clang_version "${CMAKE_MATCH_1}")
+string(REGEX MATCH "InstalledDir: ([^\n]+)" _ "${clang_version_text}")
+set(clang_dir "${CMAKE_MATCH_1}")
+
+# The same pin as mise.toml. Another clang, such as Apple's, warns and optimises differently.
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../mise.toml" mise_toml)
+string(REGEX MATCH "\"conda:clangxx\" = \"([0-9.]+)\"" _ "${mise_toml}")
+if(NOT clang_version STREQUAL CMAKE_MATCH_1)
+  message(FATAL_ERROR
+    "clang++ on PATH is ${clang_version} (${clang_dir}); mise.toml pins ${CMAKE_MATCH_1}. "
+    "Run through mise: mise exec -- scripts/check")
+endif()
+
+set(CMAKE_CXX_COMPILER "${clang_dir}/clang++")

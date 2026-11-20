@@ -1,0 +1,86 @@
+name: scaffold-cpp
+
+# Renders the scaffold-cpp template into a sample project and runs the project's scripts/check.
+# A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-cpp/**
+      - .github/workflows/scaffold-cpp.yml
+      - tests/scaffold/cpp/**
+      - scripts/test-scaffold
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-cpp/**
+      - .github/workflows/scaffold-cpp.yml
+      - tests/scaffold/cpp/**
+      - scripts/test-scaffold
+  # The scaffold writes mise.lock from conda-forge on each run, and conda-forge can publish a new
+  # build of the same version. A weekly run catches a template that breaks without a change here.
+  schedule:
+    - cron: "29 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-cpp-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The mise version the template pins in its own CI (mise_version in scripts/scaffold).
+  MISE_VERSION: "2026.11.8"
+  ACTIONLINT_VERSION: "1.7.12"
+  SHELLCHECK_VERSION: "0.11.0"
+
+jobs:
+  scaffold-cpp:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux builds with libstdc++ and runs LeakSanitizer. macOS builds with libc++ and is the
+        # owner's platform. A project's own CI runs Linux only, so this job is where the template
+        # proves it works on both.
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only mise itself. The scaffold and the sample project install the tools they pin.
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+          cache: false
+
+      # LLVM from conda-forge is about 1.2 GB. The versions live in scripts/scaffold, so its hash
+      # is the cache key.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('skills/scaffold/scaffold-cpp/scripts/scaffold') }}
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold/scaffold-cpp/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Go developer new to C++"
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # ci.yml.tmpl would give every new project a red CI.
+      - name: Lint the sample project's CI workflows
+        run: |
+          mise exec "actionlint@$ACTIONLINT_VERSION" "shellcheck@$SHELLCHECK_VERSION" -- \
+            actionlint "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # Replays known attacks on the project rendered above: each must fail at its step, and each
+      # piece of good code must pass. A green attack means a gate stopped catching it.
+      - name: Replay the attacks on the sample project
+        run: |
+          scripts/test-scaffold cpp --project "$RUNNER_TEMP/sample-tool"
