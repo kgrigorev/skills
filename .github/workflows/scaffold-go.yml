@@ -1,0 +1,109 @@
+name: scaffold-go
+
+# Renders the scaffold-go template into a sample project and runs the project's scripts/check.
+# A red run means a project made from the template today would start red.
+on:
+  pull_request:
+    paths:
+      - skills/scaffold/scaffold-go/**
+      - .github/workflows/scaffold-go.yml
+      - tests/scaffold/go/**
+      - scripts/test-scaffold
+  push:
+    branches: [main]
+    paths:
+      - skills/scaffold/scaffold-go/**
+      - .github/workflows/scaffold-go.yml
+      - tests/scaffold/go/**
+      - scripts/test-scaffold
+  # The scaffold pins every version, but downloads can move or break (module proxy, release
+  # assets, the mise version). A weekly run catches that without a change here.
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-go-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Go, golangci-lint and rapid are pinned at the top of skills/scaffold/scaffold-go/scripts/scaffold.
+  # Keep MISE_VERSION equal to mise_version there, so CI tests the project you would get.
+  MISE_VERSION: "2026.11.8"
+  ACTIONLINT_VERSION: "1.7.12"
+  # From actionlint_<version>_checksums.txt of that release. Change both together.
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
+jobs:
+  scaffold-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Only mise itself. The scaffold installs Go and golangci-lint from the sample's mise.toml.
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          install: false
+          cache: false
+
+      # Downloaded modules, compiled packages and lint results, as in the template's ci.yml.
+      # The cache never replaces a saved key, so each run saves under its own key and restores
+      # the newest one.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: scaffold-go-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: scaffold-go-${{ runner.os }}-
+
+      - name: Render the template
+        run: |
+          sh skills/scaffold/scaffold-go/scripts/scaffold "$RUNNER_TEMP/sample-tool" sample-tool \
+            "A sample project that tests the template" "a Python developer new to Go"
+
+      # The config keys depend on the golangci-lint version. This finds a key the pinned version
+      # does not know, which a plain run may ignore.
+      - name: Verify the sample project's golangci-lint config
+        working-directory: ${{ runner.temp }}/sample-tool
+        run: mise exec go golangci-lint -- golangci-lint config verify --config .golangci.yml
+
+      # actionlint checks GitHub workflow files, and runs shellcheck on their scripts. A broken
+      # workflow template would give every new project a red CI.
+      - name: Lint the sample project's workflows
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" "$RUNNER_TEMP"/sample-tool/.github/workflows/*.yml
+
+      - name: Run the sample project's checks
+        run: |
+          "$RUNNER_TEMP/sample-tool/scripts/check"
+
+      # The sample's weekly explore workflow never runs here. Run its test command once and
+      # make sure its govulncheck pin resolves; a vulnerability report would not be a template
+      # defect, so only -version runs.
+      - name: Try the sample project's explore commands
+        working-directory: ${{ runner.temp }}/sample-tool
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          GOFLAGS: -mod=readonly
+        run: |
+          mise exec -- go test -race -shuffle=on -count=1 ./...
+          govulncheck=$(grep -o 'golang.org/x/vuln/cmd/govulncheck@[^ ]*' .github/workflows/explore.yml)
+          mise exec -- go run "$govulncheck" -version
+
+      # Replays known attacks (each must fail at its step) and good changes (each must pass)
+      # against the rendered project. A failure means a gate lets bad code through or rejects
+      # good code.
+      - name: Replay attacks on the sample project
+        run: scripts/test-scaffold go --project "$RUNNER_TEMP/sample-tool"

@@ -1,0 +1,284 @@
+#!/bin/sh
+# Runs every quality gate. People, agents, the git hook and CI all run this script.
+# It stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+
+# Run under the tool versions pinned in mise.toml, also from a shell where mise is not
+# activated (agent shells, git hooks). Naming the two tools makes mise install only them
+# when missing, not every tool in the user's global config.
+if [ -z "${CHECK_UNDER_MISE:-}" ]; then
+  command -v mise >/dev/null 2>&1 || {
+    echo 'mise is not on PATH. Install it: see README.md.' >&2
+    exit 1
+  }
+  # An absolute path, so a call from a subfolder (../../scripts/check) works too.
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  # Printed here, before mise starts: a mise.lock that lacks a pinned version fails inside mise.
+  printf '==> Tools (the versions in mise.toml, and no other mise config)\n'
+  # Only mise.toml may set these, not the caller: where modules come from, the C compiler and
+  # its flags, race detector options, which extra mise config files load, and GOCACHEPROG, a
+  # program that would hand go any compiled package or test binary it likes.
+  unset GOPROXY GOSUMDB GONOSUMDB GONOPROXY GOPRIVATE GOINSECURE GOVCS GOAUTH GOCACHEPROG \
+    CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_FFLAGS CGO_LDFLAGS GORACE \
+    MISE_ENV MISE_OVERRIDE_CONFIG_FILENAMES MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES
+  # MISE_LOCKED=1: install only what mise.lock records, with its URL and checksum. It is not
+  # set in mise.toml, because there it breaks `mise lock` for a new version.
+  CHECK_UNDER_MISE=1 MISE_LOCKED=1 exec mise exec go golangci-lint -- "$self" "$@"
+fi
+cd "$(dirname "$0")/.."
+
+# The same commit gives the same result on every machine, so nothing from the caller's
+# environment may change what is built or tested:
+# GOENV=off: ignore settings saved with `go env -w`. Settings such as GOPRIVATE go in the
+#   [env] table of mise.toml instead.
+# GOTOOLCHAIN=local: never switch to another Go than the pinned one.
+# GOWORK=off: a go.work file in a parent folder cannot change the build.
+# GOFLAGS: drop personal flags such as -tags; go.mod and go.sum are never edited.
+# GOTELEMETRY=off: no counter files written outside the project.
+# LC_ALL=C: sort and comm below order file names the same way everywhere.
+# The unset variables pick another platform, CPU level, experiment or runtime default.
+export GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS=-mod=readonly GOTELEMETRY=off LC_ALL=C
+unset GOOS GOARCH GO386 GOAMD64 GOARM GOARM64 GOEXPERIMENT GODEBUG GOFIPS140 CGO_ENABLED
+# Property tests draw the same inputs on every run (the weekly explore job draws new ones),
+# with rapid's defaults, and leave no files under testdata/rapid.
+export RAPID_SEED=1 RAPID_CHECKS=100 RAPID_STEPS=30 RAPID_NOFAILFILE=1
+unset RAPID_FAILFILE RAPID_SHRINKTIME RAPID_LOG RAPID_V RAPID_DEBUG RAPID_DEBUGVIS
+
+# Files that a build tag or a file name (_windows.go) leaves out of the build on this machine,
+# but that the owner approved. List each path, separated by spaces, for example
+# 'internal/sys/sys_windows.go'. No check here sees them, so each needs a CI job on its platform.
+allowed_hidden=''
+# Assembly, C and other non-Go files that the owner approved, listed the same way.
+allowed_foreign=''
+# Test files with a TestMain that the owner approved, listed the same way. A TestMain runs
+# before every test of its package and decides whether they run at all.
+allowed_testmain=''
+
+step() { printf '\n==> %s\n' "$1"; }
+
+# mise.toml may add folders to PATH (_.path in [env]). A folder inside the project could hold a
+# fake go, golangci-lint, mise or other tool this script runs, so no PATH entry may point into it.
+# Each entry is resolved from here, so "." and relative entries count too.
+root=$(pwd)
+root_physical=$(pwd -P)
+in_project=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+  real=$(cd "${dir:-.}" 2>/dev/null && pwd -P) || continue
+  case $real/ in
+  ("$root_physical"/*) printf '%s\n' "${dir:-.}" ;;
+  esac
+done)
+if [ -n "$in_project" ]; then
+  printf '%s\n' "$in_project"
+  echo 'PATH holds the folders above, inside the project. Remove them from PATH (in the shell, or _.path in mise.toml).' >&2
+  exit 1
+fi
+# The tools that run must be the ones mise installed, not others earlier on PATH.
+# Symlinked folders are resolved first: on CI, PATH reaches a tool through installs/<tool>/latest.
+physical() { [ -n "$1" ] && (cd -P "$(dirname "$1")" && printf '%s/%s\n' "$PWD" "${1##*/}"); }
+for tool in go golangci-lint; do
+  found=$(physical "$(command -v "$tool" || true)" || true)
+  installed=$(physical "$(mise which "$tool")")
+  if [ "$found" != "$installed" ]; then
+    echo "$tool runs from $found, not from the mise install $installed. Remove what puts it first on PATH." >&2
+    exit 1
+  fi
+done
+
+# Fail when a tool is not the version mise.toml pins: a mismatch explains local-vs-CI differences.
+pinned() { sed -n "s/^$1 = \"\(.*\)\"$/\1/p" mise.toml; }
+go_version=$(go env GOVERSION)
+lint_version=$(golangci-lint version --short)
+printf '%s, golangci-lint %s\n' "$go_version" "$lint_version"
+if [ "$go_version" != "go$(pinned go)" ] || [ "${lint_version#v}" != "$(pinned golangci-lint)" ]; then
+  echo "mise.toml pins go $(pinned go) and golangci-lint $(pinned golangci-lint). Run: mise install" >&2
+  exit 1
+fi
+# mise also loads mise.local.toml, .tool-versions, .config/mise/ and more. Any of them could put
+# other tools on PATH or set variables, so inside the project only mise.toml may count.
+extra_config=$(mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p' |
+  while IFS= read -r file; do
+    case $file in
+    ("$root/mise.toml" | "$root_physical/mise.toml") ;;
+    ("$root"/* | "$root_physical"/*) printf '%s\n' "$file" ;;
+    esac
+  done)
+if [ -n "$extra_config" ]; then
+  printf '%s\n' "$extra_config"
+  echo 'mise loads the files above. Remove them: only mise.toml sets the tools and their settings.' >&2
+  exit 1
+fi
+
+step 'Format (gofumpt, gci). Fix: golangci-lint fmt'
+golangci-lint fmt --config .golangci.yml --diff
+
+step 'Modules (go.mod and go.sum are tidy, the module cache is unchanged). Fix: go mod tidy'
+go mod tidy -diff
+# go checks go.sum only when it downloads a module, and against the hash file in the module
+# cache when it builds, but it never reads the cached source files again. An edit to them (an
+# agent may write to the cache) would change what is built. go mod verify hashes them.
+go mod verify || {
+  echo 'A module in the cache differs from what was downloaded. Run: go clean -modcache' >&2
+  exit 1
+}
+
+step 'Lint (golangci-lint, rules in .golangci.yml)'
+golangci-lint run --config .golangci.yml
+
+step 'Every file is checked, and nothing switches a check off'
+module=$(go list -m)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+# Every .go file that `go list` knows, as "F <path>" when it is built and "I <path>" when a build
+# tag (//go:build) or a file name (_windows.go, _arm64.go) leaves it out. Listed twice: lint and
+# build run without -race, the tests with it, so a file left out of either is never checked.
+files='{{ range .GoFiles }}F {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .CgoFiles }}F {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .TestGoFiles }}F {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .XTestGoFiles }}F {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .IgnoredGoFiles }}I {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .IgnoredOtherFiles }}I {{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}'
+{
+  go list -e -f "$files" ./...
+  go list -e -race -f "$files" ./...
+} | root=$root root_physical=$root_physical awk '{
+  path = substr($0, 3)
+  if (index(path, ENVIRON["root"] "/") == 1) path = substr(path, length(ENVIRON["root"]) + 2)
+  else if (index(path, ENVIRON["root_physical"] "/") == 1) path = substr(path, length(ENVIRON["root_physical"]) + 2)
+  print substr($0, 1, 2) path
+}' | sort -u >"$work/listed"
+# Assembly, C, C++, Objective-C, Fortran, SWIG and .syso object files are built into a package,
+# but no linter or test reads them: a Go function without a body can run any assembly. They need
+# the owner's approval: list each path in allowed_foreign, separated by spaces.
+foreign='{{ range .SFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .CFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .CXXFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .MFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .HFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .FFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .SwigFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .SwigCXXFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}{{ range .SysoFiles }}{{ $.Dir }}/{{ . }}{{ "\n" }}{{ end }}'
+not_go=$(go list -e -f "$foreign" ./... | while IFS= read -r file; do
+  file=${file#"$root"/}
+  file=${file#"$root_physical"/}
+  case " $allowed_foreign " in
+  (*" $file "*) ;;
+  (*) printf '%s\n' "$file" ;;
+  esac
+done)
+if [ -n "$not_go" ]; then
+  printf '%s\n' "$not_go"
+  echo 'The files above are not Go, so no check reads them. Remove them, or ask the owner to approve them.' >&2
+  exit 1
+fi
+# A package directly in cmd/ is a command (package main). Its files may print and exit, and it
+# need not run tests, so library code there would skip those rules: it goes under internal/.
+go list -e -f '{{ .ImportPath }} {{ .Name }}' ./... >"$work/names"
+not_main=$(awk -v cmd="$module/cmd/" '
+  index($1, cmd) == 1 && substr($1, length(cmd) + 1) !~ /\// && $2 != "main" { print $1 }' "$work/names")
+if [ -n "$not_main" ]; then
+  printf '%s\n' "$not_main"
+  echo 'The packages above sit directly in cmd/ but are not package main. Move them under internal/.' >&2
+  exit 1
+fi
+# A command may run no tests only while it declares no function but main and run, which funlen
+# and gocognit keep short. Any other function or method is logic, so the Test step below needs a
+# test for that command too. Format has already run, so a declaration starts its line as "func ".
+# shellcheck disable=SC2016 # $0 is awk's, not the shell's.
+sed -n 's/^F //p' "$work/listed" | grep -E '^cmd/[^/]+/[^/]+\.go$' | grep -v '_test\.go$' |
+  tr '\n' '\0' | xargs -0 awk '/^func / && !/^func (main|run)\(/ { print FILENAME }' |
+  sed "s#/[^/]*\$##; s#^#$module/#" | sort -u >"$work/commands_with_logic"
+# Files left out of the build on this machine are never linted, built or tested here. Rejecting
+# them also makes macOS and Linux check the same files.
+hidden=$(sed -n 's/^I //p' "$work/listed" | while IFS= read -r file; do
+  # The "(" before each pattern keeps old shells from ending $( ) at the ")".
+  case " $allowed_hidden " in
+  (*" $file "*) ;;
+  (*) printf '%s\n' "$file" ;;
+  esac
+done)
+if [ -n "$hidden" ]; then
+  printf '%s\n' "$hidden"
+  echo 'The files above are left out of the build, so no check sees them. Remove the build tag or rename the file.' >&2
+  exit 1
+fi
+# ./... skips folders named testdata or starting with "_" or ".", and nested modules (another
+# go.mod). Go files there are never linted or tested, so they may only be test fixtures.
+sed 's/^. //' "$work/listed" | sort -u >"$work/seen"
+# A tracked file that was deleted but not staged is gone, so it is left out.
+git ls-files -z -co --exclude-standard -- '*.go' | tr '\0' '\n' | while IFS= read -r file; do
+  [ ! -f "$file" ] || printf '%s\n' "$file"
+done | sort -u >"$work/git"
+outside=$(comm -13 "$work/seen" "$work/git" | grep -Ev '(^|/)testdata/' || true)
+if [ -n "$outside" ]; then
+  printf '%s\n' "$outside"
+  echo 'The files above are outside ./..., so no check sees them. Move them into a package, or into testdata/ when they are test fixtures.' >&2
+  exit 1
+fi
+# A package of this module that the build or the tests import must be checked too, even when
+# ./... skips its folder (testdata/, _tools/). Test packages (x_test, x.test) are not imports.
+go list -e -f '{{ .ImportPath }}' ./... | sort -u >"$work/packages"
+go list -e -deps -test -f '{{ if and .Module .Module.Main }}{{ .ImportPath }}{{ end }}' ./... |
+  sed 's/ \[.*\]$//' | grep -Ev '(_test|\.test)$' | sort -u >"$work/imported"
+unchecked=$(comm -13 "$work/packages" "$work/imported")
+if [ -n "$unchecked" ]; then
+  printf '%s\n' "$unchecked"
+  echo 'The code imports the packages above, but ./... skips their folders, so no check sees them. Move them.' >&2
+  exit 1
+fi
+# Comments that switch off a linter (//nolint, //godoclint:disable, ...) or the race detector
+# (//go:norace), change runtime defaults or reach into unexported symbols, and line directives
+# (//line, /*line*/), which move code to another reported file and line, so a rule that excludes
+# a path (cmd/) would apply to it. Searched in every file above, so a file that git ignores is
+# searched too. Test skips are found by forbidigo in Lint, by type.
+switch_off='//[[:space:]]*(nolint|lint:|godoclint:|#?nosec|gosec:disable|exhaustive:ignore|go:debug|go:linkname|go:norace)|#nosec|//line[[:space:]]|/\*line[[:space:]]'
+# shellcheck disable=SC2016 # $0 is awk's, not the shell's.
+sort -u "$work/seen" "$work/git" | tr '\n' '\0' |
+  switch_off=$switch_off xargs -0 awk '
+    $0 ~ ENVIRON["switch_off"] { print FILENAME ":" FNR ": " $0 }' >"$work/switched"
+if [ -s "$work/switched" ]; then
+  cat "$work/switched"
+  echo 'The lines above switch off a check. Remove them and fix the cause.' >&2
+  exit 1
+fi
+# A TestMain decides whether its package's tests run: it can skip m.Run, or change flags such as
+# -test.run or -rapid.checks first. So each one needs the owner's approval: list its file in
+# allowed_testmain. Format has already run, so a declaration starts its line as "func TestMain(".
+# shellcheck disable=SC2016 # $0 is awk's, not the shell's.
+testmain=$(sort -u "$work/seen" "$work/git" | grep '_test\.go$' | tr '\n' '\0' |
+  xargs -0 awk '/^func TestMain\(/ { print FILENAME }' | while IFS= read -r file; do
+  case " $allowed_testmain " in
+  (*" $file "*) ;;
+  (*) printf '%s\n' "$file" ;;
+  esac
+done)
+if [ -n "$testmain" ]; then
+  printf '%s\n' "$testmain"
+  echo 'The files above declare a TestMain, which decides whether the tests run. Remove it, or ask the owner to approve it.' >&2
+  exit 1
+fi
+for extra in .golangci.yaml .golangci.toml .golangci.json go.work; do
+  if [ -e "$extra" ]; then
+    echo "Remove $extra: it can change what the checks see." >&2
+    exit 1
+  fi
+done
+
+step 'Build'
+go build ./...
+
+step 'Test (race detector on; every package runs tests, except a command with only main and run)'
+# -count=1: Go's test cache does not know rapid's settings, so a result cached by another
+# `go test` run with other settings must not count. -v prints a "=== RUN" line per test, which
+# shows whether a package ran any; only the summary is shown unless a test fails.
+status=0
+go test -race -count=1 -v ./... >"$work/test" 2>&1 || status=$?
+if [ "$status" -ne 0 ]; then
+  cat "$work/test"
+  exit "$status"
+fi
+grep -E '^(ok|\?)[[:space:]]' "$work/test"
+# A package passes with no test run when it has no _test.go ("?"), when its _test.go has no test
+# ("[no tests to run]"), or when a TestMain never calls m.Run. Test code can print, so a "=== RUN"
+# line alone proves nothing when go test also says "[no tests to run]". Only a command (package
+# main directly in cmd/) with no function but main and run may run no tests: packages below it,
+# such as cmd/<name>/internal/, and a command's other functions hold logic and need tests.
+empty=$(awk -v cmd="$module/cmd/" -v logic="$work/commands_with_logic" '
+  BEGIN { while ((getline line < logic) > 0) has_logic[line] = 1 }
+  /^=== RUN / { runs++ }
+  $1 == "ok" { if (runs == 0 || index($0, "[no tests to run]")) print $2; runs = 0 }
+  $1 == "?" { if (index($2, cmd) != 1 || substr($2, length(cmd) + 1) ~ /\// || ($2 in has_logic)) print $2; runs = 0 }' "$work/test")
+if [ -n "$empty" ]; then
+  printf '%s\n' "$empty"
+  echo 'The packages above run no tests. Add a test to each (a command needs one once it declares a function other than main and run).' >&2
+  exit 1
+fi
+
+printf '\nAll checks passed.\n'

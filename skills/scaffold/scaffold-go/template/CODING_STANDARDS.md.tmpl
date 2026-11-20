@@ -1,0 +1,77 @@
+# Coding standards
+
+The reviewer applies these to every Go change. `scripts/check` already enforces formatting,
+lint, doc comments, error handling and the bans on printing and globals in the library, so they
+are not repeated here.
+
+The reader is {{reader}}. Every rule serves that reader.
+
+## Plain Go
+
+Use structs, functions, errors as values, and interfaces defined where they are used, plus the
+approved extras below. Generics, reflection, `unsafe`, goroutines and channels, and new
+interfaces need the owner's approval first. Once approved, they go into the list. The check
+already rejects `reflect` outside tests and `unsafe` (which cgo uses): an approval also removes
+its `depguard` entry in `.golangci.yml`.
+
+Approved extras:
+
+- None.
+
+## Comments
+
+A reader can follow a file from top to bottom by its comments alone.
+
+- Every package, type, function, constant and variable has a comment that starts with its name
+  and says what it is for and why. The check enforces that the comment exists.
+- Explain a Go construct briefly the first time a file uses it, if the reader may not know it.
+  For example `defer`, `:=`, a method value or `%w`. One short sentence.
+- No filler, no praise of the code, no restating the code in words.
+
+## Errors
+
+- Return `error` as the last result. Expected failures are errors, never panics.
+- Add what failed: `fmt.Errorf("read config %s: %w", path, err)`.
+- Compare with `errors.Is` and `errors.As`, never with `==` on a wrapped error.
+- Sentinel errors are package variables named `ErrX`. They are the one kind of package variable
+  the check allows.
+
+## Functions and names
+
+- A function that does I/O takes `ctx context.Context` as its first parameter.
+- The caller owns goroutines. Every goroutine has a way to stop.
+- Functions are short, do one thing and read top to bottom. Pull out a named helper instead of
+  nesting.
+- Names are short and do not repeat the package: `config.Load`, not `config.LoadConfig`.
+  Initialisms stay upper case: `ID`, `URL`.
+- Use the same name for the same concept everywhere: in code, tests and docs.
+
+## Dependencies
+
+A new `require` in `go.mod` needs the owner's approval.
+
+## Tests
+
+- New behaviour comes with a test. A bug fix comes with a test that was red before the fix.
+- Test names describe behaviour.
+- Table tests have named cases and use `t.Run`.
+- Call `t.Parallel()`, unless the test changes process state.
+- Write a property test with rapid when a rule holds for all inputs.
+- Helpers call `t.Helper()`. Use `t.TempDir()`, `t.Context()` and `t.Setenv()`, not the `os`
+  versions.
+- No test skips itself. The check finds `Skip`, `Skipf`, `SkipNow`, `testing.Short` and
+  `testing.Verbose` by type, under any name, and tests cannot read the environment or the
+  command line through `os` and `flag`. Look out for a skip through a type declared in the
+  module (a helper type that embeds `*testing.T`, an interface or a type parameter with a
+  `Skip` method), or through `reflect`. `os.UserHomeDir` and `os.TempDir` read the environment
+  too.
+- A fuzz target has seeds (`f.Add`); without them, `go test` runs it without calling its body.
+- A test asserts something, and does not return early on any condition. The check only sees
+  that a test ran, not what it checked, and there is no coverage gate.
+- A function with no error result does not turn an error into a zero value
+  (`if err != nil { return nil }`) unless "nil" is its documented answer. No linter sees it.
+- No work at import time through a blank variable (`var _ = setup()`). The check rejects
+  `init` and package variables, but not `_`. `var _ Interface = (*T)(nil)` is fine.
+- A `TestMain` is rare and needs the owner's approval (`allowed_testmain` in `scripts/check`).
+  It calls `m.Run()` and returns, and does not change which tests run (for example by setting
+  `-test.run`). The check finds an unapproved one, and a package where no test ran.

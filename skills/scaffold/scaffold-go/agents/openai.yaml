@@ -1,0 +1,3 @@
+interface:
+  display_name: "Scaffold Go"
+  short_description: "New Go project with agent rules and quality gates"

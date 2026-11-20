@@ -1,0 +1,21 @@
+// Package {{gopackage}} holds the logic of {{package}}: {{synopsis}}.
+// The command in cmd/{{package}} only calls it, so tests reach all the logic.
+package {{gopackage}}
+
+// Name is the program name. It starts every banner.
+const Name = "{{package}}"
+
+// Banner returns the line the program prints when it starts.
+func Banner() string {
+	return Name + ": {{synopsis}}"
+}
+
+// Greet returns a greeting for the person called name.
+// An empty name greets the world, so the result is never empty.
+func Greet(name string) string {
+	if name == "" {
+		name = "world"
+	}
+
+	return "Hello, " + name + "!"
+}

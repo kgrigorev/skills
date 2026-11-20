@@ -1,0 +1,209 @@
+# golangci-lint rules for {{package}}. Every finding fails scripts/check.
+# Agents: change this file only with the owner's approval.
+# scripts/check rejects //nolint and other inline switches: fix the cause instead.
+version: "2"
+
+run:
+  # go.mod and go.sum must already be complete; the linter never edits them.
+  modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofumpt # gofmt plus stricter rules, so formatting has one answer
+    - gci # one fixed import order: standard library, other modules, this module
+  settings:
+    gci:
+      sections: [standard, default, localmodule]
+  exclusions:
+    # A "Code generated ... DO NOT EDIT." header must not switch formatting off.
+    generated: disable
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # Bugs
+    - bidichk # hidden Unicode that makes code read differently from how it runs
+    - bodyclose # HTTP response bodies left open
+    - depguard # imports that need the owner's approval: see settings
+    - durationcheck # two durations multiplied together
+    - errorlint # error comparisons that break on wrapped errors
+    - exhaustive # a switch on an enum that misses a value
+    - gocheckcompilerdirectives # misspelled //go: directives, which Go ignores silently
+    - gomoddirectives # go.mod directives that bend the build: see settings
+    - gosec # common security mistakes
+    - makezero # append to a slice made with a non-zero length
+    - nilerr # returns nil after checking that err is not nil
+    - nilnesserr # returns a different, nil error after an err check
+    - nilnil # returns nil, nil: callers cannot tell "not found" from success
+    - noctx # network calls without a context, which cannot be cancelled
+    - predeclared # names that hide built-ins such as len, new or max
+    - reassign # reassigns another package's variables, such as io.EOF
+    - recvcheck # mixes value and pointer receivers on one type
+    - unparam # parameters every caller passes the same value for
+    - wastedassign # values assigned and never read
+    # Errors say what failed
+    - wrapcheck # errors from other packages returned without context
+    # Modern, plain Go
+    - gocritic # bug patterns and simpler equivalents
+    - modernize # older idioms that newer Go replaces, e.g. min, max, slices.Contains
+    - unconvert # needless type conversions
+    - usestdlibvars # literals where the standard library has a name, e.g. http.MethodGet
+    - misspell # common English misspellings in comments and strings
+    # Readable for the reader named in AGENTS.md
+    - godoclint # every declaration has a doc comment that starts with its name
+    - gocognit # functions too tangled to follow
+    - nestif # deeply nested if statements
+    - funlen # functions too long to read on one screen
+    - gochecknoglobals # mutable package-level state
+    - gochecknoinits # init functions, which run hidden at import
+    - forbidigo # printing, exiting, environment and system calls in the library; test skips
+    # Tests
+    - thelper # helpers without t.Helper(), so failures point at the wrong line
+    - tparallel # t.Parallel used in a way that does not run in parallel
+    - usetesting # os.MkdirTemp, os.Setenv, context.Background in tests: testing has safer versions
+  settings:
+    errcheck:
+      check-type-assertions: true # x := y.(T) panics; use the two-value form
+      check-blank: true # _ = f() hides an error; handle it
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # struct memory layout; noise for readable code
+        - shadow # flags correct code (a new err inside an if); Go leaves it out of go vet too
+    staticcheck:
+      checks: [all] # includes the checks on names and doc comment form
+    exhaustive:
+      default-signifies-exhaustive: false # a default case does not excuse a missing value
+    godoclint:
+      default: basic
+      enable: [require-doc, require-pkg-doc, start-with-name]
+      options:
+        require-doc:
+          ignore-unexported: false # unexported helpers are read too
+        start-with-name:
+          include-unexported: true
+    gomoddirectives:
+      replace-local: false # a replace to a local folder builds on one machine only
+      exclude-forbidden: true # `exclude` skips a dependency version without a trace in the code
+      ignore-forbidden: true # `ignore` hides folders from ./..., so from every gate
+      toolchain-forbidden: true # mise.toml pins the Go toolchain
+      tool-forbidden: true # tools are pinned in mise.toml, not in go.mod
+      go-debug-forbidden: true # godebug switches runtime behaviour off the defaults
+    gocognit:
+      min-complexity: 15
+    nestif:
+      min-complexity: 4
+    funlen:
+      lines: 60
+      statements: 40
+      ignore-comments: true
+    forbidigo:
+      # Match what a name refers to, not how it is spelled: an import alias, a *testing.T named
+      # x, a testing.TB parameter or a method value (skip := t.Skip) cannot hide a call. A call
+      # through an interface or a type parameter declared in this module is named after that
+      # type, so it is not matched: see "Not closed" in the skill's DESIGN.md.
+      analyze-types: true
+      # Example functions follow the same rules as other test code. By default forbidigo skips
+      # them, and an example that is never run is a plain function any test code can call. The
+      # exclusion rule below lets test files use fmt.Print*, which examples need for // Output:.
+      exclude-godoc-examples: false
+      # Each message that says "a command (cmd/<name>/)" is allowed in a command's own files:
+      # see the exclusion rules below. The others apply everywhere.
+      forbid:
+        # Each pattern names a way to write to the terminal, a global logger or the exit code.
+        # os.Stdin counts too: on a terminal, file descriptor 0 is open for writing.
+        - pattern: ^(fmt\.Print.*|print|println|os\.(Stdin|Stdout|Stderr|NewFile))$
+          msg: Return values from the library; print only in a command (cmd/<name>/).
+        # Only the package functions: a *slog.Logger or *log.Logger passed in as a parameter is
+        # the way to log from the library.
+        - pattern: ^(log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln|Default|SetOutput|SetFlags|SetPrefix|Output|Writer)|slog\.((Debug|Info|Warn|Error|Log)(Context)?|LogAttrs|Default|SetDefault|SetLogLoggerLevel))$
+          msg: Take a logger as a parameter, or return the information; log only in a command (cmd/<name>/).
+        # os.FindProcess gives a handle on the program's own process, which can then kill it.
+        # A *log.Logger's Fatal methods exit, and its Panic methods panic, like log.Fatal.
+        - pattern: ^(os\.(Exit|FindProcess)|runtime\.Goexit|log\.Logger\.(Fatal|Fatalf|Fatalln))$
+          msg: Return an error; only a command (cmd/<name>/) decides the exit code.
+        - pattern: ^(panic|log\.Logger\.(Panic|Panicf|Panicln))$
+          msg: Return an error instead; only a command (cmd/<name>/) may panic.
+        # Raw system calls reach around every rule above (write to file descriptor 1, kill the
+        # process). A command may use them, for example syscall.SIGTERM for os/signal.
+        - pattern: ^syscall\.
+          pkg: ^syscall$
+          msg: Use the os, os/signal and io packages; raw system calls only in a command (cmd/<name>/), or with the owner's approval.
+        - pattern: ^(unix|windows)\.
+          pkg: ^golang\.org/x/sys/(unix|windows)$
+          msg: Use the os, os/signal and io packages; raw system calls only in a command (cmd/<name>/), or with the owner's approval.
+        # A setting read from the environment is a hidden input, and a test that reads it can
+        # skip itself (if os.Getenv("SLOW") == "" { return }). exec.Cmd.Environ returns the
+        # whole environment too.
+        - pattern: ^(os\.(Getenv|LookupEnv|Environ|ExpandEnv)|exec\.Cmd\.Environ)$
+          msg: Take settings as parameters; only a command (cmd/<name>/) reads the environment. Tests set it with t.Setenv.
+        # The command line is a hidden input in the same way, and the global flag set can change
+        # the test flags (-test.run, -rapid.checks) or exit on a bad flag (flag.ExitOnError).
+        # A flag.FlagSet made with flag.ContinueOnError and given its arguments stays allowed.
+        - pattern: ^(os\.(Args|Executable)|flag\.(Parse|Parsed|Set|Lookup|Arg|Args|NArg|NFlag|Visit|VisitAll|CommandLine|ExitOnError))$
+          msg: Take arguments as parameters; only a command (cmd/<name>/) reads the command line.
+        # Code that asks whether it runs under test checks something other than what runs in
+        # production, so the test proves nothing.
+        - pattern: ^testing\.Testing$
+          pkg: ^testing$
+          msg: Behave the same under test; pass what differs as a parameter.
+        # A skipped test passes without checking anything. Matched by type, so a *testing.T
+        # under any name counts: t.Skip, x.Skipf, tb.SkipNow, (*testing.T).Skip, skip := t.Skip.
+        - pattern: ^testing\..*\.Skip(f|Now)?$
+          pkg: ^testing$
+          msg: A test must not skip itself; fix it or delete it.
+        # scripts/check always passes -v, so a test that returns under testing.Verbose() skips
+        # itself in every gate run and runs only in a plain go test.
+        - pattern: ^testing\.(Short|Verbose)$
+          pkg: ^testing$
+          msg: A test must not skip itself under -short or -v; fix it or delete it.
+        # In rapid, t.Skip drops an input: draw only valid inputs instead (rapid.Custom, Filter).
+        - pattern: ^rapid\.T\.Skip(f|Now)?$
+          pkg: ^pgregory\.net/rapid$
+          msg: A property must not skip inputs; draw only valid ones (rapid.Custom, Filter).
+    depguard:
+      rules:
+        # CODING_STANDARDS.md: reflection, unsafe and C code need the owner's approval. When the
+        # owner approves one, remove its entry here and add it to the approved extras there.
+        escape-hatches:
+          deny:
+            # A cgo file (import "C") imports unsafe too, so this also catches C code, which
+            # no check here reads. depguard does not match "C" itself.
+            - pkg: unsafe
+              desc: bypasses the type system (cgo uses it too); needs the owner's approval
+        reflection:
+          # Tests may compare values with reflect.DeepEqual.
+          files: ["!$test"]
+          deny:
+            - pkg: reflect
+              desc: bypasses static types; needs the owner's approval
+  exclusions:
+    # A "Code generated ... DO NOT EDIT." header must not switch the linters off. A real
+    # generated file needs the owner's approval and an exclusion rule below.
+    generated: disable
+    rules:
+      # A command's own files (package main in cmd/<name>/, not its tests and not packages below
+      # it) are where printing, exiting and reading the environment belong. Go regexps have no
+      # lookahead, so the path spells out "a file name that does not end in _test.go".
+      - path: ^cmd/[^/]+/([^/]*([^t/]|[^s/]t|[^e/]st|[^t/]est|[^_/]test)|t|st|est|test)\.go$
+        text: a command \(cmd/<name>/\)
+        linters: [forbidigo]
+      # A command reports a failure on stderr and exits; when that write fails too, it has
+      # nowhere left to report it (fmt.Fprintln(stderr, err) in run(args, stdout, stderr)).
+      - path: ^cmd/[^/]+/([^/]*([^t/]|[^s/]t|[^e/]st|[^t/]est|[^_/]test)|t|st|est|test)\.go$
+        text: fmt\.Fprint
+        linters: [errcheck]
+      # Examples print what their // Output: comment checks, so test files may use fmt.Print*.
+      # os.Stdout, os.Stderr and println stay forbidden there.
+      - path: _test\.go$
+        text: "use of `fmt\\.Print"
+        linters: [forbidigo]
+      # Table tests are long by nature.
+      - path: _test\.go$
+        linters: [funlen]
+
+issues:
+  # Show every finding, so one run lists all the work.
+  max-issues-per-linter: 0
+  max-same-issues: 0
