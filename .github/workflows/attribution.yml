@@ -7,6 +7,10 @@ name: attribution
 #
 # The check skips the lines added to scripts/no-ai-attribution and tests/attribution, which hold
 # the patterns it bans. Read changes to those by hand.
+#
+# No concurrency group, unlike the other workflows: a push and an edit of the PR text arrive
+# together, and a group could cancel the run that holds the newer text. On main, a group would
+# drop a queued run, so a commit would go unchecked.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -15,11 +19,6 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: attribution-${{ github.ref }}
-  # A newer PR run replaces an older one; every commit on main gets its own run.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   attribution:
