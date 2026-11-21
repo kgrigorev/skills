@@ -2,22 +2,42 @@
 # Runs a command with private tool stores, a clean environment and a PATH of mise plus the system,
 # so a scaffold test neither reads nor changes your own toolchains.
 # Usage: scripts/isolated-env <command...>, e.g. scripts/isolated-env scripts/test-scaffold haskell
-# Private: mise's store and its global and system config, ghcup, rustup and cargo, uv, Coursier,
-# Go's module cache, and TMPDIR. HOME stays, so git and gh still find their config. The stores live
-# in $SKILLS_ISOLATED_DIR (default ~/.cache/skills-isolated) and are reused, so only the first run
-# downloads the tools. Delete the folder to start over.
+# Private: mise's store and its global and system config, ghcup and cabal, rustup and cargo, uv,
+# Coursier's caches, Go's module and build caches, and TMPDIR, a new folder outside HOME for each
+# run, so a project rendered there finds no config file in HOME. mise also ignores config files in
+# HOME and above it. Still shared: the npm cache and pnpm store, which the TypeScript check does not
+# let the environment move, and the Scala CLI cache. All of these are content-addressed.
+# HOME stays, so git still finds its config. Tokens, proxy and CA settings and the locale pass
+# through. The stores live in $SKILLS_ISOLATED_DIR (default ~/.cache/skills-isolated) and are
+# reused, so only the first run downloads the tools. Delete the folder to start over.
 set -eu
 [ "$#" -ge 1 ] || { sed -n '4p' "$0" >&2; exit 2; }
 mise=$(command -v mise) || { echo 'mise is not on PATH.' >&2; exit 1; }
 dir=${SKILLS_ISOLATED_DIR:-$HOME/.cache/skills-isolated}
-mkdir -p "$dir/bin" "$dir/mise/data" "$dir/mise/cache" "$dir/mise/state" "$dir/tmp"
+mkdir -p "$dir/bin" "$dir/mise/data" "$dir/mise/cache" "$dir/mise/state"
 # Only mise, not the rest of its folder (Homebrew's bin holds ghc, cabal, python3 and more).
-ln -sf "$mise" "$dir/bin/mise"
-exec env -i HOME="$HOME" PATH="$dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
-  ${TERM:+TERM="$TERM"} ${LANG:+LANG="$LANG"} ${SSH_AUTH_SOCK:+SSH_AUTH_SOCK="$SSH_AUTH_SOCK"} \
+# Replaced only when it points elsewhere, so a run that starts at the same time still finds it.
+[ "$(readlink "$dir/bin/mise" || true)" = "$mise" ] || ln -sf "$mise" "$dir/bin/mise"
+
+# Variables passed through when set, put in front of the command as NAME=value for env.
+for name in TERM LANG LC_ALL LC_CTYPE SSH_AUTH_SOCK XDG_CONFIG_HOME GH_TOKEN GITHUB_TOKEN \
+  HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy \
+  SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS; do
+  eval "if [ -n \"\${$name:-}\" ]; then set -- \"$name=\${$name}\" \"\$@\"; fi"
+done
+
+base=${TMPDIR:-/tmp}
+tmp=$(mktemp -d "${base%/}/skills-isolated.XXXXXX")
+trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+trap 'exit 130' HUP INT TERM
+status=0
+env -i HOME="$HOME" PATH="$dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
   MISE_DATA_DIR="$dir/mise/data" MISE_CACHE_DIR="$dir/mise/cache" MISE_STATE_DIR="$dir/mise/state" \
   MISE_CONFIG_DIR="$dir/mise/config" MISE_GLOBAL_CONFIG_FILE="$dir/mise/config/config.toml" \
-  MISE_SYSTEM_CONFIG_FILE="$dir/mise/system.toml" \
-  GHCUP_INSTALL_BASE_PREFIX="$dir/ghcup" RUSTUP_HOME="$dir/rustup" CARGO_HOME="$dir/cargo" \
-  UV_PYTHON_INSTALL_DIR="$dir/uv/python" UV_CACHE_DIR="$dir/uv/cache" COURSIER_CACHE="$dir/coursier" \
-  GOPATH="$dir/go" GOMODCACHE="$dir/go/mod" TMPDIR="$dir/tmp" "$@"
+  MISE_SYSTEM_CONFIG_FILE="$dir/mise/system.toml" MISE_CEILING_PATHS="$HOME" \
+  GHCUP_INSTALL_BASE_PREFIX="$dir/ghcup" CABAL_DIR="$dir/cabal" \
+  RUSTUP_HOME="$dir/rustup" CARGO_HOME="$dir/cargo" \
+  UV_PYTHON_INSTALL_DIR="$dir/uv/python" UV_CACHE_DIR="$dir/uv/cache" \
+  COURSIER_CACHE="$dir/coursier" COURSIER_ARCHIVE_CACHE="$dir/coursier-archives" \
+  GOPATH="$dir/go" GOMODCACHE="$dir/go/mod" GOCACHE="$dir/go/cache" TMPDIR="$tmp" "$@" || status=$?
+exit "$status"
