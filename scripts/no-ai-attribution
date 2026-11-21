@@ -1,0 +1,408 @@
+#!/usr/bin/perl
+# Blocks AI attribution in commits, tags, notes, branch names and PR text. The
+# git hooks in .githooks and the attribution CI job run it.
+#
+# Modes:
+#   no-ai-attribution commit-msg <file>             git commit-msg hook
+#   no-ai-attribution pre-push [<remote>]           git pre-push hook (refs on stdin)
+#   no-ai-attribution range <from> <to> [<branch>]  CI: the commits in <from>..<to>
+#   no-ai-attribution scan [--files]                check text on stdin
+#
+# Commit messages, tags, notes and PR text get the strict check: AI credits,
+# trailers, AI coding product names, links and the robot emoji. File content
+# (pushed diffs) gets the credit check only, so docs may name tools.
+#
+# The strict check also keeps that text plain: no em or en dashes and no local
+# paths. It allows agent files and mise commands, since this repo's skills and
+# scaffolds are about them. New commit messages must also be conventional
+# commits with a subject of at most 72 characters, which GitHub shows in full.
+# The types and scopes are the ones .github/workflows/title.yml accepts.
+#
+# This script and tests/attribution hold the patterns they ban, so the lines
+# added to them are not checked. Read changes to them by hand.
+#
+# Exit codes: 0 clean, 1 violation or bad arguments.
+use strict;
+use warnings;
+use utf8;
+use Encode qw(decode FB_DEFAULT);
+
+binmode STDERR, ':encoding(UTF-8)';
+
+my $max_text = 1 << 20;
+my $max_line = 2000;
+
+# Word edges that also rule out module paths and identifiers (openai-go,
+# google.golang.org/genai, timestamp_code).
+my $B = qr/(?<![\w.\/-])/;
+my $E = qr/(?![\w\/]|[.-]\w)/;
+my $sep = qr/[\s-]+/;
+
+# AI coding products and agents. Never ordinary words or first names.
+my $product = qr/(?:claude${sep}?code|claude$sep(?:opus|sonnet|haiku|fable)(?:$sep[0-9][\w.]*)?|claude$sep[0-9][\w.]*$sep(?:opus|sonnet|haiku)|claude-[0-9][\w.-]*|claude$sep(?:desktop|agent${sep}sdk)|anthropic${sep}claude|chatgpt|openai${sep}codex|codex${sep}cli|github${sep}copilot|copilot$sep(?:coding${sep}agent|agent|chat|workspace)|cursor$sep(?:agents?|bugbot|composer)|bugbot|gemini$sep(?:cli|code${sep}assist)|gemini-[0-9][\w.-]*|aider|windsurf|opencode|ampcode|amp${sep}code|kilo${sep}?code|roo${sep}?code|roomote|devin${sep}ai|jetbrains${sep}junie|google${sep}jules|qwen${sep}coder?|openhands|codeium|tabnine|codewhisperer|amazon${sep}q${sep}developer)/i;
+my $product_re = qr/$B$product$E/i;
+
+# Tools as the object of a credit ("generated with X"). Names that are also
+# words or first names count only at the end of the clause or before a
+# product word, and Cursor, Amp and Cascade only when capitalised.
+my $clause_end = qr/(?=\s*(?:[.!;:)\]]|$|\s+(?:Code|AI|Agent|Agents|CLI|IDE|model|Opus|Sonnet|Haiku|Pro|Flash)\b))/;
+my $credit_tool = qr/(?:$product|gpt-?[0-9][\w.-]*|codex|copilot|genai)$E|(?i:claude|devin|jules|junie|cline|gemini)$clause_end|(?-i:Cursor|Amp|Cascade)$clause_end/i;
+
+my $verb = qr/(?:generated|written|wrote|created|authored|co-?authored|co-?written|produced|drafted|assisted|made|built|coded|implemented|developed|refactored|prepared|pair-?programmed|vibe-?coded|powered|done|composed|opened|submitted|fixed|updated|edited|rewritten|suggested|reviewed)/i;
+my $prep = qr/(?:with|by|using|via|through|in|from|in\s+collaboration\s+with|with\s+(?:the\s+)?(?:help|assistance)\s+(?:of|from))(?:\s*:)?\s+(?:the\s+)?(?:(?:anthropic|openai|google|github)(?:'s|’s)?\s+)?/i;
+my $generic_ai = qr/(?:an?\s+)?(?:ai|a\.i\.|llm|large\s+language\s+model|language\s+model|ai\s+(?:assistant|agent|tool|model)|coding\s+(?:agent|assistant))(?![\w-])/i;
+my $self = qr/\b(?:this|the)\s+(?:commit|change|changeset|patch|pr|pull\s+request)\b/i;
+
+my $email_re = qr/(?:\@anthropic\.com|\@openai\.com|\@cursor\.(?:com|sh)|\@ampcode\.com|\@aider\.chat|\@codeium\.com|\@windsurf\.com|\@cognition\.ai|\@kilocode\.ai|\@roocode\.com|junie\@jetbrains\.com|qwen-coder\@alibabacloud\.com|\@charm\.land|agent\@warp\.dev|\@all-hands\.dev|devin-ai-integration|copilot\@users\.noreply\.github\.com|copilot-swe-agent|gemini-code-assist|gemini-cli\@users|google-labs-jules|jetbrains-junie|kilo-code-bot|factory-droid|amazon-q-developer|opencode-agent|roomote|claude\[bot\]|cursor\[bot\]|codex\[bot\])/i;
+
+my $session_link = qr{(?:claude\.ai/(?:code|share|chat)|claude\.com/(?:claude-code|code)|chatgpt\.com/(?:codex|share|c/)|chat\.openai\.com/share|ampcode\.com/threads|cursor\.com/(?:agents|background-agent)|open-in-cursor|app\.devin\.ai|jules\.google(?:\.com)?/|opn?cd\.ai/s/|opencode\.ai/s/|copilot-workspace\.githubnext\.com|gh\.io/copilot)}i;
+my $product_link = qr{(?:\bclaude\.(?:ai|com)\b|anthropic\.com/claude|\bampcode\.com\b|\bcursor\.com\b|\bdevin\.ai\b|\baider\.chat\b|\bwindsurf\.com\b|\bkilocode\.ai\b|\bopencode\.ai\b|/tree/(?:claude|codex|copilot|cursor)/)}i;
+my $marker = qr/(?:COPILOT CODING AGENT|CURSOR_AGENT_PR_BODY|\bClaude (?:finished|is working)\b)/;
+
+# Plain, public text: em and en dashes and local paths do not belong in commits
+# and PR text.
+my @house_style = (
+    [qr/[\x{2013}\x{2014}]/ => 'em or en dash'],
+    [qr{/Users/\w}          => 'local path'],
+);
+
+sub house_style_reason {
+    my ($line) = @_;
+    for my $rule (@house_style) {
+        return $rule->[1] if $line =~ $rule->[0];
+    }
+    return;
+}
+
+# Trailer keys such as Claude-Session, Amp-Thread-ID, Codex-Task, AI-Assisted.
+my $key_ai = qr/^(?:claude|anthropic|chatgpt|openai|codex|copilot|cursor|aider|windsurf|opencode|amp|ai|llm|genai)$/i;
+my $key_meta = qr/^(?:session|thread|conversation|generated|assisted|task|agent|assistant|run|prompt|chat)$/i;
+my $key_credit = qr/(?:-by|^co-?author(?:ed)?|-with|^(?:agent|model|assistant|ai-assistant|tool))$/i;
+
+sub identity_is_ai {
+    my ($s) = @_;
+    return 0 unless defined $s && $s =~ /\S/;
+    $s = substr($s, 0, 500);
+    return 1 if $s =~ $email_re or $s =~ /\((?:aider|ai)\)/i;
+    my ($name, $email) = $s =~ /^\s*(.*?)\s*(?:<([^>]*)>)?\s*$/;
+    $name //= '';
+    $name =~ s/^["']+|["']+$//g;
+    return 1 if $name =~ /\[bot\]/i
+        && $name =~ /(?:jules|devin|copilot|claude|cursor|codex|gemini|roomote|amp|aider|openhands|sweep|junie|kilo|droid|opencode|amazon-q|q-developer|windsurf|qwen)/i;
+    return 1 if $name =~ /^$product$/i;
+    return 1 if $name =~ /^(?:copilot|codex|cursor|cascade|chatgpt|openai|gpt-?[0-9][\w.-]*|claude-[\w.-]+|gemini-[\w.-]+|cursor-agent|qwen-coder|crush|warp|openhands)(?:\s+(?:agent|cli|ai|code|assist|[0-9][\w.]*|\(.*\)))*$/i;
+    my $ambiguous = qr/(?:claude|devin|jules|junie|amp|gemini|cline|cody)/i;
+    return 1 if $name =~ /^$ambiguous(?:\s+(?:ai|agent|assistant|bot|opus|sonnet|haiku|pro|flash|[0-9][\w.]*)\b|\s*\((?:anthropic|google|ai)\)|:\S)/i;
+    return 1 if $name =~ /^$ambiguous$/i && (!defined $email || $email eq '');
+    return 0;
+}
+
+# Markdown and HTML reduced to plain words. Comments and alt/title text are
+# kept, since they stay in the source of a PR or commit.
+sub plain {
+    my ($s) = @_;
+    $s = substr($s, 0, $max_line);
+    $s =~ s/<!--(.*?)-->/ $1 /g;
+    $s =~ s/<[a-zA-Z][^<>]{0,500}?\b(?:alt|title|aria-label)\s*=\s*"([^"]{0,500})"[^<>]{0,500}>/ $1 /g;
+    $s =~ s/<\/?[a-zA-Z][^<>]{0,500}>/ /g;
+    $s =~ s/&nbsp;|&#160;/ /g;
+    $s =~ s/&amp;/&/g; $s =~ s/&lt;/</g; $s =~ s/&gt;/>/g; $s =~ s/&quot;/"/g; $s =~ s/&#39;|&apos;/'/g;
+    $s =~ s/!?\[([^\[\]\n]{0,500})\]\([^()\s]{0,2000}\)/$1/g;
+    $s =~ s/\[([^\[\]\n]{0,500})\]\[[^\[\]\n]{0,100}\]/$1/g;
+    $s =~ s/(?<!\w)[*_~]+|[*_~]+(?!\w)//g;
+    $s =~ s/`+//g;
+    $s =~ s/\s+/ /g;
+    return $s;
+}
+
+# Does this plain text credit an AI tool?
+sub credits_ai {
+    my ($p) = @_;
+    return $p =~ /\b$verb\s+(?:[\w-]+\s+)?$prep(?:$credit_tool)/
+        || $p =~ /\b(?i:claude|chatgpt|copilot|codex|gemini|aider|devin|jules|cline|junie|windsurf|gpt-?[0-9][\w.]*)-(?:generated|assisted|written|authored)\b/
+        || $p =~ /\b(?-i:Cursor|Amp)-(?:generated|assisted|written|authored)\b/
+        || $p =~ /\b(?:$product|Claude|Devin|Jules|ChatGPT|Copilot|Codex)\s+(?:wrote|generated|authored|created)\s+(?:this|the|most|parts?|all)\b/
+        || $p =~ /\b(?:used|using)\s+(?:$product|claude|chatgpt|copilot|codex|$generic_ai)\s+to\s+(?:write|generate|draft|create|author|produce)\b/i
+        || $p =~ /^\W*$verb\s+$prep$generic_ai(?:\s+(?:assistant|agent|tool|model))?\s*[.!]?\s*$/
+        || $p =~ /^\W*(?:ai|llm)-(?:generated|assisted|written)\W*$/i
+        || $p =~ /$self\s+(?:is|was|has\s+been)\s+(?:\w+\s+)?(?:ai|llm)-(?:generated|assisted|written)\b/i
+        || $p =~ /$self[^.]{0,200}?\b$verb\s+$prep$generic_ai/;
+}
+
+# Findings for one text. $strict adds trailers, product names, product links
+# and the robot emoji.
+sub find_violations {
+    my ($text, $strict) = @_;
+    my @found;
+    $text = substr($text, 0, $max_text) if length $text > $max_text;
+    my @lines = split /\r?\n/, $text;
+    for my $i (0 .. $#lines) {
+        my $line = substr($lines[$i], 0, $max_line);
+        next unless $line =~ /\S/;
+        my $p = plain($line);
+        my $reason;
+        if ($strict) {
+            if ($line =~ /\x{1F916}/) {
+                $reason = 'robot emoji';
+            } elsif (my ($key, $value) = $line =~ /^[\s>*+-]*([A-Za-z][\w-]{0,60})\s*:\s*(\S.{0,500})/) {
+                my @tokens = split /-/, $key;
+                if ((grep { /$key_ai/ } @tokens) && (grep { /$key_meta/ } @tokens)) {
+                    $reason = "trailer \"$key\" names an AI tool or session";
+                } elsif ($key =~ $key_credit && (identity_is_ai($value) || plain($value) =~ $product_re)) {
+                    $reason = "trailer \"$key\" credits an AI tool";
+                }
+            }
+        }
+        $reason //= 'credits an AI tool' if credits_ai($p);
+        $reason //= 'links to an AI tool session' if $line =~ $session_link;
+        $reason //= 'AI tool address' if $line =~ $email_re;
+        if ($strict && !$reason) {
+            $reason = 'names an AI coding product' if $p =~ $product_re || $line =~ $marker;
+            $reason //= 'links to an AI tool' if $line =~ $product_link;
+            $reason //= house_style_reason($line);
+        }
+        push @found, sprintf('line %d: %s: %s', $i + 1, $reason, trim($line)) if $reason;
+    }
+    # Credits wrapped over several lines of one paragraph.
+    if ($strict && !@found) {
+        my $start = 0;
+        for my $para (split /\n[ \t]*\n/, join "\n", @lines) {
+            my @pl = split /\n/, $para;
+            if (@pl > 1 && @pl <= 50 && credits_ai(plain(join ' ', map { substr($_, 0, $max_line) } @pl))) {
+                push @found, sprintf('lines %d-%d: credits an AI tool: %s', $start + 1, $start + @pl, trim(join ' ', @pl));
+            }
+            $start += @pl + 1;
+        }
+    }
+    return @found;
+}
+
+sub find_identity_violations {
+    my ($label, $ident) = @_;
+    return () unless defined $ident && length $ident;
+    $ident =~ s/\s+\d+\s+[+-]\d{4}\s*$//;    # git var appends a timestamp
+    return identity_is_ai($ident) ? ("$label names an AI tool: $ident") : ();
+}
+
+sub trim {
+    my $s = substr(shift, 0, 400);
+    $s =~ s/^\s+//;
+    $s =~ s/\s+\z//;
+    return length $s > 160 ? substr($s, 0, 157) . '...' : $s;
+}
+
+sub read_file {
+    my ($path) = @_;
+    return undef unless -f $path;
+    open my $fh, '<:raw', $path or return undef;
+    my $data = '';
+    read $fh, $data, $max_text;
+    close $fh;
+    return decode('UTF-8', $data, FB_DEFAULT);
+}
+
+# Runs git with stderr silenced and returns stdout, or undef on failure.
+sub git_out {
+    my @cmd = @_;
+    open my $saved, '>&', \*STDERR or die;
+    open STDERR, '>', '/dev/null';
+    my $ok = open my $fh, '-|', 'git', @cmd;
+    open STDERR, '>&', $saved;
+    return undef unless $ok;
+    local $/;
+    my $out = <$fh>;
+    close $fh;
+    return undef if $?;
+    return decode('UTF-8', $out // '', FB_DEFAULT);
+}
+
+sub report_text {
+    my ($what, @found) = @_;
+    my %seen;
+    @found = grep { !$seen{$_}++ } @found;
+    my $out = "Blocked: this text carries AI attribution or breaks the commit conventions.\n";
+    $out .= "$what\n" if $what;
+    $out .= "  $_\n" for @found[0 .. ($#found > 19 ? 19 : $#found)];
+    $out .= "  ... and " . (@found - 20) . " more\n" if @found > 20;
+    return $out . "Fix it and try again. Do not bypass this check.\n";
+}
+
+sub report { print STDERR report_text(@_) }
+
+# --- git commit-msg ---------------------------------------------------------
+
+# New commits need a conventional subject that GitHub shows in full. Merges,
+# reverts and autosquash commits keep git's own wording. The pattern is the one
+# in .github/workflows/title.yml, so a commit that passes here passes as a PR
+# title too. Change both together.
+sub subject_violations {
+    my ($head, $comment) = @_;
+    my ($subject) = grep { /\S/ && !/^\Q$comment\E/ } split /\r?\n/, $head;
+    return () if !defined $subject || $subject =~ /^(?:Merge |Revert |(?:fixup|squash|amend)! )/;
+    my @found;
+    push @found, "subject is not a conventional commit (type(scope): summary): $subject"
+        unless $subject =~ /^(?:feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(?:\([a-z0-9-]+\))?!?: [^ ]/;
+    push @found, sprintf('subject has %d characters, the limit is 72: %s', length $subject, $subject) if length $subject > 72;
+    return @found;
+}
+
+# Git keeps comment lines unless the editor was used, and the hook is not told
+# which, so the whole message is checked. A verbose diff below the scissors
+# line only gets the file-content check.
+sub commit_msg {
+    my ($file) = @_;
+    my $msg = read_file($file) // '';
+    my $c = git_out('config', '--get', 'core.commentString') // git_out('config', '--get', 'core.commentChar') // '#';
+    $c =~ s/\s+//g;
+    $c = '#' if $c eq '' || $c eq 'auto';
+    my ($head, $tail) = split /^(?:\Q$c\E|#|;) -+ >8 -+\n/m, $msg, 2;
+    my @found = find_violations($head // '', 1);
+    push @found, subject_violations($head // '', $c);
+    if (defined $tail) {
+        my (@diff, @other);
+        for (split /\n/, $tail) {
+            if (/^(?:diff |index |@@|[+\- ]|\\ No newline|new file|deleted file|similarity|rename |old mode|new mode)/) { push @diff, $_ } else { push @other, $_ }
+        }
+        push @found, find_violations(join("\n", @diff), 0), find_violations(join("\n", @other), 1);
+    }
+    push @found, find_identity_violations('author', git_out('var', 'GIT_AUTHOR_IDENT'));
+    push @found, find_identity_violations('committer', git_out('var', 'GIT_COMMITTER_IDENT'));
+    if (@found) { report('In the commit message or identity:', @found); exit 1 }
+    exit 0;
+}
+
+# --- git pre-push -----------------------------------------------------------
+
+# Lines added by one commit, or between two trees. The diff of a merge commit
+# is empty unless git is told how to combine it, so range also checks the
+# lines a branch adds as a whole. This script and its test fixtures hold the
+# patterns it bans, so their lines are not checked.
+sub added_lines {
+    my @revs = @_;
+    my $diff = git_out('diff-tree', '-p', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-commit-id', '--root', @revs,
+        '--', ':(top,exclude)scripts/no-ai-attribution', ':(top,exclude)tests/attribution') // '';
+    return join "\n", map { substr($_, 1) } grep { /^\+(?!\+\+ )/ } split /\n/, $diff;
+}
+
+sub branch_violations {
+    my ($ref) = @_;
+    return $ref =~ m{^refs/heads/(?:claude|codex|copilot|cursor|devin|opencode|aider|windsurf|junie|jules)/}i
+        ? ("ref $ref: branch name names an AI tool") : ();
+}
+
+sub check_commits {
+    my ($range, $budget) = @_;
+    my @found;
+    for my $sha (split /\n/, git_out('rev-list', @$range) // '') {
+        my $short = substr($sha, 0, 12);
+        push @found, map { "commit $short: $_" } find_violations(git_out('log', '-1', '--format=%B', $sha) // '', 1);
+        push @found, map { "commit $short: $_" }
+            find_identity_violations('author', git_out('log', '-1', '--format=%an <%ae>', $sha)),
+            find_identity_violations('committer', git_out('log', '-1', '--format=%cn <%ce>', $sha));
+        if ($$budget > 0) {
+            my $added = added_lines($sha);
+            $$budget -= length $added;
+            push @found, map { "commit $short (added lines): $_" } find_violations($added, 0);
+        }
+    }
+    return @found;
+}
+
+sub pre_push {
+    my ($remote) = @_;
+    my $zero = qr/^0+$/;
+    # Commits the remote already has, or that are on any remote's main line,
+    # are not checked again.
+    my @known;
+    push @known, "--remotes=$remote" if defined $remote && defined git_out('config', '--get', "remote.$remote.url");
+    for my $ref (split /\n/, git_out('for-each-ref', '--format=%(refname)', 'refs/remotes') // '') {
+        push @known, $ref if $ref =~ m{^refs/remotes/[^/]+/(?:HEAD|master|main)$};
+    }
+    my $budget = 20 * $max_text;
+    my @found;
+    while (my $line = <STDIN>) {
+        chomp $line;
+        my ($local_ref, $local_sha, $remote_ref, $remote_sha) = split ' ', $line;
+        next unless defined $local_sha && $local_sha =~ /^[0-9a-f]+$/ && $local_sha !~ $zero;
+        push @found, branch_violations($remote_ref) if defined $remote_ref;
+        my $have_remote = $remote_sha && $remote_sha !~ $zero && defined git_out('cat-file', '-e', "$remote_sha^{object}");
+        if (($remote_ref // '') =~ m{^refs/notes/}) {
+            my @blobs = $have_remote
+                ? map { (split ' ')[3] } grep { /^:\d+ \d+ \w+ \w+ [AM]/ } split /\n/, git_out('diff-tree', '-r', '--no-renames', $remote_sha, $local_sha) // ''
+                : map { (split ' ')[2] } grep { / blob / } split /\n/, git_out('ls-tree', '-r', $local_sha) // '';
+            for my $blob (@blobs) {
+                push @found, map { "note $blob: $_" } find_violations(git_out('cat-file', 'blob', $blob) // '', 1);
+            }
+            next;
+        }
+        # Annotated tags, possibly nested: check every tag message and tagger.
+        my $tip = $local_sha;
+        for (1 .. 10) {
+            my $type = git_out('cat-file', '-t', $tip) // '';
+            $type =~ s/\s+//g;
+            last unless $type eq 'tag';
+            my $obj = git_out('cat-file', '-p', $tip) // '';
+            my ($header, $body) = split /\n\n/, $obj, 2;
+            my ($tagger) = ($header // '') =~ /^tagger (.*)$/m;
+            push @found, map { "tag $local_ref: $_" } find_violations($body // '', 1), find_identity_violations('tagger', $tagger);
+            ($tip) = ($header // '') =~ /^object (\w+)$/m or last;
+        }
+        my $type = git_out('cat-file', '-t', $tip) // '';
+        $type =~ s/\s+//g;
+        next unless $type eq 'commit';
+        my @range = ($tip, '--not', @known);
+        push @range, $remote_sha if $have_remote;
+        push @found, check_commits(\@range, \$budget);
+    }
+    if (@found) { report('In what is being pushed (reword or rename it first):', @found); exit 1 }
+    exit 0;
+}
+
+# --- CI ---------------------------------------------------------------------
+
+# Every commit in <from>..<to>, with no remote refs left out, and the lines <to>
+# adds over the merge base, which is what a squash merge lands. Fails when an
+# end is not a commit or the range is empty, so a broken checkout cannot pass
+# by checking nothing.
+sub range {
+    my ($from, $to, $branch) = @_;
+    my @sha;
+    for my $rev ($from, $to) {
+        my $sha = defined $rev && $rev =~ /^[^-]/ ? git_out('rev-parse', '--verify', '--quiet', "$rev^{commit}") : undef;
+        defined $sha or do { print STDERR "Not a commit: " . ($rev // '(none)') . "\n"; exit 1 };
+        chomp $sha;
+        push @sha, $sha;
+    }
+    my $count = git_out('rev-list', '--count', $sha[1], '--not', $sha[0]) // 0;
+    $count =~ s/\s+//g;
+    if (!$count) { print STDERR "No commits in $from..$to, so nothing would be checked.\n"; exit 1 }
+    my $budget = 20 * $max_text;
+    my @found = check_commits([$sha[1], '--not', $sha[0]], \$budget);
+    push @found, branch_violations("refs/heads/$branch") if defined $branch && length $branch;
+    my $base = git_out('merge-base', $sha[0], $sha[1]);
+    if (defined $base) {
+        chomp $base;
+        push @found, map { "added lines: $_" } find_violations(added_lines($base, $sha[1]), 0);
+    }
+    if (@found) { report("In $from..$to (reword or rename it first):", @found); exit 1 }
+    exit 0;
+}
+
+# --- main -------------------------------------------------------------------
+
+my $mode = shift @ARGV // '';
+
+if ($mode eq 'scan') {
+    my $strict = !(@ARGV && $ARGV[0] eq '--files');
+    local $/;
+    my @found = find_violations(decode('UTF-8', scalar(<STDIN>) // '', FB_DEFAULT), $strict);
+    if (@found) { report('', @found); exit 1 }
+    exit 0;
+}
+
+commit_msg($ARGV[0]) if $mode eq 'commit-msg' && @ARGV == 1;
+pre_push(shift @ARGV) if $mode eq 'pre-push';
+range(@ARGV) if $mode eq 'range' && (@ARGV == 2 || @ARGV == 3);
+
+print STDERR "usage: $0 commit-msg <file> | pre-push [<remote>] | range <from> <to> [<branch>] | scan [--files]\n";
+exit 1;

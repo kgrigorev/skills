@@ -1,0 +1,7 @@
+fix(scaffold-scala): keep JVM option variables out of the check (#36)
+
+Makes the Scala check run its JVMs without `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` and `_JAVA_OPTIONS`.
+
+Every JVM reads these variables, so one set in the shell could load a `-javaagent` into scalafmt, the compiler or the tests and change what they report.
+
+Scala CLI downloads in its native code and ignores them: a download with a dead proxy in `JAVA_TOOL_OPTIONS` still worked, so unsetting them breaks no proxy setup. A new case sets all three to an option no JVM accepts and stays green. All 175 Scala cases pass locally on macOS.

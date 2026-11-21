@@ -15,6 +15,7 @@ jobs:
       - name: PR title is a conventional commit of at most 72 characters
         env:
           TITLE: ${{ github.event.pull_request.title }}
+        # The commit-msg check in scripts/no-ai-attribution uses the same pattern. Change both.
         run: |
           pattern='^(feat|fix|docs|refactor|test|build|ci|chore|perf|revert)(\([a-z0-9-]+\))?!?: [^ ].*$'
           if ! printf '%s' "$TITLE" | grep -Eq "$pattern" || [ "${#TITLE}" -gt 72 ]; then

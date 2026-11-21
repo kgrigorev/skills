@@ -1,0 +1,114 @@
+#!/bin/sh
+# Tests scripts/no-ai-attribution. Usage: scripts/test-attribution
+#
+# Text fixtures in tests/attribution, one case per file:
+#   blocked/        scan (the strict check for commit messages and PR text) rejects it
+#   allowed/        scan accepts it
+#   files-blocked/  scan --files (the check for added lines) rejects it
+#   files-allowed/  scan --files accepts it
+# Then a few cases run the git modes in a throwaway repo, with the banned text from git/. This
+# file holds no banned text itself, since only tests/attribution is exempt from the check.
+set -eu
+repo=$(cd "$(dirname "$0")/.." && pwd)
+check=$repo/scripts/no-ai-attribution
+fixtures=$repo/tests/attribution
+failed=0
+
+fail() {
+  echo "FAIL: $*" >&2
+  failed=1
+}
+
+# expect <pass|block> <name> <command...>: runs the command and compares its exit status.
+expect() {
+  want=$1 name=$2
+  shift 2
+  if "$@" >"$work/out" 2>&1; then got=pass; else got=block; fi
+  if [ "$got" = "$want" ]; then
+    echo "ok: $name"
+  else
+    fail "$name: wanted $want, got $got"
+    sed 's/^/  /' "$work/out" >&2
+  fi
+}
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/test-attribution.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+for dir in blocked allowed files-blocked files-allowed; do
+  case $dir in
+    blocked | files-blocked) want=block ;;
+    *) want=pass ;;
+  esac
+  case $dir in
+    files-*) mode='scan --files' ;;
+    *) mode=scan ;;
+  esac
+  for f in "$fixtures/$dir"/*.txt; do
+    expect "$want" "$dir/$(basename "$f")" sh -c "\"\$0\" $mode <\"\$1\"" "$check" "$f"
+  done
+done
+
+# --- git modes -------------------------------------------------------------
+
+mkdir "$work/hooks" "$work/repo"
+cd "$work/repo"
+git init -q -b main
+git config user.name 'Test User'
+git config user.email test@example.com
+git config core.hooksPath "$work/hooks"
+git config commit.gpgsign false
+
+commit() { # commit <file> <line> <message> [git commit options...]
+  file=$1 line=$2 msg=$3
+  shift 3
+  echo "$line" >>"$file"
+  git add "$file"
+  git commit -q -m "$msg" "$@"
+}
+
+commit README 'A project.' 'docs: start the readme'
+base=$(git rev-parse HEAD)
+
+git switch -q -c feature
+commit notes 'Plain notes.' 'docs(notes): add notes'
+expect pass 'range: clean branch' "$check" range "$base" HEAD feature
+expect block 'range: AI branch prefix' "$check" range "$base" HEAD claude/notes
+expect block 'range: empty range' "$check" range HEAD HEAD
+expect block 'range: missing commit' "$check" range 0000000000000000000000000000000000000001 HEAD
+expect block 'range: no base' "$check" range '' HEAD
+
+git switch -q -c trailer
+commit notes 'More notes.' "$(cat "$fixtures/git/trailer-message.txt")"
+expect block 'range: AI trailer' "$check" range "$base" HEAD trailer
+
+git switch -q -c bot feature
+commit notes 'Bot notes.' 'docs(notes): bot notes' --author "$(cat "$fixtures/git/bot-author.txt")"
+expect block 'range: bot author' "$check" range "$base" HEAD bot
+
+git switch -q -c credit feature
+commit notes "$(cat "$fixtures/git/credit-line.txt")" 'docs(notes): credit in a file'
+expect block 'range: credit line added by a commit' "$check" range "$base" HEAD credit
+
+# A merge commit has no diff of its own, so a line its resolution adds is caught only by the
+# check of everything the branch adds.
+git switch -q main
+commit other 'Other work.' 'docs(other): other work'
+git switch -q -c merged feature
+git merge -q --no-ff --no-commit main >/dev/null 2>&1
+cat "$fixtures/git/credit-line.txt" >>notes
+git add notes
+git commit -q -m 'Merge branch main into merged'
+expect block 'range: credit line added by a merge' "$check" range "$base" HEAD merged
+
+for msg in 'docs(readme): fix a typo' 'fix: handle an empty file' 'feat(scaffold-go)!: drop go 1.22'; do
+  printf '%s\n' "$msg" >"$work/msg"
+  expect pass "commit-msg: $msg" "$check" commit-msg "$work/msg"
+done
+for msg in 'style: format' 'docs(Readme): fix a typo' 'doc: fix a typo' 'fix(a/b): two scopes' 'Fix a typo'; do
+  printf '%s\n' "$msg" >"$work/msg"
+  expect block "commit-msg: $msg" "$check" commit-msg "$work/msg"
+done
+
+[ "$failed" = 0 ] || { echo 'Some attribution tests failed.' >&2; exit 1; }
+echo 'All attribution tests passed.'
