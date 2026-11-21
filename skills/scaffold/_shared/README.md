@@ -12,3 +12,5 @@ This folder is the source of truth. It has no `SKILL.md`, so `npx skills add` ne
 Change a file here, then run `scripts/sync-scaffold-shared` from the repo root and commit the
 copies with it. CI runs `scripts/sync-scaffold-shared --check` and fails on any drift.
 Stack-specific text never goes here.
+
+Rules for designing the gates themselves are in [`../GATES.md`](../GATES.md).
