@@ -1,0 +1,19 @@
+feat(scaffold-haskell): ask for the reader and add comment rules (#7)
+
+How much the comments explain depends on who reads the code, so the
+scaffold now asks for the reader instead of assuming a beginner.
+
+- `scripts/scaffold` takes a fourth argument, the reader. It completes
+"The reader is ..." in `CODING_STANDARDS.md` and `AGENTS.md`.
+- `CODING_STANDARDS.md` gains a Comments section, an approved-extras
+list the project fills, the exceptions rule and the rule that library
+class instances are fine. The type-signature rule goes, because `-Wall
+-Werror` enforces it.
+- The template is skillset-agnostic: no `GLOSSARY.md` or `docs/adr/`
+rules, and the hand-over vendors skills per repo instead of installing
+them with `-g`.
+- Test: rendered the scaffold into a temp folder with reader "a Go
+developer new to Haskell"; its `scripts/check` printed `All checks
+passed.`
+- Risk: easy to undo. Callers that pass three arguments now get the
+usage error.
