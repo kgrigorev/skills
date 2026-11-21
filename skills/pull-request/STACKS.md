@@ -45,9 +45,11 @@ seam is one of these boundaries, and each layer builds and passes the checks on 
 Build with the platform file's stack commands. When the repo's PR doc asks for a line naming the
 PR below, add it in the format the doc sets.
 
-A rebase rewrites branches you already pushed, so the next push is a force-push. Before you push
-a rebased branch, ask the owner. Some agent harnesses block force-push; then report the commands
-and let the owner run them.
+After changing a lower layer, merge it into each branch above, bottom up, and push: no
+force-push, so no owner approval. Rebase instead only when the owner wants a linear history. A
+rebase rewrites branches you already pushed, so the next push is a force-push: ask the owner
+before it. Some agent harnesses block force-push; then report the commands and let the owner run
+them.
 
 Done when every layer has an open PR whose base is the branch below it (the bottom one's is the
 default branch), with its title and body written by SKILL.md "Open a PR".
@@ -61,9 +63,13 @@ platform shows each PR as merged.
 
 ## Review a stack
 
-Review each PR on its own. Before the stack merges, review it once as a whole, for problems
-between PRs only. The range runs from the merge base with the default branch to the top branch.
-Leave vendored files out with `':!<path>'` pathspecs:
+Review each PR on its own. A reviewer of one layer, such as a session or subagent given one PR,
+pushes fixes only to that PR's branch and leaves merging and new PRs to whoever owns the stack.
+Its last reply lists each finding with what it did about it. The stack's owner then merges each
+changed branch into the ones above it, bottom up, before the stack lands. Before the stack
+merges, review it once as a whole, for problems between PRs only. The range runs from the merge
+base with the default branch to the top branch. Leave vendored files out with `':!<path>'`
+pathspecs:
 
 ```sh
 git diff $(git merge-base origin/<default branch> <top>)..<top>

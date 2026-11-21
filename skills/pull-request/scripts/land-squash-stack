@@ -1,0 +1,240 @@
+#!/bin/sh
+# Lands a stack of PRs with squash merges, bottom first, without a force-push.
+# Usage: land-squash-stack [--dry-run] [--after <landed pr>] <pr> [<pr>...]   (lowest PR first)
+#   --dry-run  checks the stack and prints the plan; changes nothing
+#   --after    continue a stopped run: <landed pr> was squashed already, so start by bringing
+#              the default branch into the first <pr>'s branch
+# Run it from a clone whose `origin` is the repo gh resolves, with every PR branch on it. It
+# refuses a merge queue. Every stop after the checks prints the command that continues the run.
+#
+# After each squash, the default branch's files equal the merged PR's head. The next branch already
+# holds that head, so it takes the default branch with a `-s ours` merge: the merge changes no
+# file, and the PR's diff shrinks to its own commits. Before anything lands, the script checks
+# that each PR is open, not a draft, based on the branch of the PR listed below it, and holds that
+# PR's head. Each squash waits until GitHub reports the PR mergeable and no reported check is
+# pending or failing.
+set -eu
+
+usage() { sed -n '3p' "$0" >&2; exit 2; }
+dry='' after='' prs=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+  --dry-run) dry=1 ;;
+  --after)
+    [ "$#" -ge 2 ] || usage
+    case $2 in '' | *[!0-9]*) usage ;; esac
+    after=$2
+    shift
+    ;;
+  '' | *[!0-9]*) usage ;;
+  *) prs="$prs $1" ;;
+  esac
+  shift
+done
+[ -n "$prs" ] || usage
+
+poll=${LAND_SQUASH_STACK_POLL:-30} # seconds between checks of a PR; 120 checks at most
+last=$after                         # the last PR that landed
+todo=$prs                           # the PRs that have not landed, each after a space
+resume_after=1                      # the run continues with --after $last
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/land-squash-stack.XXXXXX")
+on_exit() {
+  code=$?
+  git worktree remove --force "$work/next" 2>/dev/null || true
+  rm -rf "$work"
+  if [ "$code" -ne 0 ] && [ -z "$dry" ] && [ -n "$todo" ]; then
+    if [ -n "$resume_after" ] && [ -n "$last" ]; then from="--after $last$todo"; else from=${todo# }; fi
+    echo "To continue: sh $0 $from" >&2
+  fi
+}
+trap on_exit EXIT
+trap 'exit 130' HUP INT TERM
+
+die() { echo "STOP: $*" >&2; exit 1; }
+field() { gh pr view "$1" --json "$2" --jq ".$2"; }
+fetch_pr() { git fetch -q origin "refs/pull/$1/head"; } # GitHub keeps it after the branch goes
+same_tree() { [ "$(git rev-parse "$1^{tree}")" = "$(git rev-parse "$2^{tree}")" ]; }
+
+# The commit below any merges that changed no file, such as the `-s ours` merges this script
+# makes: the branch above was built on that commit, not on the merges.
+below_merges() {
+  bm=$1
+  while git rev-parse -q --verify "$bm^2" >/dev/null && same_tree "$bm^1" "$bm"; do
+    bm=$(git rev-parse "$bm^1")
+  done
+  printf '%s\n' "$bm"
+}
+holds() { git merge-base --is-ancestor "$(below_merges "$1")" "$2"; } # <lower head> <upper head>
+
+# Merges <commit> into <branch> at <head> with `-s ours` and pushes it. Sets $merged to the new head.
+merge_ours() { # <branch> <head> <commit> <message>
+  git worktree add -q --detach "$work/next" "$2"
+  git -C "$work/next" merge -q -s ours --no-edit -m "$4" "$3"
+  git -C "$work/next" push -q origin "HEAD:refs/heads/$1"
+  merged=$(git -C "$work/next" rev-parse HEAD)
+  git worktree remove --force "$work/next"
+}
+
+trunk=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+[ "$(gh repo view --json squashMergeAllowed --jq .squashMergeAllowed)" = true ] ||
+  die 'This repo does not allow squash merges. Follow STACKS.md for merge commits instead.'
+[ "$(gh api "repos/{owner}/{repo}/rules/branches/$trunk" --jq 'any(.[]; .type == "merge_queue")')" = false ] ||
+  die "$trunk has a merge queue, which this script does not drive. Follow STACKS.md for a merge queue."
+
+# Checks the whole stack before anything changes.
+git fetch -q origin
+prev_pr=$after prev_branch='' prev_head=''
+if [ -n "$after" ]; then
+  [ "$(field "$after" state)" = MERGED ] || die "#$after is not merged."
+  fetch_pr "$after"
+  prev_branch=$(field "$after" headRefName) prev_head=$(field "$after" headRefOid)
+fi
+for n in $prs; do
+  info=$(gh pr view "$n" --json state,isDraft,baseRefName,headRefName,headRefOid \
+    --jq '"\(.state) \(.isDraft) \(.baseRefName) \(.headRefName) \(.headRefOid)"')
+  read -r st draft base branch head <<EOF
+$info
+EOF
+  [ "$st" = OPEN ] || die "#$n is $st. List only the open PRs, with --after <the last merged one> before them."
+  [ "$draft" = false ] || die "#$n is a draft. Mark it ready with: gh pr ready $n"
+  fetch_pr "$n"
+  if [ -z "$prev_pr" ]; then
+    [ "$base" = "$trunk" ] || die "#$n targets $base, not $trunk. List the PRs below it too, lowest first."
+    git merge-base --is-ancestor "origin/$trunk" "$head" ||
+      die "#$n does not contain $trunk. Merge origin/$trunk into $branch, then merge each branch into the one above it, push them, and run again."
+  else
+    [ "$base" = "$prev_branch" ] || { [ "$prev_pr" = "$after" ] && [ "$base" = "$trunk" ]; } ||
+      die "#$n targets $base, not #$prev_pr's branch $prev_branch. List every layer of the stack, lowest first."
+    holds "$prev_head" "$head" ||
+      die "#$n ($branch) does not hold #$prev_pr's head $prev_head, so landing it would undo #$prev_pr's newer commits. Merge $prev_head into $branch, then merge each branch into the one above it, push them, and run again."
+  fi
+  if [ -n "$dry" ]; then
+    [ -z "$prev_pr" ] ||
+      echo "would point #$n at $trunk, delete #$prev_pr's branch unless open PRs use it, and merge $trunk into $branch with -s ours"
+    echo "would wait for #$n's checks, then squash #$n as \"$(field "$n" title) (#$n)\""
+  fi
+  prev_pr=$n prev_branch=$branch prev_head=$head
+done
+if [ -n "$dry" ]; then
+  echo "would delete #$prev_pr's branch unless open PRs use it"
+  echo 'Dry run: the stack checks passed; nothing changed.'
+  exit 0
+fi
+
+# Waits until the PR is based on the default branch at the expected head, GitHub would merge it,
+# and no reported check is pending or failing. An empty check list counts only from the third
+# look, so checks that have not registered yet are not taken for passing.
+# shellcheck disable=SC2016 # a jq program, not shell
+ready_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then .state
+    elif .status != "COMPLETED" then "PENDING" else .conclusion end] as $c
+  | "\(.baseRefName) \(.headRefOid) \(.isDraft) \(.mergeable) \(.mergeStateStatus) \(
+    if any($c[]; . == "PENDING" or . == "EXPECTED") then "pending"
+    elif all($c[]; . == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") | not then "failing"
+    elif $c == [] then "none" else "passing" end)"'
+wait_ready() { # <pr> <head>
+  wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0
+  while :; do
+    if wr_info=$(gh pr view "$wr_pr" --json baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,statusCheckRollup \
+      --jq "$ready_jq"); then
+      wr_fails=0
+      read -r wr_base wr_head wr_draft wr_mergeable wr_state wr_checks <<EOF
+$wr_info
+EOF
+      [ "$wr_head" = "$2" ] || die "#$wr_pr's head moved from $2 to $wr_head while it waited. Check that push, then run again."
+      [ "$wr_base" = "$trunk" ] || die "#$wr_pr targets $wr_base, not $trunk."
+      [ "$wr_draft" = false ] || die "#$wr_pr is a draft. Mark it ready with: gh pr ready $wr_pr"
+      [ "$wr_mergeable" != CONFLICTING ] || die "#$wr_pr has conflicts with $trunk."
+      [ "$wr_checks" != failing ] || { gh pr checks "$wr_pr" >&2 || true; die "#$wr_pr has failing checks."; }
+      if [ "$wr_mergeable" = MERGEABLE ] && { [ "$wr_checks" = passing ] || { [ "$wr_checks" = none ] && [ "$wr_i" -ge 2 ]; }; }; then
+        case $wr_state in
+        CLEAN | HAS_HOOKS | UNSTABLE) return 0 ;;
+        BLOCKED)
+          wr_blocked=$((wr_blocked + 1))
+          [ "$wr_blocked" -lt 3 ] ||
+            die "#$wr_pr is BLOCKED with no check pending: it needs a review, or a rule blocks it. Clear that, then run again."
+          ;;
+        esac
+      fi
+    else
+      wr_fails=$((wr_fails + 1))
+      [ "$wr_fails" -lt 5 ] || die "gh failed 5 times in a row reading #$wr_pr."
+      wr_info='(gh failed)'
+    fi
+    wr_i=$((wr_i + 1))
+    [ "$wr_i" -le 120 ] || die "#$wr_pr was not ready after 120 checks, $poll seconds apart: $wr_info"
+    sleep "$poll"
+  done
+}
+
+# Points <next pr> at the default branch, then deletes <landed pr>'s branch unless another open PR
+# is based on it: deleting a branch closes the PRs based on it.
+retire_branch() { # <landed pr> [<next pr>]
+  rb_branch=$(field "$1" headRefName)
+  if [ -n "${2:-}" ] && [ "$(field "$2" baseRefName)" != "$trunk" ]; then
+    gh pr edit "$2" --base "$trunk" >/dev/null
+  fi
+  git ls-remote --exit-code origin "refs/heads/$rb_branch" >/dev/null || return 0 # deleted on merge
+  rb_others=$(gh pr list --base "$rb_branch" --state open --json number --jq '.[].number' | tr '\n' ' ')
+  if [ -n "$rb_others" ]; then
+    echo "kept $rb_branch: open PRs $rb_others are based on it"
+  else
+    git push -q origin --delete "$rb_branch"
+  fi
+}
+
+# Brings the default branch into the next PR's branch after the PR below it landed.
+merge_up() { # <landed pr> <landed head> <next pr>
+  fetch_pr "$1"
+  git fetch -q origin
+  mu_info=$(gh pr view "$3" --json headRefName,headRefOid --jq '"\(.headRefName) \(.headRefOid)"')
+  read -r mu_branch mu_head <<EOF
+$mu_info
+EOF
+  holds "$2" "$mu_head" ||
+    die "#$3 ($mu_branch) does not hold #$1's head $2, so landing it would undo #$1's newer commits. Merge $2 into $mu_branch, then merge each branch into the one above it, push them, and run again."
+  retire_branch "$1" "$3"
+  if ! same_tree "origin/$trunk" "$2"; then
+    resume_after=''
+    mu_squash=$(gh pr view "$1" --json mergeCommit --jq .mergeCommit.oid)
+    same_tree "$mu_squash" "$2" ||
+      die "#$1's squash on $trunk does not equal its head ($trunk moved before the squash). Merge origin/$trunk into $mu_branch normally and resolve, then merge each branch into the one above it, push them, and run again."
+    merge_ours "$mu_branch" "$mu_head" "$mu_squash" "Merge #$1's squash into $mu_branch"
+    die "$trunk gained commits after #$1 landed. $mu_branch now holds #$1's squash, so a normal merge of origin/$trunk into $mu_branch brings only those commits. Merge it, then merge each branch into the one above it, push them, and run again."
+  fi
+  merge_ours "$mu_branch" "$mu_head" "origin/$trunk" "Merge $trunk into $mu_branch after #$1 landed"
+  echo "#$3 now holds $trunk ($(git rev-parse --short "$merged"))"
+}
+
+prev_pr=$after prev_head=''
+[ -z "$after" ] || prev_head=$(field "$after" headRefOid)
+# shellcheck disable=SC2086 # PR numbers, split on purpose
+set -- $prs
+while [ "$#" -gt 0 ]; do
+  n=$1
+  shift
+  [ -z "$prev_pr" ] || merge_up "$prev_pr" "$prev_head" "$n"
+  head=$(field "$n" headRefOid)
+  echo "waiting for #$n's checks"
+  wait_ready "$n" "$head"
+  git fetch -q origin
+  if ! git merge-base --is-ancestor "origin/$trunk" "$head"; then
+    resume_after=''
+    die "$trunk moved while #$n waited. Merge origin/$trunk into $(field "$n" headRefName), then merge each branch into the one above it, push them, and run again."
+  fi
+  if [ "$#" -gt 0 ]; then
+    fetch_pr "$1"
+    holds "$head" "$(field "$1" headRefOid)" ||
+      die "#$1 no longer holds #$n's head $head. Merge $head into $(field "$1" headRefName), then merge each branch into the one above it, push them, and run again."
+  fi
+  gh pr view "$n" --json body --jq .body >"$work/body"
+  gh pr merge "$n" --squash --match-head-commit "$head" \
+    --subject "$(field "$n" title) (#$n)" --body-file "$work/body"
+  [ "$(field "$n" state)" = MERGED ] || die "#$n did not merge, though gh pr merge returned: $(field "$n" state)."
+  last=$n todo=${todo# "$n"}
+  git fetch -q origin
+  echo "#$n landed as $(git rev-parse --short "origin/$trunk")"
+  prev_pr=$n prev_head=$head
+done
+retire_branch "$prev_pr"
+echo 'Done: every PR landed.'

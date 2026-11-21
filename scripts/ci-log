@@ -1,0 +1,71 @@
+#!/bin/sh
+# Prints one GitHub Actions job's log without colour codes or timestamps, optionally one step.
+# Usage: scripts/ci-log [--attempt <n>] <run id>                  list the run's jobs
+#        scripts/ci-log [--attempt <n>] <run id> <job> [<step>]   print a job's log, or one step
+# <job> is a job id from the list, a job's exact name, or a part of the name that only one job
+# has, such as "scaffold-c (ubuntu". <step> is part of a step's name or of its first command line.
+# The list shows the latest attempt. GitHub keeps every attempt's logs: list an earlier one with
+# --attempt and pass its job id. A job's log can be read once that job finishes, while the rest of
+# the run is still going. Outside a checkout of the repo, set GH_REPO=<owner>/<repo>.
+# Steps are found by the "##[group]Run" line that each step that ran starts with. A composite
+# action, or a step that prints its own "::group::Run", breaks that count; the script then warns.
+set -eu
+usage() { sed -n '3,4p' "$0" >&2; exit 2; }
+attempt=
+if [ "${1:-}" = --attempt ]; then
+  [ "$#" -ge 3 ] || usage
+  attempt=$2
+  shift 2
+fi
+[ "$#" -ge 1 ] || usage
+run=$1
+jobs() { gh run view "$run" ${attempt:+--attempt "$attempt"} --json jobs --jq "$1"; }
+list() { jobs '.jobs[] | "\(.databaseId)  \(.status) \(.conclusion // "")  \(.name)"'; }
+if [ "$#" -eq 1 ]; then
+  list
+  exit 0
+fi
+export CI_LOG_JOB="$2" CI_LOG_STEP="${3:-}"
+case $2 in
+  '' | *[!0-9]*)
+    id=$(jobs '.jobs | ([.[] | select(.name == env.CI_LOG_JOB)] | select(length > 0))
+      // [.[] | select(.name | contains(env.CI_LOG_JOB))] | .[].databaseId')
+    [ -n "$id" ] || { printf 'No job in run %s has "%s" in its name. Jobs:\n' "$run" "$2" >&2; list >&2; exit 1; }
+    [ "$(printf '%s\n' "$id" | wc -l)" -eq 1 ] || { printf '"%s" names more than one job. Jobs:\n' "$2" >&2; list >&2; exit 1; }
+    ;;
+  *) id=$2 ;;
+esac
+
+tmp=$(mktemp "${TMPDIR:-/tmp}/ci-log.XXXXXX")
+trap 'rm -f "$tmp" "$tmp.clean" "$tmp.steps"' EXIT
+trap 'exit 130' HUP INT TERM
+# The job's status, then one line per step that is not GitHub's own: "ran <number> <name>" or
+# "skipped <number> <name>". Post steps run after the job's steps and have no "Run" line.
+gh api "repos/{owner}/{repo}/actions/jobs/$id" --jq '.status, (.steps[]
+  | select(.name != "Set up job" and .name != "Complete job" and (.name | startswith("Post ") | not))
+  | "\(if .conclusion == "skipped" then "skipped" else "ran" end) \(.number) \(.name)")' >"$tmp.steps"
+status=$(sed -n 1p "$tmp.steps")
+[ "$status" = completed ] || { printf 'Job %s has not finished (%s). Its log is ready when it has.\n' "$id" "$status" >&2; exit 1; }
+gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$id/logs" >"$tmp"
+sed -e 's/^\xef\xbb\xbf//' -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/^[0-9T:.-]*Z //' "$tmp" >"$tmp.clean"
+mv "$tmp.clean" "$tmp"
+[ -n "$CI_LOG_STEP" ] || { cat "$tmp"; exit 0; }
+
+# The n-th "##[group]Run" line starts the n-th step that ran. Each printed step gets a header.
+awk '
+  FILENAME == ARGV[1] { if ($1 == "ran") { m++; num[m] = $2; name[m] = substr($0, length($1 " " $2 " ") + 1) } next }
+  /^##\[group\]Run / {
+    n++
+    inside = index(name[n], ENVIRON["CI_LOG_STEP"]) > 0 || index($0, ENVIRON["CI_LOG_STEP"]) > 0
+    if (inside) { found = 1; print "== step " ((n in num) ? num[n] ": " name[n] : "?") " ==" }
+  }
+  /^Post job cleanup\./ { inside = 0 }
+  inside { print }
+  END {
+    if (n != m) printf "ci-log: the log has %d \"Run\" lines for %d steps that ran, so step names may be wrong.\n", n, m > "/dev/stderr"
+    if (!found) exit 3
+  }' "$tmp.steps" "$tmp" || {
+  printf 'No step'\''s name or first command line contains "%s". Steps:\n' "$CI_LOG_STEP" >&2
+  sed -n 's/^ran \([0-9]*\) /  \1 /p; s/^skipped \([0-9]*\) \(.*\)/  \1 \2 (skipped)/p' "$tmp.steps" >&2
+  exit 1
+}

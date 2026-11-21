@@ -1,0 +1,14 @@
+feat(archive-project): add the archive project skill (#18)
+
+Agents had no instructions for retiring a finished repo, so "clean up my
+old repos" could end in an unchecked delete.
+
+- Adds `archive-project`: intent, import, publish and retire, in that
+order.
+- The procedure stays in the archive checkout's `AGENTS.md`; the skill
+only orders it and gates it.
+- It asks before the push, and again, naming the repo, before anything
+is retired.
+- Names no private projects or paths beyond a generic default.
+- Risk: easy to undo; text only.
+- Not verified: the description's triggers in a live session.

@@ -1,6 +1,8 @@
 # Reasons the template files cannot carry
 
 Every other gate states its reason in a comment in its own file.
+Before you add, change or review a gate, read
+https://github.com/kgrigorev/skills/blob/main/skills/scaffold/GATES.md.
 
 - `.claude/settings.json` (JSON has no comments):
   - `sandbox.filesystem.allowWrite` lists the cache and state folders of cabal and mise, so

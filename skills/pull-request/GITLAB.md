@@ -41,8 +41,11 @@ MR by its IID or URL, not by its branch.
 An MR is ready to merge when `glab mr view <iid> -F json --jq .detailed_merge_status` says
 `mergeable`. `unchecked`, `checking`, `preparing` and `approvals_syncing` mean GitLab is still
 working it out: poll again. `ci_still_running` means only the pipeline is left, and
-`glab mr merge` arms auto-merge for it. `need_rebase` means rebase it (`glab mr rebase <iid>`, or
-the chain in "Merge a stack" step 4), wait for the new pipeline, and check again. Any other value
+`glab mr merge` arms auto-merge for it. `need_rebase` means the branch lacks its target's latest
+commits: merge `origin/<target>` into it and push, wait for the new pipeline, and check again.
+GitLab only checks that the branch holds its target, so a merge clears it without a force-push.
+Use `glab mr rebase <iid>` instead only when the owner wants a linear history and no MR is
+stacked on this one. Any other value
 (`ci_must_pass`, `not_approved`, `draft_status`, ...) names what blocks it.
 
 ## Merge an MR
@@ -86,8 +89,7 @@ glab mr create --source-branch <branch> --target-branch <branch below> --remove-
 
 `--remove-source-branch` makes the merge delete the branch, which is what moves the MR above it
 to the next target. To change a target later: `glab mr update <iid> --target-branch <branch>`.
-After changing a lower layer, rebase the branches above onto it and push with
-`git push --force-with-lease`.
+After changing a lower layer, merge it into each branch above as in STACKS.md "Build a stack".
 
 ## Merge a stack
 
@@ -103,16 +105,17 @@ when its `squash_on_merge` is `true`; otherwise it takes a merge commit under `m
 3. Poll `glab mr view <next> -F json --jq .target_branch` for up to a minute, until it names the
    merged MR's target. When it still names the old branch (the branch was protected, or you may
    not delete it), move it yourself: `glab mr update <next> --target-branch <that target>`.
-4. Run `git fetch origin`, then bring the rest of the chain up to date with the first case that
-   applies. A rebase takes the whole chain at once, so the layers above move with the next one:
-   bring the local layer branches up to date first (`git branch -f <branch> origin/<branch>`,
-   from a detached HEAD), and afterwards push each rewritten branch with
-   `git push --force-with-lease origin <branch>`, after asking the owner.
-   - After a squash, under any `merge_method`, the layers above still hold the old lower commits:
-     `git rebase --update-refs --onto origin/<target> <recorded tip> <top branch>`.
-   - Under `rebase_merge` or `ff`: `git rebase --update-refs origin/<target> <top branch>`. For
-     the top layer alone, `glab mr rebase <iid>` does the same on the server.
-   - Under `merge`: nothing to do; its diff shrinks to its own commits on its own.
+4. Run `git fetch origin`, then bring the next branch up to date with the first case that
+   applies, and push it. Each case is a merge, so the push needs no force.
+   - After a squash, check that the target's files equal the recorded tip:
+     `git rev-parse origin/<target>^{tree} <recorded tip>^{tree}` prints one value twice. Then
+     run `git merge -s ours origin/<target>` on the next branch: it changes no file, and the MR's
+     diff shrinks to its own commits. When the values differ, the target moved before the squash:
+     merge `origin/<target>` into the next branch normally and resolve, then merge each branch
+     into the one above it.
+   - When the next MR says `need_rebase` (under `rebase_merge`, or after the target moved):
+     `git merge origin/<target>` on the next branch.
+   - Otherwise: nothing to do; its diff shrinks to its own commits on its own.
 5. A retarget leaves the MR without a pipeline. Start one when none runs:
    `glab ci run --mr --branch <next MR's source branch>`.
 6. Repeat from step 1 with the next MR.

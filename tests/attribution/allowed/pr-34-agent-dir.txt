@@ -1,0 +1,11 @@
+fix(scaffold-scala): run scalafmt on the JVM, not the native binary (#34)
+
+The Scala check's format step could fail, or pass, for the wrong reason. `scala-cli fmt` runs scalafmt's native binary, which is built with Scala Native. That runtime corrupts memory now and then (scalameta/scalafmt#5254). The fixes, scala-native/scala-native#4916 and #4917, are not in any scalafmt release yet; 3.11.5 predates them.
+
+This showed up as one red Scala run on main: scalafmt crashed with a segfault during an attack case. A stress loop on `ubuntu-24.04` reproduced it about once in 6,000 runs over 300 files. Besides segfaults and a `ClassCastException`, it twice read a formatted `Main.scala` as empty and reported it unformatted. A file read as empty can also pass unformatted, so re-running after a failure would not cover it. macOS did not crash in 5,400 runs.
+
+`scripts/check` now runs `scalafmt-cli` on the JVM through `scala-cli run --dep`, with the version from `.scalafmt.conf`. The new `scripts/format` runs the same command to fix formatting. The scaffold, the README, AGENTS.md and 116 attack cases use it. DESIGN.md says when to go back to `scala-cli fmt`.
+
+The JVM costs about half a second more per check on the sample project, and more on large ones: about 8 s per run for 300 files on CI. The run writes no IDE config into `.bsp/` and prints no hint to bump scalafmt. No attack case can force the crash, but a new one fails if the check goes back to the native binary.
+
+All 173 Scala attack cases pass locally on macOS. This PR's CI is the first Linux run.

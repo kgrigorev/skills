@@ -14,7 +14,8 @@ Commands for [`SKILL.md`](SKILL.md) and [`STACKS.md`](STACKS.md) on GitHub, with
 
 ## Merge settings
 
-The methods the repo allows: `gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`.
+The methods the repo allows:
+`gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`.
 
 The commit message settings:
 
@@ -76,8 +77,8 @@ pass `--open`, and assigns no one. Fix each PR with
 `gh pr view <branch> --json number -q .number`.
 
 Without `gh stack`: cut each branch from the one below and open its PR with
-`--base <branch below>`. After changing a lower layer, rebase the branches above onto it and push
-with `git push --force-with-lease`.
+`--base <branch below>`. After changing a lower layer, merge it into each branch above as in
+STACKS.md "Build a stack".
 
 ## Merge a stack
 
@@ -95,30 +96,44 @@ gh stack merge --yes --merge
 branch with a merge queue the PRs join the queue. GitHub runs its rules when the merge runs, and
 stacked merges cannot bypass them.
 
-Other stacks merge bottom-up, one PR at a time, the top one included. On a branch with a merge
-queue, its `mergeMethod` decides: `MERGE` follows step 1, `SQUASH` and `REBASE` follow steps 2
-and 4, since both rewrite the lower commits.
+Other stacks merge bottom-up, one PR at a time, the top one included.
 
-1. With merge commits allowed, merge each layer with a merge commit as in "Merge a PR". The PR
-   above already holds the lower commits, so once they land its diff shrinks to its own commits
-   with no rewrite.
-2. Without merge commits, run `git fetch origin` and record the layer's tip
-   (`git rev-parse origin/<branch>`), then squash it as in "Merge a PR".
-3. Point the next PR at the default branch with `gh pr edit <next> --base <default branch>`.
+**With merge commits allowed**, for each layer:
+
+1. Merge it with a merge commit as in "Merge a PR". The PR above already holds the lower
+   commits, so once they land its diff shrinks to its own commits with no rewrite.
+2. Point the next PR at the default branch with `gh pr edit <next> --base <default branch>`.
    Only then delete the merged branch, with `git push origin --delete <branch>`, unless the repo
    deleted it on merge. Move the PR yourself rather than rely on GitHub's retarget; without the
    move, the next PR merges into the old branch.
-4. After a squash, the layers above still hold the old lower commits, so their diff shows them
-   again. Rebase the rest of the chain at once, then push each rewritten branch with
-   `git push --force-with-lease origin <branch>`, after asking the owner. Bring the local layer
-   branches up to date first (`git branch -f <branch> origin/<branch>`, from a detached HEAD):
+3. Wait for the next PR's checks (`gh pr checks <next> --watch --required`), then repeat with it.
 
-   ```sh
-   git fetch origin
-   git rebase --update-refs --onto origin/<default branch> <recorded tip> <top branch>
-   ```
+**Without merge commits**, land the stack with
+[`scripts/land-squash-stack`](scripts/land-squash-stack), lowest PR first, from a clone whose
+`origin` holds the PR branches. Run it with `--dry-run` first, then for real in the background:
+it waits on each layer's checks, up to an hour each.
 
-5. Wait for the next PR's checks (`gh pr checks <next> --watch --required`), then repeat from
-   step 1 with it.
+```sh
+sh <this-skill-dir>/scripts/land-squash-stack --dry-run <pr1> <pr2> <pr3>
+sh <this-skill-dir>/scripts/land-squash-stack <pr1> <pr2> <pr3>
+```
+
+After each squash it merges the default branch into the next branch with `-s ours`, which
+changes no file, so the next diff shrinks to its own commits without a force-push. Before
+anything lands it checks that every PR is open and ready, is based on the branch of the PR listed
+below it, and holds that PR's head; a fix that was never merged up fails this check. When it
+stops, for example because the default branch moved during the run, it says what to fix and
+prints the command that continues the run. It squashes with the PR's title and body. When the
+repo leaves the message to GitHub (see "Merge settings"), land each layer by hand instead: squash
+it as in "Merge a PR", move the next PR as in step 2, then take the `-s ours` step below.
+
+**On a branch with a merge queue**, `land-squash-stack` refuses to run. Add one PR at a time as
+in "Merge queue", and wait until it says `MERGED` before you move the next PR as in step 2 above.
+With a `mergeMethod` of `MERGE`, nothing else is needed. With `SQUASH`, do what the script does
+before you add the next PR: check that the default branch's files equal the merged PR's head
+(`git rev-parse origin/<default branch>^{tree} <head>^{tree}` prints one value twice), then
+`git merge -s ours origin/<default branch>` into the next branch and push. With `REBASE`, the
+next PR conflicts with the rewritten commits: tell the owner, and rebase the rest of the chain
+only on their OK, since it needs a force-push.
 
 Done when `gh pr view <number> --json state` says `MERGED` for each PR.
