@@ -20,7 +20,7 @@ The methods the repo allows:
 The commit message settings:
 
 ```sh
-gh api repos/{owner}/{repo} \
+gh api 'repos/{owner}/{repo}' \
   --jq '{squash_merge_commit_title, squash_merge_commit_message, merge_commit_title, merge_commit_message}'
 ```
 
@@ -29,8 +29,8 @@ GitHub. Any other value, or `null` (the token cannot read the settings), means y
 
 ## Merge a PR
 
-Pass the PR's title as the subject and its body as the message. GitHub takes `--subject`
-verbatim, so add the PR number yourself:
+For a squash merge, pass the PR's title as the subject and its body as the message. GitHub takes
+`--subject` verbatim, so add the PR number yourself:
 
 ```sh
 gh pr merge <number> --squash \
@@ -38,9 +38,11 @@ gh pr merge <number> --squash \
   --body "$(gh pr view <number> --json body -q .body)"
 ```
 
-For a merge commit, use `--merge` in place of `--squash`. When the message is left to GitHub,
-run it without `--subject` and `--body`. On a branch with a merge queue, follow "Merge queue".
-Done when `gh pr view <number> --json state` says `MERGED`.
+For a merge commit, use `--merge` with `--body` only so GitHub keeps its `Merge pull request
+#<number>...` subject; add `--subject` as above only when `merge_commit_title` is `PR_TITLE`.
+When the message is left to GitHub (`BLANK`), run `gh pr merge` without `--subject` and `--body`.
+On a branch with a merge queue, follow "Merge queue". Done when `gh pr view <number> --json state`
+says `MERGED`.
 
 ## Merge queue
 
@@ -48,17 +50,19 @@ A branch has a merge queue when this query returns a value; its `mergeMethod` is
 method:
 
 ```sh
-gh api graphql -F owner='{owner}' -F name='{repo}' \
-  -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){mergeQueue(branch:"<default branch>"){configuration{mergeMethod}}}}' \
+gh api graphql -F owner='{owner}' -F name='{repo}' -F branch='<default branch>' \
+  -f query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){configuration{mergeMethod}}}}' \
   --jq .data.repository.mergeQueue
 ```
 
 The queue sets the method and the merge commit's message. `gh pr merge <number>` only adds the PR
 to the queue, and fails when the repo does not allow auto-merge; then add it with
-`gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async`. That is the one fallback endpoint.
-Either way the merge lands later: wait until `gh pr view <number> --json state` says `MERGED`
-before you move the next PR or delete a branch. Deleting a PR's branch before it merges closes
-the PR.
+`gh api -X PUT 'repos/{owner}/{repo}/pulls/<number>/merge-async'`. That is the one fallback
+endpoint. Either way the merge lands later: poll `state`, `isInMergeQueue` and `autoMergeRequest`
+on `repository.pullRequest(number:<number>)` in `gh api graphql` until `state` says `MERGED`
+before you move the next PR or delete a branch. When `state` stays `OPEN` with `isInMergeQueue` `false` and `autoMergeRequest` `null` across a
+few polls, the queue rejected or dropped the PR: stop and report to the owner. Deleting a PR's
+branch before it merges closes the PR.
 
 ## Build a stack
 
@@ -85,7 +89,7 @@ STACKS.md "Build a stack".
 A stack on GitHub (linked by `gh stack submit` or `gh stack link`) merges only through GitHub's
 async merge API: `gh pr merge` and the REST merge endpoint refuse its PRs. Check out the stack's
 top branch and run `gh stack merge`. It merges every PR in the stack, all or none, with the
-method the repo allows (`--merge` when merge commits are allowed, else `--squash`), and without
+method the repo's rules and settings choose (`--merge`, `--squash` or `--rebase`), and without
 a terminal it does not ask. Pass no number: a bare number is read as a stack number first.
 
 ```sh
@@ -104,8 +108,8 @@ Other stacks merge bottom-up, one PR at a time, the top one included.
    commits, so once they land its diff shrinks to its own commits with no rewrite.
 2. Point the next PR at the default branch with `gh pr edit <next> --base <default branch>`.
    Only then delete the merged branch, with `git push origin --delete <branch>`, unless the repo
-   deleted it on merge. Move the PR yourself rather than rely on GitHub's retarget; without the
-   move, the next PR merges into the old branch.
+   deleted it on merge or open PRs are based on it. Move the PR yourself rather than rely on
+   GitHub's retarget; without the move, the next PR merges into the old branch.
 3. Wait for the next PR's checks (`gh pr checks <next> --watch --required`), then repeat with it.
 
 **Without merge commits**, land the stack with
@@ -123,17 +127,23 @@ changes no file, so the next diff shrinks to its own commits without a force-pus
 anything lands it checks that every PR is open and ready, is based on the branch of the PR listed
 below it, and holds that PR's head; a fix that was never merged up fails this check. When it
 stops, for example because the default branch moved during the run, it says what to fix and
-prints the command that continues the run. It squashes with the PR's title and body. When the
-repo leaves the message to GitHub (see "Merge settings"), land each layer by hand instead: squash
-it as in "Merge a PR", move the next PR as in step 2, then take the `-s ours` step below.
+prints the command that continues the run. It squashes with the PR's title and body, or leaves
+the message to GitHub when `squash_merge_commit_message` is `BLANK`.
 
-**On a branch with a merge queue**, `land-squash-stack` refuses to run. Add one PR at a time as
-in "Merge queue", and wait until it says `MERGED` before you move the next PR as in step 2 above.
-With a `mergeMethod` of `MERGE`, nothing else is needed. With `SQUASH`, do what the script does
-before you add the next PR: check that the default branch's files equal the merged PR's head
-(`git rev-parse origin/<default branch>^{tree} <head>^{tree}` prints one value twice), then
-`git merge -s ours origin/<default branch>` into the next branch and push. With `REBASE`, the
-next PR conflicts with the rewritten commits: tell the owner, and rebase the rest of the chain
-only on their OK, since it needs a force-push.
+**On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
+adding the first PR, run `git fetch origin` and check that every branch in the stack holds the
+tip of the one below it (`git merge-base --is-ancestor origin/<lower> origin/<upper>`); merge any
+missing commits upward first. For each layer, record `<head>` (`git rev-parse origin/<branch>`),
+add the PR as in "Merge queue", and wait until it says `MERGED` before you move the next PR as in
+step 2 above. With a `mergeMethod` of `MERGE`, wait for `<next>`'s checks and repeat. With
+`SQUASH`, run `git fetch origin` and check out `<next branch>` at `origin/<next branch>` before
+you add `<next>`: if `git rev-parse origin/<default branch>^{tree} <head>^{tree}` prints one value
+twice, run `git merge -s ours --no-edit origin/<default branch>` and push; else if `<squash
+commit>^{tree}` (`gh pr view <merged> --json mergeCommit -q .mergeCommit.oid`) equals
+`<head>^{tree}`, run `git merge -s ours --no-edit <squash commit>` then
+`git merge --no-edit origin/<default branch>`, merge upward and push; else run
+`git merge --no-edit origin/<default branch>`, resolve, merge upward and push. Wait for `<next>`'s
+checks, then repeat. With `REBASE`, the next PR conflicts with the rewritten commits: tell the
+owner, and rebase the rest of the chain only on their OK, since it needs a force-push.
 
 Done when `gh pr view <number> --json state` says `MERGED` for each PR.

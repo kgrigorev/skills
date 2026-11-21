@@ -2,8 +2,9 @@
 
 Researched 2026-11-21. Adopted from it: stacks on GitLab are built by hand (`glab stack` is
 experimental, create-only and cannot merge a stack), merge requests merge bottom-up with the source
-branch deleted so GitLab retargets the next one, the agent writes the merge commit message itself,
-and MR dependencies are left out.
+branch deleted so GitLab retargets the next one, each next branch takes the landed target by merge
+(`-s ours` after a squash, or `--no-edit`) so landing needs no force-push, the agent writes the
+merge commit message itself, and MR dependencies are left out.
 
 Scope: `skills/pull-request/SKILL.md` and `STACKS.md`, both read line by line. The CLI facts are for glab v1.131.0 (2026-11-17, main `0dd7574`) and the server facts for gitlab-org/gitlab master `679228bd`. glab is not installed locally (`command -v glab` exits 1), so every glab fact comes from docs and source, not from `--help` output. Tiers are written F/P/U (Free/Premium/Ultimate). "Source-only" means the fact was read from code and is not stated in the docs.
 
@@ -73,7 +74,7 @@ Minimum glab versions for what follows: `glab stack` needs v1.42.0, `--jq` needs
 - **A retarget costs the next layer its pipeline and auto-merge** (source-only, [update-svc]). Any target change cancels auto-merge ("the target branch was changed."). An automatic retarget also sets `head_pipeline_id = nil` and starts no pipeline, so under "Pipelines must succeed" the MR stays blocked. Start one with `glab ci run --mr`, `POST /projects/:id/merge_requests/:iid/pipelines`, a push, or a rebase without `--skip-ci` ([ci-run], [mr-api]). A manual `glab mr update --target-branch` does start pipelines. On EE, approvals may be reset when `reset_approvals?` holds (inferred). **Therefore: do not arm auto-merge on several layers at once.**
 - **Auto-merge is also cancelled** when the target branch advances under `rebase_merge` or `ff`, unless automatic rebase is on. Keeping it through that is behind the flag `retain_auto_merge_with_automatic_rebase` (19.3, off by default) ([auto-merge]).
 - **Wait for the retarget before merging the next MR.** Merging while the target branch is queued for deletion fails with "The target branch is scheduled for deletion. Please wait for the branch to be retargeted." ([merge-svc])
-- **Per-layer stack merge procedure:** check the next MR's `detailed_merge_status`; merge the current MR with `-d`; poll until its state is `merged`; poll until the next MR's `target_branch` changes; under `rebase_merge` or `ff`, rebase the next MR; make sure it has a fresh pipeline; repeat.
+- **Per-layer stack merge procedure:** check that every branch holds the tip of the one below it; poll the bottom MR's `detailed_merge_status`; merge the current MR with `-d`; poll until its state is `merged`; poll until the next MR's `target_branch` changes; bring the target into the next branch by merge (`-s ours` after a squash, or `--no-edit` under `rebase_merge`; rebase only under `ff` without squash, on the owner's OK); make sure it has a fresh pipeline; repeat.
 - **`glab mr merge` defaults to `--auto-merge=true`.** If the MR is already mergeable and has no pipeline in progress, the API merges it **immediately**; otherwise it arms auto-merge and the MR merges later. Always poll for `merged`. Use `--auto-merge=false` to force an immediate attempt. Cancel with `POST …/cancel_auto_merge` (19.5) ([merge-api-rb], [mwcp-svc], [mr-api]).
 - **One merge method per project.** `merge` always creates a merge commit, even when squashing. `rebase_merge` creates a merge commit but merges only when a fast-forward is possible. `ff` creates no merge commit. Squash is a separate option that works with all three ([methods], [squash-doc]).
 - **SHA guard and rebase conflict.** `glab mr merge --sha` and `--rebase` cannot be combined. Where "Require a commit SHA on the merge requests API" is on (19.2+, a group or instance setting), `glab mr merge --rebase` therefore always returns 400. Instead run `glab mr rebase <iid>`, wait, read the new `.sha`, then `glab mr merge --sha <sha>` ([group-sha], [mr-merge-src]).
@@ -97,7 +98,6 @@ Unsettled or unverified:
 - Whether `git rebase --fork-point` in `glab stack sync --update-base` cleanly drops a squash-merged lower commit.
 - Squash inside a stack in general: no GitLab document covers it.
 - That templates are not applied to API creates, that custom messages survive auto-merge and trains, and the retarget's pipeline, auto-merge and approval effects: all read from source, not documented, not live-tested.
-- A verified glab flag to list MRs by target branch (to find "another open MR targets its branch"). Only `glab mr list --source-branch` was confirmed.
 - The `/blocks` dependency API has no version history in the REST docs.
 - Whether the stacked-MR UI (19.1) sits behind a feature flag: the docs history names none, but the full flag list was not searched.
 - When WIP support was removed: the about.gitlab.com 14.0 blog conflicts with gitlab-org/gitlab!79693, merged in milestone 14.8. Either way, `WIP:` is not a draft today.

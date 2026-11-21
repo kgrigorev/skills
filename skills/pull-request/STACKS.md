@@ -23,8 +23,9 @@ the stack by its size; the line count decides the tier:
   2. Dependent pieces go out as sequential stacks: land the foundation stack first, then start
      the next stack from the default branch.
   3. A stack past 5 layers needs a very good reason: a strict dependency chain where every seam
-     is a natural boundary and every layer is at the ceiling. State the reason to the owner and
-     wait for their OK before you build it, then name the reason in the bottom PR's body.
+     is a natural boundary and every non-bulk layer is at the ceiling. State the reason to the
+     owner and wait for their OK before you build it, then name the reason in the bottom PR's
+     body.
 
 Slice by dependency: each layer builds and passes the checks on its own. Cut layers only at
 **natural boundaries**, and merge neighbouring layers across any other line:
@@ -45,11 +46,11 @@ seam is one of these boundaries, and each layer builds and passes the checks on 
 Build with the platform file's stack commands. When the repo's PR doc asks for a line naming the
 PR below, add it in the format the doc sets.
 
-After changing a lower layer, merge it into each branch above, bottom up, and push: no
-force-push, so no owner approval. Rebase instead only when the owner wants a linear history. A
-rebase rewrites branches you already pushed, so the next push is a force-push: ask the owner
-before it. Some agent harnesses block force-push; then report the commands and let the owner run
-them.
+Outside `gh stack`, after changing a lower layer, merge it into each branch above, bottom up, and
+push: no force-push, so no owner approval. Rebase instead only when the owner wants a linear
+history (or in a `gh stack` stack; see `GITHUB.md`). A rebase rewrites branches you already
+pushed, so the next push is a force-push: ask the owner before it. Some agent harnesses block
+force-push; then report the commands and let the owner run them.
 
 Done when every layer has an open PR whose base is the branch below it (the bottom one's is the
 default branch), with its title and body written by SKILL.md "Open a PR".
@@ -75,4 +76,5 @@ pathspecs:
 git diff $(git merge-base origin/<default branch> <top>)..<top>
 ```
 
-Done when every problem the whole-range diff raises is fixed in the layer it belongs to.
+Done when every problem the whole-range diff raises is fixed in the layer it belongs to and
+merged into the layers above it.

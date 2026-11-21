@@ -78,9 +78,12 @@ merge_ours() { # <branch> <head> <commit> <message>
 
 trunk=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
 [ "$(gh repo view --json squashMergeAllowed --jq .squashMergeAllowed)" = true ] ||
-  die 'This repo does not allow squash merges. Follow STACKS.md for merge commits instead.'
-[ "$(gh api "repos/{owner}/{repo}/rules/branches/$trunk" --jq 'any(.[]; .type == "merge_queue")')" = false ] ||
-  die "$trunk has a merge queue, which this script does not drive. Follow STACKS.md for a merge queue."
+  die 'This repo does not allow squash merges. Follow GITHUB.md for merge commits instead.'
+# shellcheck disable=SC2016 # GraphQL variables, not shell
+mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id}}}'
+[ "$(gh api graphql -F owner='{owner}' -F name='{repo}' -F branch="$trunk" -f query="$mq_query" --jq '.data.repository.mergeQueue != null')" = false ] ||
+  die "$trunk has a merge queue, which this script does not drive. Follow GITHUB.md for a merge queue."
+squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
 
 # Checks the whole stack before anything changes.
 git fetch -q origin
@@ -227,9 +230,13 @@ while [ "$#" -gt 0 ]; do
     holds "$head" "$(field "$1" headRefOid)" ||
       die "#$1 no longer holds #$n's head $head. Merge $head into $(field "$1" headRefName), then merge each branch into the one above it, push them, and run again."
   fi
-  gh pr view "$n" --json body --jq .body >"$work/body"
-  gh pr merge "$n" --squash --match-head-commit "$head" \
-    --subject "$(field "$n" title) (#$n)" --body-file "$work/body"
+  if [ "$squash_msg" = BLANK ]; then
+    gh pr merge "$n" --squash --match-head-commit "$head"
+  else
+    gh pr view "$n" --json body --jq .body >"$work/body"
+    gh pr merge "$n" --squash --match-head-commit "$head" \
+      --subject "$(field "$n" title) (#$n)" --body-file "$work/body"
+  fi
   [ "$(field "$n" state)" = MERGED ] || die "#$n did not merge, though gh pr merge returned: $(field "$n" state)."
   last=$n todo=${todo# "$n"}
   git fetch -q origin
