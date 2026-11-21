@@ -1,0 +1,1 @@
+The scaffold now supports Cursor Agent.

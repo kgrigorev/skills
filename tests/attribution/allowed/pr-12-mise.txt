@@ -1,0 +1,26 @@
+fix(mise): refresh for mise 2026.11 and stop printing secrets (#12)
+
+The skill was researched against mise 2026.6.11, about 85 releases ago,
+and its helper script printed secret env values.
+
+- **Script:** `mise env --redacted` prints only the redacted vars,
+unmasked. `mise_env_report.py` now lists env names only and inspects
+untrusted repos with `MISE_SAFE=1`.
+- **Trust:** untrusted config makes `ls`/`env`/`tasks` fail, and
+`exec`/`run`/`install` trust it implicitly. SKILL.md now asks before the
+first of those in a repo the user didn't author.
+- **Corrected:** MCP `install_tool` works and `list_commands` exists;
+`_.file` arrays work; `env_shell_expand` is on; config precedence;
+`uv_venv_auto = true` deprecated, not removed; `{{arg()}}` goes in
+2027.5.0; Java defaults to Temurin; `node@lts` is 26; `pipx:` → `pypi:`.
+- **Added:** 24 h `minimum_release_age`, checked tool options, lockfile
+format 4, agent-friendly task flags (`lock`, `tags`, `-o summary`,
+`--report-file`, `--affected`, `tasks add/set/rm`), monorepo setup.
+- **Shape:** SKILL.md is four steps ending on `mise doctor` + `mise
+tasks validate` + `mise run`; 1,300 → 717 lines across SKILL.md and
+references. Evals: MCP eval fixed, `untrusted-clone` eval added.
+- Test: each claim checked against the 2026.11.3 CLI (`--help`, `config
+explain`, probe projects, MCP `tools/list`), release notes and docs; the
+script ran on a trusted and an untrusted project.
+- Risk: docs plus one read-only script, easy to undo.
+- Not verified: the evals were not run.
