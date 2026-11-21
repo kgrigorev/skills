@@ -1,0 +1,41 @@
+#!/bin/sh
+# Prints one GitHub Actions job's log without colour codes or timestamps, optionally one step.
+# Usage: scripts/ci-log <run id>                  list the run's jobs
+#        scripts/ci-log <run id> <job> [<step>]   print a job's log, or one step of it
+# <job> is part of the job's name, such as "scaffold-c (ubuntu". <step> is part of the step's name
+# or of its command. A finished job's log can be read while the rest of the run is still going. A
+# re-run's log replaces the earlier attempt's.
+set -eu
+[ "$#" -ge 1 ] || { sed -n '3,4p' "$0" >&2; exit 2; }
+run=$1
+if [ "$#" -eq 1 ]; then
+  gh run view "$run" --json jobs --jq '.jobs[] | "\(.databaseId)  \(.status) \(.conclusion // "")  \(.name)"'
+  exit 0
+fi
+export CI_LOG_JOB="$2" CI_LOG_STEP="${3:-}"
+id=$(gh run view "$run" --json jobs --jq '.jobs[] | select(.name | contains(env.CI_LOG_JOB)) | .databaseId')
+[ -n "$id" ] || { echo "No job in run $run has \"$2\" in its name. Jobs:" >&2; "$0" "$run" >&2; exit 1; }
+[ "$(printf '%s\n' "$id" | wc -l)" -eq 1 ] || { echo "\"$2\" names more than one job. Jobs:" >&2; "$0" "$run" >&2; exit 1; }
+
+tmp=$(mktemp "${TMPDIR:-/tmp}/ci-log.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/$id/logs" >"$tmp"
+sed -e 's/^\xef\xbb\xbf//' -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/^[0-9T:.-]*Z //' "$tmp" >"$tmp.clean"
+mv "$tmp.clean" "$tmp"
+[ -n "$CI_LOG_STEP" ] || { cat "$tmp"; exit 0; }
+
+# Each step that ran a command or an action starts with a "##[group]Run" line, in step order.
+# Positions of the steps whose name matches, counting only those steps.
+want=$(gh run view "$run" --json jobs --jq '[.jobs[] | select(.databaseId == '"$id"') | .steps[]
+  | select(.conclusion != "skipped" and .name != "Set up job" and .name != "Complete job"
+    and (.name | startswith("Post ") | not))] | to_entries[]
+  | select(.value.name | contains(env.CI_LOG_STEP)) | .key + 1' | tr '\n' ' ')
+awk -v want=" $want" -v text="$CI_LOG_STEP" '
+  /^##\[group\]Run / { n++; inside = index(want, " " n " ") > 0 || index($0, text) > 0; if (inside) found = 1 }
+  /^Post job cleanup\./ { inside = 0 }
+  inside { print }
+  END { if (!found) exit 3 }' "$tmp" || {
+  echo "No step's name or command contains \"$CI_LOG_STEP\". Its commands:" >&2
+  grep '^##\[group\]Run ' "$tmp" | sed 's/^##\[group\]Run /  /' >&2
+  exit 1
+}

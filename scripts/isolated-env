@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs a command with private tool stores, a clean environment and a PATH of mise plus the system,
+# so a scaffold test neither reads nor changes your own toolchains.
+# Usage: scripts/isolated-env <command...>, e.g. scripts/isolated-env scripts/test-scaffold haskell
+# Private: mise's store and its global and system config, ghcup, rustup and cargo, uv, Coursier,
+# Go's module cache, and TMPDIR. HOME stays, so git and gh still find their config. The stores live
+# in $SKILLS_ISOLATED_DIR (default ~/.cache/skills-isolated) and are reused, so only the first run
+# downloads the tools. Delete the folder to start over.
+set -eu
+[ "$#" -ge 1 ] || { sed -n '4p' "$0" >&2; exit 2; }
+mise=$(command -v mise) || { echo 'mise is not on PATH.' >&2; exit 1; }
+dir=${SKILLS_ISOLATED_DIR:-$HOME/.cache/skills-isolated}
+mkdir -p "$dir/bin" "$dir/mise/data" "$dir/mise/cache" "$dir/mise/state" "$dir/tmp"
+# Only mise, not the rest of its folder (Homebrew's bin holds ghc, cabal, python3 and more).
+ln -sf "$mise" "$dir/bin/mise"
+exec env -i HOME="$HOME" PATH="$dir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  ${TERM:+TERM="$TERM"} ${LANG:+LANG="$LANG"} ${SSH_AUTH_SOCK:+SSH_AUTH_SOCK="$SSH_AUTH_SOCK"} \
+  MISE_DATA_DIR="$dir/mise/data" MISE_CACHE_DIR="$dir/mise/cache" MISE_STATE_DIR="$dir/mise/state" \
+  MISE_CONFIG_DIR="$dir/mise/config" MISE_GLOBAL_CONFIG_FILE="$dir/mise/config/config.toml" \
+  MISE_SYSTEM_CONFIG_FILE="$dir/mise/system.toml" \
+  GHCUP_INSTALL_BASE_PREFIX="$dir/ghcup" RUSTUP_HOME="$dir/rustup" CARGO_HOME="$dir/cargo" \
+  UV_PYTHON_INSTALL_DIR="$dir/uv/python" UV_CACHE_DIR="$dir/uv/cache" COURSIER_CACHE="$dir/coursier" \
+  GOPATH="$dir/go" GOMODCACHE="$dir/go/mod" TMPDIR="$dir/tmp" "$@"
