@@ -1,3 +1,3 @@
 interface:
   display_name: "Pull request"
-  short_description: "Small PRs with short bodies from the repo template; stacks and merges"
+  short_description: "Small GitHub PRs and GitLab MRs with short bodies; sized stacks and merges"
