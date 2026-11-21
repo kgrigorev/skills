@@ -18,8 +18,9 @@ harnesses block force-push; then report the commands and let the owner run them.
   `gh stack init <b1> <b2> <b3>`. After a lower layer changes or merges (`gh stack view` shows
   "Needs rebase"): `gh stack rebase`, then `gh stack submit`.
 - Without it: cut each branch from the one below and open its PR with
-  `--base <branch below>`. After changing a lower layer, rebase the branches above onto it and
-  push with `--force-with-lease`.
+  `--base <branch below>`. After changing a lower layer, merge it into each branch above, bottom
+  up, and push: no force-push, so no owner approval. Rebase and `--force-with-lease` instead only
+  when the owner wants a linear history.
 
 `gh stack submit` without a terminal works like `--auto`: it uses generated titles and opens new
 PRs as drafts. Pass `--open` to make new and existing PRs ready for review. Either way, fix each
@@ -56,10 +57,12 @@ Then point the next PR at `main` with `gh pr edit <next> --base main`, and only 
 merged branch. Deleting a branch closes the PRs based on it; only the repo's own delete-on-merge
 setting moves them to `main` instead. Without the move, the next PR merges into the old branch.
 
-Without merge commits, squash each layer and move the next PR to `main` the same way. It still
-holds the old lower commits, so its diff against `main` shows them again. Rebase it before it
-merges: `git rebase --onto origin/main <old lower branch> <branch>`. Then push as in "Build a
-stack".
+Without merge commits, land the stack with [`scripts/land-squash-stack`](scripts/land-squash-stack),
+lowest PR first: `land-squash-stack <pr1> <pr2> <pr3>` (`--dry-run` prints the plan). After each
+squash it merges `main` into the next branch with `-s ours`, which changes no file, so the next
+diff shrinks to its own commits without a force-push. Each squash waits until no check is pending
+or failing. The script stops, with the commands to continue, when a branch lacks the head of the
+PR below it (a fix that was never merged up) or `main` moves during the run.
 
 On a branch with a merge queue (`gh api repos/{owner}/{repo}/rules/branches/main` lists a
 `merge_queue` rule), the queue sets the method and the merge commit's message; follow the
@@ -75,7 +78,10 @@ endpoint.
 
 ## Review a stack
 
-Review each PR on its own. Before the stack merges, review it once as a whole, for problems
+Review each PR on its own. A reviewer of one layer, such as a session or subagent given one PR,
+pushes fixes only to that PR's branch and leaves merging and new PRs to whoever owns the stack.
+Its last reply lists each finding with what it did about it. The owner then merges each changed
+branch into the ones above it, bottom up, before the stack lands. Before the stack merges, review it once as a whole, for problems
 between PRs only. The range runs from the merge base with `main` to the top branch. Leave
 vendored files out with `':!<path>'` pathspecs:
 
