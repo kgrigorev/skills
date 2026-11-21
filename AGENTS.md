@@ -8,4 +8,6 @@
 - Merges: squash only. Land a stack with `skills/pull-request/scripts/land-squash-stack`.
 - Commit messages and PR titles and bodies must pass `scripts/no-ai-attribution`, whose header
   lists the rules, among them a conventional subject of at most 72 characters. `.githooks` and the
-  `attribution` workflow run it. Enable the hooks with `git config core.hooksPath .githooks`.
+  `attribution` workflow run it, and `scripts/test-attribution` tests it. Enable the hooks with
+  `git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"`: an absolute path,
+  so worktrees of older branches still run them.
