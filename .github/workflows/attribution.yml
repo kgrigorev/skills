@@ -2,46 +2,63 @@ name: attribution
 
 # Runs the same check as the local git hooks (.githooks), so a clone without them, another
 # machine or a cloud session cannot land AI attribution: in the PR's commits, the lines they add,
-# or the PR's title and body, which a squash merge turns into the commit on main.
+# or the PR's title and body, which a squash merge turns into the commit on main. On main it
+# checks each new commit after the fact, since the squash message can be edited at merge time.
+#
+# The check skips the lines added to scripts/no-ai-attribution and tests/attribution, which hold
+# the patterns it bans. Read changes to those by hand.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: attribution-${{ github.ref }}
+  # A newer PR run replaces an older one; every commit on main gets its own run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   attribution:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      # The PR's base and head, or the commits a push to main added.
+      FROM: ${{ github.event.pull_request.base.sha || github.event.before }}
+      TO: ${{ github.event.pull_request.head.sha || github.sha }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.TO }}
           fetch-depth: 0
+          persist-credentials: false
 
-      # The base branch's copy judges the PR, so a PR cannot weaken the check that judges it. A
-      # PR that adds the script, before main has it, runs its own copy.
+      # On a PR, the base branch's copy of the script judges the PR. The workflow file itself
+      # comes from the PR, though, so a PR that edits this file can still weaken the job. A PR
+      # whose base does not have the script yet runs its own copy.
       - name: Take the check from the base branch
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git show "$BASE_SHA:scripts/no-ai-attribution" >"$RUNNER_TEMP/no-ai-attribution" 2>/dev/null ||
+          git show "$FROM:scripts/no-ai-attribution" >"$RUNNER_TEMP/no-ai-attribution" 2>/dev/null ||
             cp scripts/no-ai-attribution "$RUNNER_TEMP/no-ai-attribution"
           chmod +x "$RUNNER_TEMP/no-ai-attribution"
 
+      # Checks exactly FROM..TO, so a stacked PR does not recheck its base PR's commits, plus the
+      # lines TO adds over the merge base, which covers merge commits. Fails when FROM or TO is
+      # missing or the range is empty, so it cannot pass by checking nothing.
       - name: Commits and the lines they add
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        # No remote name: with one, pre-push would skip every commit the remote already has, and
-        # the checkout fetched the PR branch itself. It still skips commits on origin/main.
-        run: |
-          printf 'refs/heads/%s %s refs/heads/%s %s\n' "$HEAD_REF" "$HEAD_SHA" "$HEAD_REF" \
-            0000000000000000000000000000000000000000 | "$RUNNER_TEMP/no-ai-attribution" pre-push
+        run: '"$RUNNER_TEMP/no-ai-attribution" range "$FROM" "$TO" "$BRANCH"'
 
       - name: PR title and body
+        if: github.event_name == 'pull_request' && (success() || failure())
         env:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
         run: printf '%s\n\n%s\n' "$TITLE" "$BODY" | "$RUNNER_TEMP/no-ai-attribution" scan
+
+      - name: Tests of the check
+        if: success() || failure()
+        run: scripts/test-attribution

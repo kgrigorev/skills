@@ -49,3 +49,18 @@ ln -s ~/src/skills/skills/scaffold/scaffold-haskell ~/.claude/skills/scaffold-ha
 
 The scaffold skills share some files. Edit them in `skills/scaffold/_shared`, then run
 `scripts/sync-scaffold-shared` to copy them into each skill.
+
+## Contributing
+
+Commits and PR text carry no AI attribution and use conventional commit subjects of at most 72
+characters. `scripts/no-ai-attribution` checks this in CI. To run the same check before each
+commit and push, run this once in the main checkout:
+
+```sh
+git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
+```
+
+Use the absolute path. Git resolves a relative `core.hooksPath` in each worktree, and a worktree
+of a branch cut before `.githooks` existed would run no hook at all.
+
+`scripts/test-attribution` tests the check.
