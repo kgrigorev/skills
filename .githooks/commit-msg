@@ -1,0 +1,6 @@
+#!/bin/sh
+# This branch's copy of the check, else the main checkout's (a branch cut before main had it).
+script=$(git rev-parse --show-toplevel)/scripts/no-ai-attribution
+[ -x "$script" ] || script=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/scripts/no-ai-attribution
+[ -x "$script" ] || { echo "scripts/no-ai-attribution is missing here and in the main checkout. Pull main." >&2; exit 1; }
+exec "$script" commit-msg "$1"

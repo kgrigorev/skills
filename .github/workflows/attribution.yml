@@ -1,0 +1,47 @@
+name: attribution
+
+# Runs the same check as the local git hooks (.githooks), so a clone without them, another
+# machine or a cloud session cannot land AI attribution: in the PR's commits, the lines they add,
+# or the PR's title and body, which a squash merge turns into the commit on main.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # The base branch's copy judges the PR, so a PR cannot weaken the check that judges it. A
+      # PR that adds the script, before main has it, runs its own copy.
+      - name: Take the check from the base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git show "$BASE_SHA:scripts/no-ai-attribution" >"$RUNNER_TEMP/no-ai-attribution" 2>/dev/null ||
+            cp scripts/no-ai-attribution "$RUNNER_TEMP/no-ai-attribution"
+          chmod +x "$RUNNER_TEMP/no-ai-attribution"
+
+      - name: Commits and the lines they add
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        # No remote name: with one, pre-push would skip every commit the remote already has, and
+        # the checkout fetched the PR branch itself. It still skips commits on origin/main.
+        run: |
+          printf 'refs/heads/%s %s refs/heads/%s %s\n' "$HEAD_REF" "$HEAD_SHA" "$HEAD_REF" \
+            0000000000000000000000000000000000000000 | "$RUNNER_TEMP/no-ai-attribution" pre-push
+
+      - name: PR title and body
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n\n%s\n' "$TITLE" "$BODY" | "$RUNNER_TEMP/no-ai-attribution" scan
