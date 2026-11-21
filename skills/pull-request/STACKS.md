@@ -18,8 +18,9 @@ harnesses block force-push; then report the commands and let the owner run them.
   `gh stack init <b1> <b2> <b3>`. After a lower layer changes or merges (`gh stack view` shows
   "Needs rebase"): `gh stack rebase`, then `gh stack submit`.
 - Without it: cut each branch from the one below and open its PR with
-  `--base <branch below>`. After changing a lower layer, rebase the branches above onto it and
-  push with `--force-with-lease`.
+  `--base <branch below>`. After changing a lower layer, merge it into each branch above, bottom
+  up, and push: no force-push, so no owner approval. Rebase and `--force-with-lease` instead only
+  when the owner wants a linear history.
 
 `gh stack submit` without a terminal works like `--auto`: it uses generated titles and opens new
 PRs as drafts. Pass `--open` to make new and existing PRs ready for review. Either way, fix each
@@ -56,18 +57,32 @@ Then point the next PR at `main` with `gh pr edit <next> --base main`, and only 
 merged branch. Deleting a branch closes the PRs based on it; only the repo's own delete-on-merge
 setting moves them to `main` instead. Without the move, the next PR merges into the old branch.
 
-Without merge commits, squash each layer and move the next PR to `main` the same way. It still
-holds the old lower commits, so its diff against `main` shows them again. Rebase it before it
-merges: `git rebase --onto origin/main <old lower branch> <branch>`. Then push as in "Build a
-stack".
+Without merge commits, land the stack with [`scripts/land-squash-stack`](scripts/land-squash-stack),
+lowest PR first, from a clone whose `origin` holds the PR branches. Run it with `--dry-run` first,
+then for real in the background: it waits on each layer's checks, up to an hour each.
+
+```sh
+sh <this-skill-dir>/scripts/land-squash-stack --dry-run <pr1> <pr2> <pr3>
+sh <this-skill-dir>/scripts/land-squash-stack <pr1> <pr2> <pr3>
+```
+
+After each squash it merges `main` into the next branch with `-s ours`, which changes no file, so
+the next diff shrinks to its own commits without a force-push. Before anything lands it checks
+that every PR is open and ready, is based on the branch of the PR listed below it, and holds that
+PR's head; a fix that was never merged up fails this check. Each squash waits until GitHub reports
+the PR mergeable and no reported check is pending or failing. When it stops, for example because
+`main` moved during the run, it says what to fix and prints the command that continues the run.
 
 On a branch with a merge queue (`gh api repos/{owner}/{repo}/rules/branches/main` lists a
-`merge_queue` rule), the queue sets the method and the merge commit's message; follow the
-merge-commit or squash steps by its `merge_method`. `gh pr merge` only adds the PR to the queue,
+`merge_queue` rule), the queue sets the method and the merge commit's message, and
+`land-squash-stack` refuses to run. Add one PR at a time: `gh pr merge` only adds it to the queue,
 and fails when the repo does not allow auto-merge; then add it with
 `gh api -X PUT repos/{owner}/{repo}/pulls/<number>/merge-async`. Either way the merge lands later:
 wait until the PR says `MERGED` before you move the next PR and delete the branch. Deleting a
-PR's branch before it merges closes the PR.
+PR's branch before it merges closes the PR. With a `merge_method` of `MERGE`, nothing else is
+needed. With `SQUASH`, do what the script does before you add the next PR: check that `main`'s
+files equal the merged PR's head (`git rev-parse origin/main^{tree} <head>^{tree}` prints one
+value twice), then `git merge -s ours origin/main` into the next branch and push.
 
 Done when `gh pr view <number> --json state` says `MERGED` for each PR. For any other refusal
 (failing checks, a missing review, a ruleset), report GitHub's message. Do not retry through another
@@ -75,9 +90,13 @@ endpoint.
 
 ## Review a stack
 
-Review each PR on its own. Before the stack merges, review it once as a whole, for problems
-between PRs only. The range runs from the merge base with `main` to the top branch. Leave
-vendored files out with `':!<path>'` pathspecs:
+Review each PR on its own. A reviewer of one layer, such as a session or subagent given one PR,
+pushes fixes only to that PR's branch and leaves merging and new PRs to whoever owns the stack.
+Its last reply lists each finding with what it did about it. The stack's owner then merges each
+changed branch into the ones above it, bottom up, before the stack lands; `land-squash-stack`
+refuses a stack where a branch lacks the head of the one below. Before the stack merges, review it
+once as a whole, for problems between PRs only. The range runs from the merge base with `main` to
+the top branch. Leave vendored files out with `':!<path>'` pathspecs:
 
 ```sh
 git diff $(git merge-base origin/main <top>)..<top>
