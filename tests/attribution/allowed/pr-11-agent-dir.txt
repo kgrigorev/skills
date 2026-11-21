@@ -1,0 +1,14 @@
+fix(scaffold-haskell): make vendoring non-interactive, trim two comments (#11)
+
+Three review findings on #7 arrived after it merged.
+
+- SKILL.md hand-over: `npx skills add <source> -s <skill> -a <agents>
+-y`. Without `-y` the CLI prompts, which an agent cannot answer; without
+`-a` no harness gets its links (for example `.claude/skills`).
+- `app/Main.hs.tmpl`: the comment on `main` said what the code says. It
+now says why `main` stays thin.
+- `CODING_STANDARDS.md.tmpl`: dropped "Plain English and short
+sentences", which AGENTS.md > Writing already says.
+- Test: rendered the scaffold with reader "a Go developer new to
+Haskell"; its `scripts/check` passes.
+- Risk: easy to undo. Text only.
