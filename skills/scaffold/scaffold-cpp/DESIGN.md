@@ -1,6 +1,7 @@
 # Reasons the template files cannot carry
 
 Every other gate states its reason in a comment in its own file.
+Before you add or change a gate, read `skills/scaffold/GATES.md` in kgrigorev/skills.
 
 - `.claude/settings.json` (JSON has no comments):
   - `sandbox.filesystem.allowWrite` lists mise's install, state and cache folders, so
