@@ -14,7 +14,30 @@ unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_CO
 unset SHELLCHECK_OPTS PERL5OPT PERL5LIB PERLLIB PERL5DB PYTHONSTARTUP PYTHONPATH PYTHONWARNINGS
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
+step() { printf '\n==> %s\n' "$1"; }
+phys() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")"); }
+git_files() { git -c core.excludesFile=/dev/null -c "core.quotePath=$1" ls-files --cached --others --exclude-standard; }
+check_manifest() {
+  min_mise=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
+  wf_mise=$(sed -n 's/^ *version: "\(.*\)"$/\1/p' .github/workflows/check.yml)
+  { [ -n "$min_mise" ] && [ "$min_mise" = "$wf_mise" ]; } ||
+    die "mise version mismatch between mise.toml ($min_mise) and .github/workflows/check.yml ($wf_mise)."
+  extra_tools=$(awk '/^\[tools\]/{f=1;next} /^\[/{f=0} f&&/^[[:space:]]*[^#[:space:]]/{k=$0;sub(/[[:space:]]*=.*/,"",k);gsub(/^[[:space:]]+|"/,"",k);if(k!="actionlint"&&k!="jq"&&k!="shellcheck")print k}' mise.toml)
+  [ -z "$extra_tools" ] || die "Unchecked tool in mise.toml: $extra_tools"
+  for tool in shellcheck actionlint jq; do
+    want=$(sed -n "s/^$tool = \"\(.*\)\"$/\1/p" mise.toml)
+    [ -n "$want" ] || die "mise.toml lacks a version for $tool."
+    awk -v t="$tool" -v v="$want" '$0=="[[tools."t"]]"{f=1;next} /^\[/{f=0} f&&$0=="version = \""v"\""{ok=1} END{exit !ok}' mise.lock ||
+      die "mise.lock lacks $tool $want; run: MISE_LOCKED=0 mise lock"
+    for plat in linux-x64 macos-arm64; do
+      grep -qF "[tools.$tool.\"platforms.$plat\"]" mise.lock || die "mise.lock lacks $plat for $tool; run: MISE_LOCKED=0 mise lock"
+    done
+  done
+}
+
 if [ "${SCRIPTS_CHECK_UNDER_MISE:-}" != "$here" ]; then
+  step 'Pinned tools (mise.toml, mise.lock)'
+  check_manifest
   command -v mise >/dev/null 2>&1 || die 'mise is not on PATH. Install https://mise.jdx.dev and run: mise trust && mise install'
   for var in $(env | sed -n 's/^\(MISE_[A-Za-z0-9_]*\)=.*/\1/p'); do
     case $var in MISE_DATA_DIR | MISE_CACHE_DIR | MISE_STATE_DIR | MISE_TRUSTED_CONFIG_PATHS) ;; *) unset "$var" ;; esac
@@ -26,14 +49,10 @@ if [ "${SCRIPTS_CHECK_UNDER_MISE:-}" != "$here" ]; then
   IFS=$old_ifs
   MISE_LOCKED=1 MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml \
     MISE_SYSTEM_CONFIG_FILE=/dev/null/no-system-config.toml MISE_CEILING_PATHS=$(dirname "$here") \
-    PATH=$clean_path SCRIPTS_CHECK_UNDER_MISE=$here exec mise exec -- "$here/scripts/check"
+    PATH=$clean_path SCRIPTS_CHECK_STEP1=1 SCRIPTS_CHECK_UNDER_MISE=$here exec mise exec -- "$here/scripts/check"
 fi
 
-step() { printf '\n==> %s\n' "$1"; }
-phys() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")"); }
-git_files() { git -c core.excludesFile=/dev/null -c "core.quotePath=$1" ls-files --cached --others --exclude-standard; }
-
-step 'Pinned tools (mise.toml, mise.lock)'
+[ -n "${SCRIPTS_CHECK_STEP1:-}" ] || { step 'Pinned tools (mise.toml, mise.lock)'; check_manifest; }
 raw_configs=$(mise config ls --json)
 configs=$(printf '%s\n' "$raw_configs" | sed -n 's/^ *"path": "\(.*\)",*$/\1/p')
 [ -n "$configs" ] || die 'mise reads no mise.toml here. Run: mise trust'
@@ -41,21 +60,9 @@ old_ifs=$IFS IFS='
 '
 for config in $configs; do [ "$(phys "$config")" = "$here/mise.toml" ] || die "mise also reads $config. Remove it: only mise.toml configures this repository."; done
 IFS=$old_ifs
-min_mise=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
-wf_mise=$(sed -n 's/^ *version: "\(.*\)"$/\1/p' .github/workflows/check.yml)
-{ [ -n "$min_mise" ] && [ "$min_mise" = "$wf_mise" ]; } ||
-  die "mise version mismatch between mise.toml ($min_mise) and .github/workflows/check.yml ($wf_mise)."
-extra_tools=$(awk '/^\[tools\]/{f=1;next} /^\[/{f=0} f&&/^[[:space:]]*[^#[:space:]]/{k=$0;sub(/[[:space:]]*=.*/,"",k);gsub(/^[[:space:]]+|"/,"",k);if(k!="actionlint"&&k!="jq"&&k!="shellcheck")print k}' mise.toml)
-[ -z "$extra_tools" ] || die "Unchecked tool in mise.toml: $extra_tools"
 vers=''
 for tool in shellcheck actionlint jq; do
   want=$(sed -n "s/^$tool = \"\(.*\)\"$/\1/p" mise.toml)
-  [ -n "$want" ] || die "mise.toml lacks a version for $tool."
-  awk -v t="$tool" -v v="$want" '$0=="[[tools."t"]]"{f=1;next} /^\[/{f=0} f&&$0=="version = \""v"\""{ok=1} END{exit !ok}' mise.lock ||
-    die "mise.lock lacks $tool $want; run: MISE_LOCKED=0 mise lock"
-  for plat in linux-x64 macos-arm64; do
-    grep -qF "[tools.$tool.\"platforms.$plat\"]" mise.lock || die "mise.lock lacks $plat for $tool; run: MISE_LOCKED=0 mise lock"
-  done
   pinned=$(mise which "$tool") || exit 1
   found=$(command -v "$tool") || exit 1
   [ "$(phys "$found")" = "$(phys "$pinned")" ] || die "$tool is $found, not mise's $pinned. Run: mise install --force $tool"
