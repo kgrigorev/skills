@@ -1,7 +1,6 @@
 name: check
 
-# Runs scripts/check, the same gates as the git pre-push hook, and tests/check, which verifies
-# that each gate fails on bad input. title.yml and attribution.yml check the PR text and commits.
+# Runs scripts/check and tests/check; title.yml and attribution.yml check PR text and commits.
 on:
   pull_request:
   push:
@@ -13,10 +12,9 @@ permissions:
 
 concurrency:
   group: check-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # mise refuses a config file it has not been told to trust.
   MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
@@ -25,14 +23,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-
-      # Installs the tools from mise.toml and caches them. MISE_LOCKED makes mise install only
-      # what mise.lock records, with its URL and checksum. The mise version itself is pinned too.
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@v5
         env:
           MISE_LOCKED: "1"
         with:
           version: "2026.11.8"
-
       - run: scripts/check
       - run: tests/check

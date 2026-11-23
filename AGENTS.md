@@ -1,7 +1,7 @@
-- Repo checks: run `scripts/check` before pushing or opening a PR; `tests/check` tests the gates,
-  and `.githooks/pre-push` and the `check` workflow run `scripts/check`.
+- Repo checks: run `scripts/check` before pushing or opening a PR; `tests/check` tests the gates.
+  Read `skills/scaffold/GATES.md` before adding or changing a gate.
 - Scaffolds: shared files live in `skills/scaffold/_shared`; run `scripts/sync-scaffold-shared`
-  after editing them. Read `skills/scaffold/GATES.md` before adding or changing a gate.
+  after editing them.
 - Scaffold tests: `scripts/test-scaffold <stack> [attack...]` replays `tests/scaffold/<stack>/*.sh`;
   its header explains the `# expect:` lines. To leave your own toolchains untouched, run it
   through `scripts/isolated-env`.
