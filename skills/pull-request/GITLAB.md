@@ -40,7 +40,8 @@ MR by its IID or URL, not by its branch.
 
 An MR is ready to merge when `glab mr view <iid> -F json --jq .detailed_merge_status` says
 `mergeable`. `unchecked`, `checking`, `preparing` and `approvals_syncing` mean GitLab is still
-working it out: poll again. `ci_still_running` means only the pipeline is left, and
+working it out: poll again, and print the status when it changes. Approvals are required only
+when the status is `not_approved`. `ci_still_running` means only the pipeline is left, and
 `glab mr merge` arms auto-merge for it. `need_rebase` means the branch lacks its target's latest
 commits: under `rebase_merge` (or `ff` when squashing), `git merge --no-edit origin/<target>` and
 push clears it without a force-push, since GitLab checks only that the branch holds its target;

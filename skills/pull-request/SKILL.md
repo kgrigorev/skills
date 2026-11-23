@@ -71,9 +71,12 @@ platform file's edit command, under the same rules.
 
 ## Merge a PR
 
-Merge only when the owner asks, with the checks green and the reviews in. The repo's own merge
-rules come first: its PR doc, `AGENTS.md` or contributing guide, and the methods its settings
-allow (the platform file shows how to read them).
+Merge only when the owner asks. The repo's merge rules come first: its PR doc, `AGENTS.md` or
+contributing guide, and the methods its settings allow (the platform file shows how to read
+them). Reviews are required only when the base branch's protection sets
+`required_pull_request_reviews` (the platform file shows how to read it). A missing protection
+document or a null field means green checks are enough. Poll the platform's checks and print one
+table when a conclusion changes. Exit when no row is pending.
 
 Without rules, squash a PR that was never part of a stack. A stacked PR (its base is another
 branch, or another open PR targets its branch) merges by [`STACKS.md`](STACKS.md), and so does

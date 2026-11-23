@@ -27,6 +27,19 @@ gh api 'repos/{owner}/{repo}' \
 A `*_message` of `BLANK` for the method you use is the repo's own choice: leave the message to
 GitHub. Any other value, or `null` (the token cannot read the settings), means you pass it.
 
+## Checks
+
+Poll `gh pr checks <n> --json name,state,bucket` and print one table when a conclusion changes.
+Exit when no row is pending.
+
+Reviews are required only when branch protection sets `required_pull_request_reviews`:
+
+```sh
+gh api repos/{owner}/{repo}/branches/<base>/protection
+```
+
+A 404, or a null `required_pull_request_reviews`, means green checks are enough.
+
 ## Merge a PR
 
 For a squash merge, pass the PR's title as the subject and its body as the message. GitHub takes
@@ -110,7 +123,7 @@ Other stacks merge bottom-up, one PR at a time, the top one included.
    Only then delete the merged branch, with `git push origin --delete <branch>`, unless the repo
    deleted it on merge or open PRs are based on it. Move the PR yourself rather than rely on
    GitHub's retarget; without the move, the next PR merges into the old branch.
-3. Wait for the next PR's checks (`gh pr checks <next> --watch --required`), then repeat with it.
+3. Poll the next PR's checks as in "Checks", then repeat with it.
 
 **Without merge commits**, land the stack with
 [`scripts/land-squash-stack`](scripts/land-squash-stack), lowest PR first, from a clone whose
