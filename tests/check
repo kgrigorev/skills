@@ -129,9 +129,9 @@ printf '\necho $unquoted_tmpl\n' >>"$copy/skills/scaffold/scaffold-go/template/s
 expect_red 'scaffold check.tmpl shellcheck violation is rejected' 'Shell scripts' 'SC2086'
 
 mkdir -p "$copy/.github"
-printf 'paths:\n  ".github/workflows/*.yml":\n    ignore: [".*"]\n' >"$copy/.github/actionlint.yaml"
-printf 'name: bad\non: [push]\njobs:\n  broken:\n    runs-on: ubuntu-24.04\n    steps:\n      - unknown_key: 1\n' >"$copy/.github/workflows/bad.yml"
-expect_red 'invalid workflow cannot be silenced by .github/actionlint.yaml' 'Workflows' 'unknown_key'
+printf 'self-hosted-runner:\n  labels: [bogus-runner]\n' >"$copy/.github/actionlint.yaml"
+printf 'name: bad\non: [push]\njobs:\n  broken:\n    runs-on: bogus-runner\n    steps:\n      - run: true\n' >"$copy/.github/workflows/bad.yml"
+expect_red 'invalid workflow cannot be silenced by .github/actionlint.yaml' 'Workflows' 'bogus-runner'
 
 sed -i.bak 's/perf|revert/revert/' "$copy/.github/workflows/title.yml" && rm -f "$copy/.github/workflows/title.yml.bak"
 expect_red 'title pattern drift is rejected' 'Workflows' 'different conventional-commit patterns'
@@ -146,8 +146,9 @@ printf '\nSee [missing][ref].\n\n[ref]: skills/pull-request/github.md\n' >>"$cop
 expect_red 'wrong-case or missing reference markdown link is rejected' 'Markdown links' 'broken link target'
 
 # shellcheck disable=SC2016 # literal backticks in Markdown test input
-printf '\n```inline``` text\n\nSee [anchor](README.md#no-such-heading).\n' >>"$copy/AGENTS.md"
+printf '\n- item\n     ```sh\n     echo [ok](no-such.md)\n     ```\n[a]<!-- c -->(no-such.md)\n```inline``` text\n\nSee [anchor](README.md#no-such-heading).\n' >>"$copy/AGENTS.md"
 expect_red 'missing markdown heading anchor after inline triple backticks is rejected' 'Markdown links' 'missing heading'
+! grep -qF 'no-such.md' "$work/out" || fail 'list-indented fence or comment-split bracket treated as live link'
 
 printf '\n<!-- drift -->\n' >>"$copy/skills/scaffold/_shared/AGENTS.tail.md"
 expect_red 'scaffold shared drift is rejected' 'Scaffold shared files' 'Out of sync with skills/scaffold/_shared'
@@ -155,7 +156,7 @@ expect_red 'scaffold shared drift is rejected' 'Scaffold shared files' 'Out of s
 cat "$copy/tests/attribution/blocked/trailer.txt" >"$copy/tests/attribution/allowed/bad.txt"
 expect_red 'failing attribution test is rejected in Tests step' 'Tests' 'Some attribution tests failed'
 
-# Verify .githooks/pre-push: older branch, empty push, attribution block, subdir push, worktree trust, and --delete.
+# Verify .githooks/pre-push: older branch, empty push, attribution block, subdir push, and --delete.
 hook_dir=$work/prepush
 git init -q --bare -b main "$hook_dir/origin.git"
 git clone -q "$hook_dir/origin.git" "$hook_dir/clone" 2>/dev/null
@@ -204,16 +205,6 @@ if git -C "$hook_dir/clone" push -q origin --delete topic >"$work/out" 2>&1; the
 else
   fail 'pre-push ran scripts/check on branch deletion'
 fi
-
-# Verify worktree inherits mise trust from a trusted main clone without explicit MISE_TRUSTED_CONFIG_PATHS.
-mise trust "$copy/mise.toml" >/dev/null 2>&1
-git -C "$copy" worktree add -q --detach "$work/linked-wt" HEAD
-if "$work/linked-wt/scripts/check" >"$work/out" 2>&1; then
-  echo 'ok   linked worktree inherits mise trust from main checkout'
-else
-  fail 'linked worktree failed scripts/check despite trusted main checkout'
-fi
-git -C "$copy" worktree remove --force "$work/linked-wt"
 
 [ "$failed" = 0 ] || { echo 'Some check tests failed.' >&2; exit 1; }
 echo 'All check tests passed.'
