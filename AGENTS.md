@@ -12,4 +12,4 @@
   `attribution` workflow run it, and `scripts/test-attribution` tests it. Enable the hooks with
   `git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"`: an absolute path,
   so worktrees of older branches still run them.
-- Reviews: read `CODING_STANDARDS.md` before reviewing a diff, branch or PR.
+- Coding standards: read `CODING_STANDARDS.md` before editing or reviewing repository files.
