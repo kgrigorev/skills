@@ -32,10 +32,15 @@ def save(state):
 
 
 def git(state, *args, check=True):
-    r = subprocess.run(["git", "-C", state["origin"], *args], capture_output=True, text=True)
+    r = subprocess.run(["git", "-C", state["origin"], *args], capture_output=True, text=True, check=False)
     if check and r.returncode != 0:
         sys.exit(f"fake gh: git {' '.join(args)} failed: {r.stderr}")
     return r
+
+
+def branches(state):
+    r = git(state, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads")
+    return {name: oid for line in r.stdout.splitlines() if line for oid, name in [line.split(" ", 1)]}
 
 
 def branch_oid(state, branch):
@@ -45,15 +50,21 @@ def branch_oid(state, branch):
 
 def sync(state):
     """Keeps refs/pull/<n>/head current, and closes PRs whose base or head branch is gone."""
+    heads = branches(state)
+    changed = False
     for n, pr in state["prs"].items():
         if pr["state"] != "OPEN":
             continue
-        head = branch_oid(state, pr["headRefName"])
-        if head is None or branch_oid(state, pr["baseRefName"]) is None:
+        head = heads.get(pr["headRefName"])
+        if head is None or pr["baseRefName"] not in heads:
             pr["state"] = "CLOSED"
+            changed = True
             continue
-        pr["headRefOid"] = head
-        git(state, "update-ref", f"refs/pull/{n}/head", head)
+        if pr.get("headRefOid") != head:
+            pr["headRefOid"] = head
+            git(state, "update-ref", f"refs/pull/{n}/head", head)
+            changed = True
+    return changed
 
 
 def merge_tree(state, base, head):
@@ -65,7 +76,7 @@ def contains(state, ancestor, descendant):
     return git(state, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode == 0
 
 
-def view(state, n):
+def view(state, n, want=None):
     pr = state["prs"][n]
     out = dict(pr, number=int(n))
     out.setdefault("headRefOid", None)
@@ -76,6 +87,8 @@ def view(state, n):
          "conclusion": "" if c == "PENDING" else c}
         for i, c in enumerate(pr.get("checks", ["SUCCESS"]))
     ]
+    if want is not None and not ({"mergeable", "mergeStateStatus"} & want):
+        return out
     if pr["state"] == "OPEN":
         base = branch_oid(state, pr["baseRefName"])
         clean = merge_tree(state, base, pr["headRefOid"]) is not None
@@ -101,11 +114,16 @@ def view(state, n):
 def emit(value, fields, jq):
     if fields is not None and isinstance(value, dict):
         value = {k: value.get(k) for k in fields.split(",")}
+    if jq is not None and isinstance(value, dict) and jq.startswith(".") and jq[1:].isidentifier():
+        v = value.get(jq[1:])
+        if not isinstance(v, (dict, list)):
+            print("true" if v is True else "false" if v is False else "null" if v is None else v)
+            return
     text = json.dumps(value)
     if jq is None:
         print(text)
         return
-    r = subprocess.run(["jq", "-r", jq], input=text, capture_output=True, text=True)
+    r = subprocess.run(["jq", "-r", jq], input=text, capture_output=True, text=True, check=False)
     sys.stdout.write(r.stdout)
     sys.stderr.write(r.stderr)
     if r.returncode != 0:
@@ -156,7 +174,8 @@ def main():
     with open(os.path.join(STATE_DIR, "calls"), "a") as f:
         f.write(" ".join(args) + "\n")
     state = load()
-    sync(state)
+    if sync(state):
+        save(state)
     pos, opts, fields_kv = [], {}, {}
     i = 2
     while i < len(args):
@@ -196,7 +215,7 @@ def main():
         n = pos[0]
         if n not in state["prs"]:
             sys.exit(f"no pull requests found for branch \"{n}\"")
-        emit(view(state, n), fields, jq)
+        emit(view(state, n, set(fields.split(",")) if fields else None), fields, jq)
     elif group == "pr" and cmd == "checks":
         for c in view(state, pos[0])["statusCheckRollup"]:
             print(f"{c['name']}\t{c['conclusion'] or 'pending'}")
@@ -211,8 +230,9 @@ def main():
         merge(state, pos[0], opts)
     else:
         sys.exit(f"fake gh: unsupported: {' '.join(args)}")
-    sync(state)
-    save(state)
+    if group == "pr" and cmd in ("edit", "merge"):
+        sync(state)
+        save(state)
 
 
 main()
