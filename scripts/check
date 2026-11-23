@@ -1,0 +1,223 @@
+#!/bin/sh
+# Runs every quality gate for this repository; stops at the first failure.
+# Agents: change this file only with the owner's approval.
+set -eu
+set -f
+[ "$#" -eq 0 ] || { echo 'Usage: scripts/check' >&2; exit 2; }
+cd "$(dirname "$0")/.."
+here=$(pwd -P)
+die() { echo "$*" >&2; exit 1; }
+# shellcheck disable=SC2046 # git prints variable names, one per line
+unset $(git rev-parse --local-env-vars)
+unset GIT_CONFIG_SYSTEM GIT_EXTERNAL_DIFF GIT_DIFF_OPTS
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE EMAIL
+unset SHELLCHECK_OPTS PERL5OPT PERL5LIB PERLLIB PERL5DB PYTHONSTARTUP PYTHONPATH PYTHONWARNINGS
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
+step() { printf '\n==> %s\n' "$1"; }
+phys() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")"); }
+git_files() { git -c core.excludesFile=/dev/null -c "core.quotePath=$1" ls-files --cached --others --exclude-standard; }
+check_manifest() {
+  min_mise=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
+  wf_mise=$(sed -n 's/^ *version: "\(.*\)"$/\1/p' .github/workflows/check.yml)
+  { [ -n "$min_mise" ] && [ "$min_mise" = "$wf_mise" ]; } || die "mise version mismatch between mise.toml ($min_mise) and .github/workflows/check.yml ($wf_mise)."
+  extra_tools=$(awk '/^\[tools\]/{f=1;next} /^\[/{f=0} f&&/^[[:space:]]*[^#[:space:]]/{k=$0;sub(/[[:space:]]*=.*/,"",k);gsub(/^[[:space:]]+|"/,"",k);if(k!="actionlint"&&k!="jq"&&k!="shellcheck")print k}' mise.toml)
+  [ -z "$extra_tools" ] || die "Unchecked tool in mise.toml: $extra_tools"
+  for tool in shellcheck actionlint jq; do
+    want=$(sed -n "s/^$tool = \"\(.*\)\"$/\1/p" mise.toml)
+    [ -n "$want" ] || die "mise.toml lacks a version for $tool."
+    awk -v t="$tool" -v v="$want" '$0=="[[tools."t"]]"{f=1;next} /^\[/{f=0} f&&$0=="version = \""v"\""{ok=1} END{exit !ok}' mise.lock || die "mise.lock lacks $tool $want; run: MISE_LOCKED=0 mise lock"
+    for plat in linux-x64 macos-arm64; do grep -qF "[tools.$tool.\"platforms.$plat\"]" mise.lock || die "mise.lock lacks $plat for $tool; run: MISE_LOCKED=0 mise lock"; done
+  done
+}
+
+[ "${SCRIPTS_CHECK_STEP1:-}" = "$here" ] || step 'Pinned tools (mise.toml, mise.lock)'
+check_manifest
+if [ "${SCRIPTS_CHECK_UNDER_MISE:-}" != "$here" ]; then
+  command -v mise >/dev/null 2>&1 || die 'mise is not on PATH. Install https://mise.jdx.dev and run: mise trust && mise install'
+  for var in $(env | sed -n 's/^\(MISE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    case $var in MISE_DATA_DIR | MISE_CACHE_DIR | MISE_STATE_DIR | MISE_TRUSTED_CONFIG_PATHS) ;; *) unset "$var" ;; esac
+  done
+  clean_path='' old_ifs=$IFS IFS=:
+  for entry in $PATH; do case $entry in */mise/shims | */mise/shims/) ;; *) clean_path=${clean_path:+$clean_path:}$entry ;; esac; done
+  IFS=$old_ifs
+  MISE_LOCKED=1 MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml \
+    MISE_SYSTEM_CONFIG_FILE=/dev/null/no-system-config.toml MISE_CEILING_PATHS=$(dirname "$here") \
+    PATH=$clean_path SCRIPTS_CHECK_STEP1=$here SCRIPTS_CHECK_UNDER_MISE=$here exec mise exec -- "$here/scripts/check"
+fi
+raw_configs=$(mise config ls --json)
+configs=$(printf '%s\n' "$raw_configs" | sed -n 's/^ *"path": "\(.*\)",*$/\1/p')
+[ -n "$configs" ] || die 'mise reads no mise.toml here. Run: mise trust'
+old_ifs=$IFS IFS='
+'
+for config in $configs; do [ "$(phys "$config")" = "$here/mise.toml" ] || die "mise also reads $config. Remove it: only mise.toml configures this repository."; done
+IFS=$old_ifs
+vers=''
+for tool in shellcheck actionlint jq; do
+  want=$(sed -n "s/^$tool = \"\(.*\)\"$/\1/p" mise.toml)
+  pinned=$(mise which "$tool") || exit 1
+  found=$(command -v "$tool") || exit 1
+  [ "$(phys "$found")" = "$(phys "$pinned")" ] || die "$tool is $found, not mise's $pinned. Run: mise install --force $tool"
+  case $tool in
+    shellcheck) got=$(shellcheck --version | sed -n 's/^version: //p') ;;
+    actionlint) got=$(actionlint -version | head -n 1) ;;
+    jq) got=$(jq --version | sed 's/^jq-//') ;;
+  esac
+  [ "$got" = "$want" ] || die "$tool version is $got, mise.toml pins $want."
+  vers="${vers:+$vers, }$tool $got"
+done
+printf '%s\n' "$vers"
+
+step 'Git-visible file names'
+odd=$(git_files true | grep -E '["[:space:][:cntrl:]]' || true)
+[ -z "$odd" ] || die "$odd
+Rename these files: use ASCII paths without spaces, control characters or double quotes."
+cr=$(printf '\r')
+sh_files='' wf_files='' pl_files='' py_files='' md_files=''
+# shellcheck disable=SC2013 # paths have no spaces or control characters (verified above)
+for f in $(git_files false); do
+  [ ! -L "$f" ] || die "Symlinks are not allowed in repository files: $f"
+  [ -f "$f" ] || continue
+  case $f in skills/*/evals/*) continue ;; esac
+  case $f in *.tmpl) ;; *.[Tt][Mm][Pp][Ll]) die "Use a lower-case file extension: $f" ;; esac
+  case ${f%.tmpl} in
+    *.md | *.sh | *.pl | *.py | *.yml | *.yaml) ;;
+    *.[Mm][Dd] | *.[Ss][Hh] | *.[Pp][Ll] | *.[Pp][Yy] | *.[Yy][Mm][Ll] | *.[Yy][Aa][Mm][Ll]) die "Use a lower-case file extension: $f" ;;
+    *.[Bb][Aa][Ss][Hh] | *.[Zz][Ss][Hh] | *.[Kk][Ss][Hh]) die "Use POSIX sh instead of another shell: $f" ;;
+  esac
+  case $f in *.md) md_files="$md_files ./$f" ;; .github/workflows/*.yml | .github/workflows/*.yaml) wf_files="$wf_files ./$f" ;; esac
+  case $f in tests/scaffold/*) continue ;; esac
+  IFS= read -r first <"$f" || first=''
+  kind=''
+  case $first in
+    '#!'*"$cr") die "CRLF shebang in $f" ;;
+    '#!'*)
+      rest=${first#\#!} first="#!${rest#"${rest%%[![:space:]]*}"}"
+      case $first in
+        '#!/bin/sh' | '#!/bin/sh '* | '#!/usr/bin/env sh' | '#!/usr/bin/env sh '*) kind='sh' ;;
+        '#!/usr/bin/perl' | '#!/usr/bin/perl '* | '#!/usr/bin/env perl' | '#!/usr/bin/env perl '*) kind='pl' ;;
+        '#!/usr/bin/env python3' | '#!/usr/bin/env python3 '*) kind='py' ;;
+        *) die "Unsupported shebang '$first' in $f (use #!/bin/sh, #!/usr/bin/perl or #!/usr/bin/env python3)." ;;
+      esac ;;
+    *) [ ! -x "$f" ] || die "Executable file lacks a shebang: $f" ;;
+  esac
+  case $f in
+    *.sh.tmpl) sh_files="$sh_files ./$f"; continue ;;
+    *.tmpl) [ "$kind" != sh ] || sh_files="$sh_files ./$f"; continue ;;
+  esac
+  case $f:$kind in
+    *.sh:* | *:sh) sh_files="$sh_files ./$f" ;;
+    *.pl:* | *:pl) pl_files="$pl_files ./$f" ;;
+    *.py:* | *:py) py_files="$py_files ./$f" ;;
+  esac
+done
+
+step 'Shell scripts (shellcheck)'
+[ -n "$sh_files" ] || die 'No shell scripts found to check.'
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+shellcheck --norc -x -P SCRIPTDIR -s sh $sh_files
+
+step 'Workflows (actionlint, title pattern)'
+[ -n "$wf_files" ] || die 'No workflow files found to check.'
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+actionlint -config-file /dev/null -pyflakes= $wf_files
+title_pat=$(sed -n "s/^ *pattern='\(.*\)\.\*\\$'/\1/p" .github/workflows/title.yml)
+# shellcheck disable=SC2016 # $subject is Perl syntax, not shell
+attr_pat=$(sed -n 's|^ *unless \$subject =~ /\(.*\)/;$|\1|p' scripts/no-ai-attribution | sed 's/(?:/(/g')
+{ [ -n "$title_pat" ] && [ "$title_pat" = "$attr_pat" ]; } ||
+  die '.github/workflows/title.yml and scripts/no-ai-attribution have different conventional-commit patterns.'
+
+step 'Perl and Python scripts'
+[ -n "$pl_files" ] && [ -n "$py_files" ] || die 'Missing Perl or Python scripts to check.'
+for f in $pl_files; do err=$(perl -c "$f" 2>&1) || die "$err"; done
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+python3 -I -B -c 'import pathlib, sys
+for p in sys.argv[1:]: compile(pathlib.Path(p).read_bytes(), p, "exec")' $py_files
+
+step 'Markdown links'
+[ -n "$md_files" ] || die 'No Markdown files found to check.'
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+python3 -I -B - $md_files <<'PY'
+import os, re, subprocess, sys, urllib.parse
+files = subprocess.check_output(
+    ["git", "-c", "core.excludesFile=/dev/null", "-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard"], text=True
+).splitlines()
+file_set, dir_set = {f for f in files if os.path.isfile(f)}, {"."}
+for f in file_set:
+    d = os.path.dirname(f)
+    while d:
+        dir_set.add(d); d = os.path.dirname(d)
+bq_re, fence_open_re, fence_close_re = re.compile(r"^(?: {0,3}> ?)+"), re.compile(r"^[ \t]*(`{3,}(?=[^`]*$)|~{3,})"), re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
+code_pat = r"(?<!`)(`+)(?!`)(?:(?!\1(?!`)).)+?(?<!`)\1(?!`)"
+code_re, code_or_comment_re = re.compile(code_pat), re.compile(f"{code_pat}|(<!--[\\s\\S]*?-->)")
+link_re = re.compile(r"!?\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(<[^>]+>|(?:[^()\s]|\([^()\s]*\))+)(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)")
+ref_def_re, ref_use_re = re.compile(r"^ {0,3}\[(?!\^)([^\]]+)\]:\s*(<[^>]+>|\S+)"), re.compile(r"!?\[([^\[\]]+)\]\[\s*([^\[\]]*)\s*\]")
+heading_re = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$")
+clean_seg = lambda s: re.sub(r"[*~]", "", re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)))
+
+def unfenced_lines(md_path):
+    in_fence, out = None, []
+    with open(md_path, encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = bq_re.sub("", raw_line)
+            if in_fence is not None:
+                if (mc := fence_close_re.match(line)) and mc.group(1)[0] == in_fence[0] and len(mc.group(1)) >= in_fence[1]:
+                    in_fence = None
+                out.append("\n")
+            elif mo := fence_open_re.match(line):
+                in_fence = (mo.group(1)[0], len(mo.group(1))); out.append("\n")
+            else:
+                out.append(line)
+    masked = code_or_comment_re.sub(lambda m: ("\n" * nl if (nl := m.group(2).count("\n")) else " ") if m.group(2) else m.group(0), "".join(out))
+    return list(enumerate(masked.splitlines(), 1))
+
+def slugs_for(md_path):
+    slugs, counts = set(), {}
+    for _, line in unfenced_lines(md_path):
+        if hm := heading_re.match(line):
+            raw, pos, buf = hm.group(1), 0, []
+            for cm in code_re.finditer(raw):
+                t = len(cm.group(1))
+                buf.extend((clean_seg(raw[pos:cm.start()]), cm.group(0)[t:-t].strip(" ") if len(cm.group(0)) > 2 * t else ""))
+                pos = cm.end()
+            base = re.sub(r"[^\w -]", "", ("".join(buf) + clean_seg(raw[pos:])).lower()).replace(" ", "-")
+            n = counts.get(base, 0); counts[base] = n + 1
+            slugs.add(base if n == 0 else f"{base}-{n}")
+    return slugs
+
+slug_cache, bad = {}, 0
+for arg in sys.argv[1:]:
+    md = arg[2:] if arg.startswith("./") else arg
+    lines = unfenced_lines(md)
+    defs = {re.sub(r"\s+", " ", rm.group(1).strip()).casefold() for _, ln in lines if (rm := ref_def_re.match(code_re.sub(" ", ln)))}
+    for lineno, line in lines:
+        stripped = code_re.sub(" ", line)
+        for um in ref_use_re.finditer(stripped):
+            if re.sub(r"\s+", " ", (um.group(2) or um.group(1)).strip()).casefold() not in defs:
+                print(f"{md}:{lineno}: undefined link reference '{um.group(2) or um.group(1)}'", file=sys.stderr); bad = 1
+        targets = [t for lm in link_re.finditer(stripped) for t in (lm.group(2), *(im.group(2) for im in link_re.finditer(lm.group(1))))]
+        if rm := ref_def_re.match(stripped):
+            targets.append(rm.group(2))
+        for raw_t in targets:
+            target = raw_t[1:-1] if raw_t.startswith("<") and raw_t.endswith(">") else raw_t
+            if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+                continue
+            path_part, sep, frag = (urllib.parse.unquote(p) for p in target.partition("#"))
+            resolved = md if not path_part else os.path.normpath(os.path.join(os.path.dirname(md), path_part))
+            if resolved.startswith("..") or (resolved not in file_set and resolved not in dir_set):
+                print(f"{md}:{lineno}: broken link target '{target}'", file=sys.stderr); bad = 1
+            elif sep:
+                doc = os.path.normpath(os.path.join(resolved, "README.md")) if resolved in dir_set else resolved
+                if doc not in file_set or not doc.endswith(".md"):
+                    print(f"{md}:{lineno}: unsupported anchor '#{frag}' on {resolved}", file=sys.stderr); bad = 1
+                elif frag not in slug_cache.setdefault(doc, slugs_for(doc)):
+                    print(f"{md}:{lineno}: missing heading '#{frag}' in {doc}", file=sys.stderr); bad = 1
+sys.exit(bad)
+PY
+
+step 'Scaffold shared files'
+scripts/sync-scaffold-shared --check
+step 'Tests'
+scripts/test-attribution
+tests/pull-request/land-squash-stack
+printf '\nAll checks passed.\n'

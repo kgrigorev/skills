@@ -58,9 +58,11 @@ commit and push, run this once in the main checkout:
 
 ```sh
 git config core.hooksPath "$(git rev-parse --show-toplevel)/.githooks"
+mise trust && mise install
 ```
 
 Use the absolute path. Git resolves a relative `core.hooksPath` in each worktree, and a worktree
 of a branch cut before `.githooks` existed would run no hook at all.
 
-`scripts/test-attribution` tests the check.
+`scripts/check` runs every repo gate locally, in `.githooks/pre-push` and in CI; `tests/check` and
+`scripts/test-attribution` test them.
