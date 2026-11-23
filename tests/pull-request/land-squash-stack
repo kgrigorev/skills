@@ -9,9 +9,47 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 script=$here/../../skills/pull-request/scripts/land-squash-stack
 root=$(mktemp -d "${TMPDIR:-/tmp}/test-land-squash-stack.XXXXXX")
-trap '[ -n "${KEEP:-}" ] || rm -rf "$root"' EXIT
+pids=''
+kill_tree() {
+  kill -STOP "$1" 2>/dev/null || true
+  for child in $(pgrep -P "$1" 2>/dev/null || true); do kill_tree "$child"; done
+  kill -TERM "$1" 2>/dev/null || true
+  kill -CONT "$1" 2>/dev/null || true
+}
+cleanup() {
+  for pid in $pids; do kill_tree "$pid"; done
+  for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+  [ -n "${KEEP:-}" ] || rm -rf "$root" 2>/dev/null || rm -rf "$root"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 mkdir "$root/bin"
+strip_shims() {
+  set -f
+  IFS=: out=
+  for entry in $PATH; do
+    case $entry in
+      */mise/shims | */mise/shims/) ;;
+      *) out=${out:+$out:}$entry ;;
+    esac
+  done
+  printf '%s\n' "$out"
+}
+no_shims=$(strip_shims)
+real_bin() {
+  p=$(command -v "$1") || { echo "missing required tool: $1" >&2; exit 1; }
+  case $p in
+    */mise/shims/*) mise which "$1" 2>/dev/null || PATH=$no_shims command -v "$1" || printf '%s\n' "$p" ;;
+    *) printf '%s\n' "$p" ;;
+  esac
+}
 ln -s "$here/fake-gh" "$root/bin/gh"
+for tool in git jq python3; do
+  bin=$(real_bin "$tool")
+  case $bin in /*) ;; *) bin=$PWD/$bin ;; esac
+  ln -s "$bin" "$root/bin/$tool"
+done
+export PATH="$root/bin:$PATH"
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
@@ -22,30 +60,39 @@ commit() { # <dir> <file> <content> <message>
   git -C "$1" commit -q -m "$4"
 }
 
+# Builds the baseline stack once in $root/_base; setup copies it per scenario.
+build_base() {
+  b=$root/_base
+  mkdir -p "$b"
+  git init -q --bare -b main "$b/origin.git"
+  git clone -q "$b/origin.git" "$b/seed" 2>/dev/null
+  git -C "$b/seed" checkout -q -b main
+  commit "$b/seed" a.txt base 'base'
+  commit "$b/seed" c.txt c0 'c'
+  git -C "$b/seed" checkout -q -b b1
+  commit "$b/seed" a.txt one 'one'
+  git -C "$b/seed" checkout -q -b b2
+  commit "$b/seed" a.txt two 'two'
+  git -C "$b/seed" checkout -q -b b3
+  commit "$b/seed" b.txt three 'three'
+  git -C "$b/seed" push -q origin main b1 b2 b3
+  top_tree=$(git -C "$b/seed" rev-parse 'b3^{tree}')
+  git clone -q "$b/origin.git" "$b/work"
+}
+
 # Builds the stack in a fresh $t: $t/origin.git, $t/state, and the clone $t/work.
 setup() {
   t=$root/$1
+  cp -R "$root/_base" "$t"
   mkdir -p "$t/state"
-  git init -q --bare -b main "$t/origin.git"
-  git clone -q "$t/origin.git" "$t/seed" 2>/dev/null
-  git -C "$t/seed" checkout -q -b main
-  commit "$t/seed" a.txt base 'base'
-  commit "$t/seed" c.txt c0 'c'
-  git -C "$t/seed" checkout -q -b b1
-  commit "$t/seed" a.txt one 'one'
-  git -C "$t/seed" checkout -q -b b2
-  commit "$t/seed" a.txt two 'two'
-  git -C "$t/seed" checkout -q -b b3
-  commit "$t/seed" b.txt three 'three'
-  git -C "$t/seed" push -q origin main b1 b2 b3
-  top_tree=$(git -C "$t/seed" rev-parse 'b3^{tree}')
+  git -C "$t/seed" remote set-url origin "$t/origin.git"
+  git -C "$t/work" remote set-url origin "$t/origin.git"
   cat >"$t/state/state.json" <<EOF
 {"origin": "$t/origin.git", "deleteBranchOnMerge": false, "prs": {
  "1": {"title": "feat: one", "body": "One.", "headRefName": "b1", "baseRefName": "main", "state": "OPEN", "isDraft": false},
  "2": {"title": "feat: two", "body": "Two.", "headRefName": "b2", "baseRefName": "b1", "state": "OPEN", "isDraft": false},
  "3": {"title": "feat: three", "body": "Three.", "headRefName": "b3", "baseRefName": "b2", "state": "OPEN", "isDraft": false}}}
 EOF
-  git clone -q "$t/origin.git" "$t/work"
 }
 
 state() { # <jq filter>: changes the fake GitHub's state
@@ -58,14 +105,14 @@ land() {
   dir=$t/work
   if [ "$1" = -C ]; then dir=$2; shift 2; fi
   status=0
-  (cd "$dir" && PATH="$root/bin:$PATH" FAKE_GH_STATE=$t/state LAND_SQUASH_STACK_POLL=0 \
+  (cd "$dir" && FAKE_GH_STATE=$t/state LAND_SQUASH_STACK_POLL=0 \
     sh "$script" "$@") >"$t/out" 2>&1 || status=$?
 }
 
 fail() {
   echo "FAIL $scenario: $*" >&2
   [ -n "$this_failed" ] || sed 's/^/  | /' "$t/out" >&2
-  failed=1 this_failed=1
+  this_failed=1
 }
 expect_status() { [ "$status" = "$1" ] || fail "exit status $status, want $1"; }
 expect_output() { grep -qF -- "$1" "$t/out" || fail "output lacks: $1"; }
@@ -241,11 +288,33 @@ all=$(sed -n 's/^scenario_\([a-z_]*\)().*/\1/p' "$0")
 failed=''
 # shellcheck disable=SC2086 # scenario names, split on purpose
 [ "$#" -gt 0 ] || set -- $all
+build_base
+i=0
 for scenario in "$@"; do
-  this_failed=''
-  setup "$scenario"
-  "scenario_$scenario"
-  [ -n "$this_failed" ] || echo "ok   $scenario"
+  i=$((i + 1))
+  (
+    this_failed=''
+    setup "$i-$scenario"
+    "scenario_$scenario"
+    [ -z "$this_failed" ]
+  ) >"$root/$i.log" 2>&1 &
+  pids="$pids $!"
+done
+i=0
+for pid in $pids; do
+  i=$((i + 1))
+  scenario=$1
+  shift
+  rc=0
+  wait "$pid" || rc=$?
+  pids=${pids# "$pid"}
+  cat "$root/$i.log" >&2
+  if [ "$rc" = 0 ]; then
+    echo "ok   $scenario"
+  else
+    grep -q '^FAIL ' "$root/$i.log" || echo "FAIL $scenario: exited with status $rc" >&2
+    failed=1
+  fi
 done
 [ -z "$failed" ] || { echo 'Some scenarios failed.' >&2; exit 1; }
 echo 'All scenarios passed.'
