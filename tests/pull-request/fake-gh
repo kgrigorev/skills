@@ -116,7 +116,7 @@ def merge(state, n, opts):
     pr = state["prs"][n]
     if pr["state"] != "OPEN":
         sys.exit(f"Pull request #{n} is not open")
-    if state.get("mergeQueue"):
+    if state.get("mergeQueue") or state.get("classicMergeQueue"):
         print(f"Pull request #{n} will be added to the merge queue for {TRUNK} when ready")
         return
     if opts.get("--match-head-commit") != pr["headRefOid"]:
@@ -126,8 +126,13 @@ def merge(state, n, opts):
         sys.exit(f"Pull request #{n} is not mergeable: {pr['baseRefName']} {v['mergeStateStatus']}")
     base = branch_oid(state, TRUNK)
     tree = merge_tree(state, base, pr["headRefOid"])
-    with open(opts["--body-file"]) as f:
-        message = opts["--subject"] + "\n\n" + f.read()
+    if "--body-file" in opts or "--subject" in opts:
+        with open(opts["--body-file"]) as f:
+            message = opts["--subject"] + "\n\n" + f.read()
+    elif state.get("squashMergeCommitMessage") == "BLANK":
+        message = f"{pr['title']} (#{n})\n"
+    else:
+        message = f"raw squash of #{n}\n\n* commit body"
     commit = subprocess.run(
         ["git", "-C", state["origin"], "commit-tree", tree, "-p", base, "-F", "-"],
         input=message, capture_output=True, text=True, check=True).stdout.strip()
@@ -152,11 +157,15 @@ def main():
         f.write(" ".join(args) + "\n")
     state = load()
     sync(state)
-    pos, opts = [], {}
+    pos, opts, fields_kv = [], {}, {}
     i = 2
     while i < len(args):
-        if args[i].startswith("--"):
-            if i + 1 < len(args) and not args[i + 1].startswith("--") and args[i] not in ("--squash",):
+        if args[i] in ("-F", "-f", "--field", "--raw-field"):
+            k, _, v = args[i + 1].partition("=")
+            fields_kv[k] = v
+            i += 2
+        elif args[i].startswith("--"):
+            if i + 1 < len(args) and not args[i + 1].startswith("--") and args[i + 1] not in ("-F", "-f") and args[i] not in ("--squash",):
                 opts[args[i]] = args[i + 1]
                 i += 2
             else:
@@ -169,8 +178,17 @@ def main():
     fields, jq = opts.get("--json"), opts.get("--jq")
 
     if group == "repo" and cmd == "view":
-        emit({"squashMergeAllowed": True, "defaultBranchRef": {"name": TRUNK},
+        emit({"squashMergeAllowed": state.get("squashMergeAllowed", True), "defaultBranchRef": {"name": TRUNK},
               "deleteBranchOnMerge": state.get("deleteBranchOnMerge", False)}, fields, jq)
+    elif group == "api" and cmd == "graphql":
+        has_q = (state.get("mergeQueue") or state.get("classicMergeQueue")) and fields_kv.get("branch") == TRUNK
+        mq = {"id": "MQ_1", "configuration": {"mergeMethod": "SQUASH"}} if has_q else None
+        emit({"data": {"repository": {"mergeQueue": mq}}}, None, jq)
+    elif group == "api" and cmd == "repos/{owner}/{repo}":
+        msg_mode = state.get("squashMergeCommitMessage", "COMMIT_MESSAGES")
+        emit({"squash_merge_commit_title": "PR_TITLE" if msg_mode == "BLANK" else "COMMIT_OR_PR_TITLE",
+              "squash_merge_commit_message": msg_mode,
+              "merge_commit_title": "MERGE_MESSAGE", "merge_commit_message": "PR_TITLE"}, None, jq)
     elif group == "api":
         rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}] if state.get("mergeQueue") else []
         emit(rules, None, opts.get("--jq"))

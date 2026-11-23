@@ -91,6 +91,8 @@ scenario_lands_the_stack() {
   expect_main_tree "$top_tree"
   [ "$(git -C "$t/origin.git" log --format=%s main | head -3 | tr '\n' '|')" = 'feat: three (#3)|feat: two (#2)|feat: one (#1)|' ] ||
     fail 'squash subjects on main are wrong'
+  [ "$(git -C "$t/origin.git" log -3 --format=%b main | grep . | tr '\n' '|')" = 'Three.|Two.|One.|' ] ||
+    fail 'squash bodies on main are wrong'
   for b in b1 b2 b3; do ! branch_exists "$b" || fail "branch $b was not deleted"; done
 }
 
@@ -100,6 +102,18 @@ scenario_lands_with_delete_on_merge() {
   expect_status 0
   expect_states MERGED MERGED MERGED
   expect_main_tree "$top_tree"
+}
+
+scenario_lands_with_blank_squash_message() {
+  state '.squashMergeCommitMessage = "BLANK"'
+  land 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+  expect_main_tree "$top_tree"
+  [ "$(git -C "$t/origin.git" log --format=%s main | head -3 | tr '\n' '|')" = 'feat: three (#3)|feat: two (#2)|feat: one (#1)|' ] ||
+    fail 'squash subjects on main are wrong'
+  [ -z "$(git -C "$t/origin.git" log -3 --format=%b main | tr -d '\n')" ] ||
+    fail 'squash commits kept bodies despite BLANK setting'
 }
 
 scenario_dry_run_anywhere_changes_nothing() {
@@ -189,10 +203,18 @@ scenario_blocked_stops_soon() {
 }
 
 scenario_merge_queue_is_refused() {
-  state '.mergeQueue = true'
+  state '.classicMergeQueue = true'
   land 1 2 3
   expect_status 1
-  expect_output 'merge queue'
+  expect_output 'Follow GITHUB.md for a merge queue.'
+  expect_untouched
+}
+
+scenario_squash_disallowed_is_refused() {
+  state '.squashMergeAllowed = false'
+  land 1 2 3
+  expect_status 1
+  expect_output 'Follow GITHUB.md for merge commits instead.'
   expect_untouched
 }
 
