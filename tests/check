@@ -45,6 +45,11 @@ fail() {
   failed=1
 }
 
+rewrite() { # <sed script> <file>
+  sed "$1" "$2" >"$work/rewrite.tmp"
+  mv "$work/rewrite.tmp" "$2"
+}
+
 reset_copy() {
   git -C "$copy" reset -q --hard HEAD
   git -C "$copy" clean -q -fdx
@@ -57,7 +62,8 @@ run_check() {
 
 expect_green() {
   name=$1
-  run_check env
+  shift
+  run_check env "$@"
   if [ "$status" = 0 ]; then
     echo "ok   $name"
   else
@@ -83,10 +89,21 @@ expect_red() { # <name> <expected step substring> <expected message substring> [
   reset_copy
 }
 
-expect_green 'clean repository passes'
+# Verify caller git author/config env vars cannot poison child tests, and CLI args are rejected.
+bot_id=$(cat "$repo/tests/attribution/git/bot-author.txt")
+expect_green 'clean repository passes even with caller bot GIT_AUTHOR_NAME' \
+  GIT_AUTHOR_NAME="${bot_id% <*}" GIT_COMMITTER_NAME="${bot_id% <*}"
+
+status=0
+MISE_TRUSTED_CONFIG_PATHS=$copy "$copy/scripts/check" --unexpected >"$work/out" 2>&1 || status=$?
+if [ "$status" = 2 ]; then
+  echo 'ok   unexpected CLI argument exits 2'
+else
+  fail "unexpected CLI argument exited $status, wanted 2"
+fi
 
 printf 'shellcheck 0.11.0\n' >"$copy/.tool-versions"
-expect_red 'extra mise config is rejected' 'Pinned tools' 'only mise.toml configures this repository'
+expect_red 'extra mise config is rejected' 'Pinned tools' 'only mise.toml configures this repository' MISE_ENV=ci
 
 mkdir "$work/shadow"
 printf '#!/bin/sh\nexit 0\n' >"$work/shadow/shellcheck"
@@ -98,17 +115,20 @@ expect_red 'shadowed PATH tool under forged SCRIPTS_CHECK_UNDER_MISE is rejected
   MISE_CEILING_PATHS="$(dirname "$copy")" \
   PATH="$work/shadow:$PATH"
 
-sed -i.bak 's/platforms\.linux-x64/platforms.freebsd-x64/' "$copy/mise.lock" && rm -f "$copy/mise.lock.bak"
+rewrite 's/version = "0\.11\.0"/version = "0.10.0"/' "$copy/mise.lock"
+expect_red 'mise.lock version drift is rejected' 'Pinned tools' 'mise.lock lacks shellcheck 0.11.0'
+
+rewrite 's/platforms\.linux-x64/platforms.freebsd-x64/' "$copy/mise.lock"
 expect_red 'missing linux-x64 platform in mise.lock is rejected' 'Pinned tools' 'mise.lock lacks linux-x64'
 
-sed -i.bak 's/version: "2026\.11\.8"/version: "2025.1.0"/' "$copy/.github/workflows/check.yml" && rm -f "$copy/.github/workflows/check.yml.bak"
+rewrite 's/version: "2026\.11\.8"/version: "2025.1.0"/' "$copy/.github/workflows/check.yml"
 expect_red 'workflow mise version drift is rejected' 'Pinned tools' 'mise version mismatch'
 
 printf '#!/bin/sh\necho hi\n' >"$copy/scripts/bad name.sh"
-expect_red 'whitespace in path is rejected' 'Git-visible file names' 'no spaces, control characters or double quotes'
+expect_red 'whitespace in path is rejected' 'Git-visible file names' 'ASCII paths without spaces, control characters or double quotes'
 
 printf '#!/bin/sh\necho hi\n' >"$copy/scripts/bad\"quote.sh"
-expect_red 'interior quote in path is rejected' 'Git-visible file names' 'no spaces, control characters or double quotes'
+expect_red 'interior quote in path is rejected' 'Git-visible file names' 'ASCII paths without spaces, control characters or double quotes'
 
 ln -s README.md "$copy/LINK.md"
 expect_red 'symlink in repository is rejected' 'Git-visible file names' 'Symlinks are not allowed'
@@ -116,13 +136,17 @@ expect_red 'symlink in repository is rejected' 'Git-visible file names' 'Symlink
 printf '# Upper\n' >"$copy/UPPER.MD"
 expect_red 'uppercase extension is rejected' 'Git-visible file names' 'lower-case file extension'
 
-printf '#!/usr/bin/env bash\necho hi\n' >"$copy/scripts/bad-bash"
-expect_red 'bash script is rejected' 'Git-visible file names' 'Use POSIX sh instead of bash'
+printf '#!/usr/bin/env zsh\necho hi\n' >"$copy/scripts/bad-zsh"
+expect_red 'non-allowed shebang is rejected' 'Git-visible file names' 'Unsupported shebang'
+
+printf 'echo hi\n' >"$copy/scripts/no-shebang"
+chmod +x "$copy/scripts/no-shebang"
+expect_red 'shebang-less executable file is rejected' 'Git-visible file names' 'Executable file lacks a shebang'
 
 # shellcheck disable=SC2016 # literal $unquoted_var with space after #! for shellcheck to flag
 printf '#! /bin/sh\necho $unquoted_var\n' >"$copy/scripts/bad-shell"
 chmod +x "$copy/scripts/bad-shell"
-expect_red 'shellcheck violation with spaced shebang is rejected' 'Shell scripts' 'SC2086'
+expect_red 'shellcheck violation is rejected even when SHELLCHECK_OPTS is set' 'Shell scripts' 'SC2086' SHELLCHECK_OPTS='-e SC2086'
 
 # shellcheck disable=SC2016 # literal $unquoted_tmpl for shellcheck to flag in check.tmpl
 printf '\necho $unquoted_tmpl\n' >>"$copy/skills/scaffold/scaffold-go/template/scripts/check.tmpl"
@@ -133,7 +157,7 @@ printf 'self-hosted-runner:\n  labels: [bogus-runner]\n' >"$copy/.github/actionl
 printf 'name: bad\non: [push]\njobs:\n  broken:\n    runs-on: bogus-runner\n    steps:\n      - run: true\n' >"$copy/.github/workflows/bad.yml"
 expect_red 'invalid workflow cannot be silenced by .github/actionlint.yaml' 'Workflows' 'bogus-runner'
 
-sed -i.bak 's/perf|revert/revert/' "$copy/.github/workflows/title.yml" && rm -f "$copy/.github/workflows/title.yml.bak"
+rewrite 's/perf|revert/revert/' "$copy/.github/workflows/title.yml"
 expect_red 'title pattern drift is rejected' 'Workflows' 'different conventional-commit patterns'
 
 printf 'sub broken {\n' >"$copy/scripts/bad.pl"
@@ -145,10 +169,16 @@ expect_red 'python syntax error is rejected' 'Perl and Python scripts' 'SyntaxEr
 printf '\nSee [missing][ref].\n\n[ref]: skills/pull-request/github.md\n' >>"$copy/README.md"
 expect_red 'wrong-case or missing reference markdown link is rejected' 'Markdown links' 'broken link target'
 
+printf '\n[![badge](no-such-badge.svg)](README.md)\n' >>"$copy/README.md"
+expect_red 'broken image inside linked image is rejected' 'Markdown links' 'broken link target'
+
+printf '\nSee [dangling][missing-ref].\n' >>"$copy/README.md"
+expect_red 'undefined markdown reference link is rejected' 'Markdown links' 'undefined link reference'
+
 # shellcheck disable=SC2016 # literal backticks in Markdown test input
-printf '\n- item\n     ```sh\n     echo [ok](no-such.md)\n     ```\n[a]<!-- c -->(no-such.md)\n```inline``` text\n\nSee [anchor](README.md#no-such-heading).\n' >>"$copy/AGENTS.md"
+printf '\n- item\n     ```sh\n     echo [ok](no-such.md)\n     ```\n> ```markdown\n> [quoted](no-such.md)\n> ```\n[a]<!-- c -->(no-such.md)\n```inline``` text\n\nSee [anchor](README.md#no-such-heading).\n' >>"$copy/AGENTS.md"
 expect_red 'missing markdown heading anchor after inline triple backticks is rejected' 'Markdown links' 'missing heading'
-! grep -qF 'no-such.md' "$work/out" || fail 'list-indented fence or comment-split bracket treated as live link'
+! grep -qF 'no-such.md' "$work/out" || fail 'fenced or comment-split bracket treated as live link'
 
 printf '\n<!-- drift -->\n' >>"$copy/skills/scaffold/_shared/AGENTS.tail.md"
 expect_red 'scaffold shared drift is rejected' 'Scaffold shared files' 'Out of sync with skills/scaffold/_shared'
@@ -156,7 +186,8 @@ expect_red 'scaffold shared drift is rejected' 'Scaffold shared files' 'Out of s
 cat "$copy/tests/attribution/blocked/trailer.txt" >"$copy/tests/attribution/allowed/bad.txt"
 expect_red 'failing attribution test is rejected in Tests step' 'Tests' 'Some attribution tests failed'
 
-# Verify .githooks/pre-push: older branch, empty push, attribution block, subdir push, and --delete.
+# Verify .githooks/pre-push: older branch, empty push, attribution block, subdir failure,
+# detached-worktree green push, tag push, and --delete.
 hook_dir=$work/prepush
 git init -q --bare -b main "$hook_dir/origin.git"
 git clone -q "$hook_dir/origin.git" "$hook_dir/clone" 2>/dev/null
@@ -198,7 +229,24 @@ elif ! grep -qF HOOK_CHECK_RAN "$work/out"; then
 else
   echo 'ok   pre-push runs scripts/check on subdirectory commit push'
 fi
-git -C "$hook_dir/clone" push -q --no-verify origin topic
+git -C "$hook_dir/clone" tag v1.0.0
+if git -C "$hook_dir/clone" push -q origin v1.0.0 >"$work/out" 2>&1; then
+  echo 'ok   pre-push skips scripts/check on tag push'
+else
+  fail 'pre-push ran scripts/check on tag push'
+fi
+printf '#!/bin/sh\n[ "$#" -eq 0 ] && echo GREEN_CHECK_RAN >&2\n' >"$hook_dir/clone/scripts/check"
+chmod +x "$hook_dir/clone/scripts/check"
+git -C "$hook_dir/clone" add -A
+git -C "$hook_dir/clone" commit -qm 'docs: green check'
+git -C "$hook_dir/clone" worktree add -q --detach "$hook_dir/detached" HEAD
+if git -C "$hook_dir/detached" push -q origin HEAD:refs/heads/topic >"$work/out" 2>&1 &&
+  grep -qF GREEN_CHECK_RAN "$work/out"; then
+  echo 'ok   pre-push passes on green detached-worktree branch push'
+else
+  fail 'pre-push failed on green detached-worktree branch push'
+fi
+git -C "$hook_dir/clone" worktree remove --force "$hook_dir/detached"
 git -C "$hook_dir/clone" checkout -q main
 if git -C "$hook_dir/clone" push -q origin --delete topic >"$work/out" 2>&1; then
   echo 'ok   pre-push skips scripts/check on branch deletion'

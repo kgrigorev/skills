@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs this branch's attribution check (else main's, when core.hooksPath is absolute), then runs
-# this branch's scripts/check against the working tree when pushing commits.
+# this branch's scripts/check against the working tree when pushing branch commits.
 set -eu
 top=$(git rev-parse --show-toplevel)
 script=$top/scripts/no-ai-attribution
@@ -9,6 +9,7 @@ script=$top/scripts/no-ai-attribution
 refs=$(cat)
 [ -n "$refs" ] || exit 0
 printf '%s\n' "$refs" | "$script" pre-push "$@"
-if [ -x "$top/scripts/check" ] && printf '%s\n' "$refs" | awk 'NF >= 2 && $2 !~ /^0+$/ { found = 1 } END { exit !found }'; then
+if [ -x "$top/scripts/check" ] &&
+  printf '%s\n' "$refs" | awk 'NF >= 3 && $2 !~ /^0+$/ && $3 ~ /^refs\/heads\// { found = 1 } END { exit !found }'; then
   exec "$top/scripts/check"
 fi
