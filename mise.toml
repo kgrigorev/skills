@@ -1,0 +1,14 @@
+# Tool versions for this repo's checks. scripts/check, .githooks/pre-push and CI all use these.
+# mise.lock holds their download URLs and checksums. Agents: change this file only with the
+# owner's approval. After a version change, run `MISE_LOCKED=0 mise lock` and commit both files.
+
+min_version = "2026.11.8"
+
+[settings]
+lockfile = true
+locked = true
+
+[tools]
+actionlint = "1.7.12"
+jq = "1.8.1"
+shellcheck = "0.11.0"

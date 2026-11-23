@@ -1,9 +1,19 @@
 #!/bin/sh
-# This branch's copy of the check, else the main checkout's (a branch cut before main had it).
-# The fallback works only when core.hooksPath is the absolute path of the main checkout's
+# This branch's copy of the attribution check, else the main checkout's (a branch cut before main
+# had it). The fallback works only when core.hooksPath is the absolute path of the main checkout's
 # .githooks (see README): with a relative path, a worktree of an older branch has no .githooks,
 # so git runs no hook there at all.
-script=$(git rev-parse --show-toplevel)/scripts/no-ai-attribution
+set -eu
+top=$(git rev-parse --show-toplevel)
+script=$top/scripts/no-ai-attribution
 [ -x "$script" ] || script=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/scripts/no-ai-attribution
 [ -x "$script" ] || { echo "scripts/no-ai-attribution is missing here and in the main checkout. Pull main." >&2; exit 1; }
-exec "$script" pre-push "$@"
+
+refs=$(cat)
+printf '%s\n' "$refs" | "$script" pre-push "$@"
+
+# Run this branch's scripts/check when pushing commits (not branch deletions, and not from older
+# branches cut before scripts/check existed).
+if [ -x "$top/scripts/check" ] && printf '%s\n' "$refs" | awk 'NF >= 2 && $2 !~ /^0+$/ { found = 1 } END { exit !found }'; then
+  exec "$top/scripts/check"
+fi

@@ -1,0 +1,174 @@
+#!/bin/sh
+# Tests that scripts/check accepts a clean repository and rejects violations in each gate.
+# Usage: tests/check
+set -eu
+repo=$(cd "$(dirname "$0")/.." && pwd -P)
+work=$(mktemp -d "${TMPDIR:-/tmp}/test-check.XXXXXX")
+work=$(cd "$work" && pwd -P)
+trap 'rm -rf "$work"' EXIT
+
+copy=$work/repo
+mkdir -p "$copy"
+# Copy every git-visible file via NUL-delimited paths (works across macOS symlinked /var/folders
+# and Linux without bsdcpio symlink refusals).
+python3 -I -B - "$repo" "$copy" <<'PY'
+import os, shutil, subprocess, sys
+
+src, dst = sys.argv[1], sys.argv[2]
+raw = subprocess.check_output(
+    ["git", "-C", src, "-c", "core.quotePath=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+)
+for rel in raw.decode("utf-8").split("\0"):
+    if not rel:
+        continue
+    s = os.path.join(src, rel)
+    if os.path.isfile(s):
+        d = os.path.join(dst, rel)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(s, d)
+PY
+git -C "$copy" init -q -b main
+git -C "$copy" config user.name test
+git -C "$copy" config user.email test@example.com
+git -C "$copy" config commit.gpgsign false
+git -C "$copy" add -A
+git -C "$copy" commit -q -m 'chore: baseline'
+
+failed=0
+fail() {
+  echo "FAIL: $*" >&2
+  sed 's/^/  | /' "$work/out" >&2
+  failed=1
+}
+
+reset_copy() {
+  git -C "$copy" reset -q --hard HEAD
+  git -C "$copy" clean -q -fdx
+}
+
+run_check() {
+  status=0
+  MISE_TRUSTED_CONFIG_PATHS=$copy "$@" "$copy/scripts/check" >"$work/out" 2>&1 || status=$?
+}
+
+expect_green() {
+  name=$1
+  run_check env
+  if [ "$status" = 0 ]; then
+    echo "ok   $name"
+  else
+    fail "$name: exited $status, wanted 0"
+  fi
+  reset_copy
+}
+
+expect_red() { # <name> <expected step substring> <expected message substring> [env args...]
+  name=$1 want_step=$2 want_msg=$3
+  shift 3
+  run_check env "$@"
+  last_step=$(sed -n 's/^==> //p' "$work/out" | tail -n 1)
+  if [ "$status" = 0 ]; then
+    fail "$name: passed, wanted failure in '$want_step'"
+  elif ! printf '%s\n' "$last_step" | grep -qF -- "$want_step"; then
+    fail "$name: failed in '$last_step', wanted '$want_step'"
+  elif ! grep -qF -- "$want_msg" "$work/out"; then
+    fail "$name: output lacks '$want_msg'"
+  else
+    echo "ok   $name"
+  fi
+  reset_copy
+}
+
+expect_green 'clean repository passes'
+
+printf 'shellcheck 0.11.0\n' >"$copy/.tool-versions"
+expect_red 'extra mise config is rejected' 'Pinned tools' 'only mise.toml configures this repository'
+
+mkdir "$work/shadow"
+printf '#!/bin/sh\nexit 0\n' >"$work/shadow/shellcheck"
+chmod +x "$work/shadow/shellcheck"
+expect_red 'shadowed PATH tool under forged SCRIPTS_CHECK_UNDER_MISE is rejected' 'Pinned tools' 'not mise'"'"'s' \
+  SCRIPTS_CHECK_UNDER_MISE="$copy" \
+  MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml \
+  MISE_SYSTEM_CONFIG_FILE=/dev/null/no-system-config.toml \
+  MISE_CEILING_PATHS="$(dirname "$copy")" \
+  PATH="$work/shadow:$PATH"
+
+printf '#!/bin/sh\necho hi\n' >"$copy/scripts/bad name.sh"
+expect_red 'whitespace in path is rejected' 'Git-visible file names' 'no spaces, control characters or double quotes'
+
+printf '#!/bin/sh\necho hi\n' >"$copy/scripts/bad\"quote.sh"
+expect_red 'interior quote in path is rejected' 'Git-visible file names' 'no spaces, control characters or double quotes'
+
+# shellcheck disable=SC2016 # literal $unquoted_var for shellcheck to flag
+printf '#!/bin/sh\necho $unquoted_var\n' >"$copy/scripts/bad-shell"
+chmod +x "$copy/scripts/bad-shell"
+expect_red 'shellcheck violation is rejected' 'Shell scripts' 'SC2086'
+
+# shellcheck disable=SC2016 # literal $unquoted_tmpl for shellcheck to flag in .tmpl sh file
+printf '\necho $unquoted_tmpl\n' >>"$copy/skills/scaffold/_shared/template/.githooks/pre-push.tmpl"
+expect_red 'template shell script violation is rejected' 'Shell scripts' 'SC2086'
+
+printf 'name: bad\non: [push]\njobs:\n  broken:\n    runs-on: ubuntu-24.04\n    steps:\n      - unknown_key: 1\n' >"$copy/.github/workflows/bad.yml"
+expect_red 'invalid workflow is rejected' 'Workflows' 'unknown_key'
+
+sed -i.bak 's/perf|revert/revert/' "$copy/.github/workflows/title.yml" && rm -f "$copy/.github/workflows/title.yml.bak"
+expect_red 'title pattern drift is rejected' 'Workflows' 'different conventional-commit patterns'
+
+printf 'sub broken {\n' >"$copy/scripts/bad.pl"
+expect_red 'perl syntax error is rejected' 'Perl and Python scripts' 'syntax error'
+
+printf 'def broken(:\n    pass\n' >"$copy/scripts/bad.py"
+expect_red 'python syntax error is rejected' 'Perl and Python scripts' 'SyntaxError'
+
+printf '\nSee [missing](skills/pull-request/github.md).\n' >>"$copy/README.md"
+expect_red 'wrong-case or missing markdown link is rejected' 'Markdown links' 'broken link target'
+
+printf '\nSee [anchor](README.md#no-such-heading).\n' >>"$copy/AGENTS.md"
+expect_red 'missing markdown heading anchor is rejected' 'Markdown links' 'missing heading'
+
+printf '\n<!-- drift -->\n' >>"$copy/skills/scaffold/_shared/AGENTS.tail.md"
+expect_red 'scaffold shared drift is rejected' 'Scaffold shared files' 'Out of sync with skills/scaffold/_shared'
+
+# Verify .githooks/pre-push on older branches without scripts/check, commit pushes and --delete.
+hook_dir=$work/prepush
+git init -q --bare -b main "$hook_dir/origin.git"
+git clone -q "$hook_dir/origin.git" "$hook_dir/clone" 2>/dev/null
+git -C "$hook_dir/clone" config user.name 'Test User'
+git -C "$hook_dir/clone" config user.email test@example.com
+git -C "$hook_dir/clone" config commit.gpgsign false
+mkdir -p "$hook_dir/clone/scripts" "$hook_dir/clone/.githooks"
+cp "$repo/scripts/no-ai-attribution" "$hook_dir/clone/scripts/no-ai-attribution"
+cp "$repo/.githooks/pre-push" "$hook_dir/clone/.githooks/pre-push"
+chmod +x "$hook_dir/clone/scripts/no-ai-attribution" "$hook_dir/clone/.githooks/pre-push"
+git -C "$hook_dir/clone" config core.hooksPath "$hook_dir/clone/.githooks"
+printf 'base\n' >"$hook_dir/clone/a.txt"
+git -C "$hook_dir/clone" add -A
+git -C "$hook_dir/clone" commit -q -m 'docs: initial'
+if git -C "$hook_dir/clone" push -q origin main >"$work/out" 2>&1; then
+  echo 'ok   pre-push allows older branch without scripts/check'
+else
+  fail 'pre-push rejected older branch without scripts/check'
+fi
+printf '#!/bin/sh\necho HOOK_CHECK_RAN >&2\nexit 1\n' >"$hook_dir/clone/scripts/check"
+chmod +x "$hook_dir/clone/scripts/check"
+git -C "$hook_dir/clone" checkout -q -b topic
+printf 'next\n' >"$hook_dir/clone/a.txt"
+git -C "$hook_dir/clone" commit -qam 'docs: topic'
+if git -C "$hook_dir/clone" push -q origin topic >"$work/out" 2>&1; then
+  fail 'pre-push allowed push when scripts/check failed'
+elif ! grep -qF HOOK_CHECK_RAN "$work/out"; then
+  fail 'pre-push failed without running scripts/check'
+else
+  echo 'ok   pre-push runs scripts/check on commit push'
+fi
+git -C "$hook_dir/clone" push -q --no-verify origin topic
+git -C "$hook_dir/clone" checkout -q main
+if git -C "$hook_dir/clone" push -q origin --delete topic >"$work/out" 2>&1; then
+  echo 'ok   pre-push skips scripts/check on branch deletion'
+else
+  fail 'pre-push ran scripts/check on branch deletion'
+fi
+
+[ "$failed" = 0 ] || { echo 'Some check tests failed.' >&2; exit 1; }
+echo 'All check tests passed.'

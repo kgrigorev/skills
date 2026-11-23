@@ -1,0 +1,221 @@
+#!/bin/sh
+# Runs every quality gate for this repository. People, agents, .githooks/pre-push and CI all run
+# this script; it stops at the first failure. Agents: change it only with the owner's approval.
+set -eu
+set -f
+cd "$(dirname "$0")/.."
+here=$(pwd -P)
+
+# Clear git hook variables and tool flags so checks and child test repos stay isolated.
+# shellcheck disable=SC2046 # git prints variable names, one per line
+unset $(git rev-parse --local-env-vars)
+unset SHELLCHECK_OPTS PERL5OPT PERL5LIB PYTHONSTARTUP PYTHONPATH PYTHONWARNINGS GIT_EXTERNAL_DIFF GIT_DIFF_OPTS
+
+# Re-enter through mise using only this repository's mise.toml; strip shims from PATH first.
+if [ "${SCRIPTS_CHECK_UNDER_MISE:-}" != "$here" ]; then
+  command -v mise >/dev/null 2>&1 || {
+    echo 'mise is not on PATH. Install https://mise.jdx.dev and run: mise trust && mise install' >&2
+    exit 1
+  }
+  for var in $(env | sed -n 's/^\(MISE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    case $var in
+      MISE_DATA_DIR | MISE_CACHE_DIR | MISE_STATE_DIR | MISE_TRUSTED_CONFIG_PATHS | MISE_LOCKED) ;;
+      *) unset "$var" ;;
+    esac
+  done
+  clean_path='' old_ifs=$IFS IFS=:
+  for entry in $PATH; do
+    case $entry in */shims | */shims/) ;; *) clean_path=${clean_path:+$clean_path:}$entry ;; esac
+  done
+  IFS=$old_ifs
+  MISE_GLOBAL_CONFIG_FILE=/dev/null/no-global-config.toml \
+    MISE_SYSTEM_CONFIG_FILE=/dev/null/no-system-config.toml \
+    MISE_CEILING_PATHS=$(dirname "$here") \
+    PATH=$clean_path SCRIPTS_CHECK_UNDER_MISE=$here exec mise exec -- "$here/scripts/check" "$@"
+fi
+
+step() { printf '\n==> %s\n' "$1"; }
+phys() { (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")"); }
+
+step 'Pinned tools (mise.toml)'
+configs=$(mise config ls --json | sed -n 's/^ *"path": "\(.*\)",*$/\1/p')
+old_ifs=$IFS IFS='
+'
+for config in $configs; do
+  if [ "$(phys "$config")" != "$here/mise.toml" ]; then
+    echo "mise also reads $config. Remove it: only mise.toml configures this repository." >&2
+    exit 1
+  fi
+done
+IFS=$old_ifs
+[ -n "$configs" ] || { echo 'mise reads no mise.toml here. Run: mise trust' >&2; exit 1; }
+for tool in actionlint jq shellcheck; do
+  pinned=$(mise which "$tool") || exit 1
+  found=$(command -v "$tool") || exit 1
+  if [ "$(phys "$found")" != "$(phys "$pinned")" ]; then
+    echo "$tool is $found, not mise's $pinned. Run: mise install --force $tool" >&2
+    exit 1
+  fi
+done
+sc_ver=$(shellcheck --version | sed -n 's/^version: //p')
+al_ver=$(actionlint -version | head -n 1)
+jq_ver=$(jq --version | sed 's/^jq-//')
+for pair in "shellcheck:$sc_ver" "actionlint:$al_ver" "jq:$jq_ver"; do
+  tool=${pair%%:*} got=${pair#*:}
+  want=$(sed -n "s/^$tool = \"\(.*\)\"$/\1/p" mise.toml)
+  [ "$got" = "$want" ] || { echo "$tool version is $got, mise.toml pins $want." >&2; exit 1; }
+done
+printf 'shellcheck %s, actionlint %s, jq %s\n' "$sc_ver" "$al_ver" "$jq_ver"
+
+step 'Git-visible file names'
+# core.quotePath=true makes git quote paths containing newlines, control characters or quotes.
+odd=$(git -c core.quotePath=true ls-files --cached --others --exclude-standard | grep -E '["[:space:][:cntrl:]]' || true)
+if [ -n "$odd" ]; then
+  printf '%s\n' "$odd" >&2
+  echo 'Rename these files: no spaces, control characters or double quotes in paths.' >&2
+  exit 1
+fi
+
+sh_files='' wf_files='' pl_files='' py_files='' md_files=''
+# shellcheck disable=SC2013 # paths have no spaces or control characters (verified above)
+for f in $(git -c core.quotePath=false ls-files --cached --others --exclude-standard); do
+  [ -f "$f" ] || continue
+  case $f in skills/*/evals/*) continue ;; esac
+  case $f in
+    *.md) md_files="$md_files ./$f" ;;
+    .github/workflows/*.yml | .github/workflows/*.yaml) wf_files="$wf_files ./$f" ;;
+  esac
+  case $f in
+    tests/scaffold/*) continue ;;
+    *.tmpl)
+      IFS= read -r first <"$f" || first=''
+      case $first in
+        '#!/bin/sh'* | '#!/usr/bin/env sh'*) grep -q '{{' "$f" || sh_files="$sh_files ./$f" ;;
+      esac
+      continue
+      ;;
+  esac
+  IFS= read -r first <"$f" || first=''
+  case $f:$first in
+    *.sh:* | *:'#!/bin/sh'* | *:'#!/usr/bin/env sh'*) sh_files="$sh_files ./$f" ;;
+    *.pl:* | *:'#!/usr/bin/perl'* | *:'#!/usr/bin/env perl'*) pl_files="$pl_files ./$f" ;;
+    *.py:* | *:'#!'*python*) py_files="$py_files ./$f" ;;
+  esac
+done
+
+step 'Shell scripts (shellcheck)'
+[ -n "$sh_files" ] || { echo 'No shell scripts found to check.' >&2; exit 1; }
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+shellcheck --norc -x -P SCRIPTDIR -s sh $sh_files
+
+step 'Workflows (actionlint, title pattern)'
+[ -n "$wf_files" ] || { echo 'No workflow files found to check.' >&2; exit 1; }
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+actionlint -pyflakes= $wf_files
+title_pat=$(sed -n "s/^ *pattern='\(.*\)\.\*\\$'/\1/p" .github/workflows/title.yml)
+# shellcheck disable=SC2016 # $subject is Perl syntax, not shell
+attr_pat=$(sed -n 's|^ *unless \$subject =~ /\(.*\)/;$|\1|p' scripts/no-ai-attribution | sed 's/(?:/(/g')
+if [ -z "$title_pat" ] || [ "$title_pat" != "$attr_pat" ]; then
+  echo '.github/workflows/title.yml and scripts/no-ai-attribution have different conventional-commit patterns.' >&2
+  exit 1
+fi
+
+step 'Perl and Python scripts'
+[ -n "$pl_files" ] || { echo 'No Perl scripts found to check.' >&2; exit 1; }
+[ -n "$py_files" ] || { echo 'No Python scripts found to check.' >&2; exit 1; }
+for f in $pl_files; do perl -c "$f" >/dev/null; done
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+python3 -I -B -c 'import pathlib, sys
+for p in sys.argv[1:]: compile(pathlib.Path(p).read_bytes(), p, "exec")' $py_files
+
+step 'Markdown links'
+[ -n "$md_files" ] || { echo 'No Markdown files found to check.' >&2; exit 1; }
+# shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
+python3 -I -B - $md_files <<'PY'
+import os, re, subprocess, sys, urllib.parse
+
+files = subprocess.check_output(
+    ["git", "-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard"],
+    text=True,
+).splitlines()
+file_set = {f for f in files if os.path.isfile(f)}
+dir_set = {"."}
+for f in file_set:
+    d = os.path.dirname(f)
+    while d:
+        dir_set.add(d)
+        d = os.path.dirname(d)
+
+fence_re = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+inline_code_re = re.compile(r"(`+)(?:(?!\1).)+?\1")
+link_re = re.compile(r"!?\[[^\]]*\]\((<[^>]+>|[^)\s]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\)")
+heading_re = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$")
+
+
+def unfenced(md_path):
+    in_fence = None
+    with open(md_path, encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            m = fence_re.match(line)
+            if m:
+                marker = m.group(1)
+                if in_fence is None:
+                    in_fence = (marker[0], len(marker))
+                    continue
+                if marker[0] == in_fence[0] and len(marker) >= in_fence[1] and not line[m.end():].strip():
+                    in_fence = None
+                    continue
+            if in_fence is None:
+                yield lineno, line
+
+
+def slugs_for(md_path):
+    slugs, counts = set(), {}
+    for _, line in unfenced(md_path):
+        hm = heading_re.match(line)
+        if hm:
+            raw = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", hm.group(1))
+            raw = "".join(p[1:-1] if p.startswith("`") else re.sub(r"(?<!\w)_|_(?!\w)|[*~]", "", p) for p in re.split(r"(`[^`]*`)", raw))
+            base = re.sub(r"[^\w -]", "", raw.lower()).replace(" ", "-")
+            n = counts.get(base, 0)
+            counts[base] = n + 1
+            slugs.add(base if n == 0 else f"{base}-{n}")
+    return slugs
+
+
+slug_cache, bad = {}, 0
+for arg in sys.argv[1:]:
+    md = arg[2:] if arg.startswith("./") else arg
+    for lineno, line in unfenced(md):
+        for lm in link_re.finditer(inline_code_re.sub("", line)):
+            target = lm.group(1)
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1]
+            if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+                continue
+            path_part, sep, frag = (urllib.parse.unquote(p) for p in target.partition("#"))
+            resolved = md if not path_part else os.path.normpath(os.path.join(os.path.dirname(md), path_part))
+            if resolved.startswith("..") or (resolved not in file_set and resolved not in dir_set):
+                print(f"{md}:{lineno}: broken link target '{target}'", file=sys.stderr)
+                bad = 1
+                continue
+            if sep:
+                anchor_doc = os.path.normpath(os.path.join(resolved, "README.md")) if resolved in dir_set else resolved
+                if anchor_doc not in file_set or not anchor_doc.endswith(".md"):
+                    print(f"{md}:{lineno}: unsupported anchor '#{frag}' on {resolved}", file=sys.stderr)
+                    bad = 1
+                elif frag not in slug_cache.setdefault(anchor_doc, slugs_for(anchor_doc)):
+                    print(f"{md}:{lineno}: missing heading '#{frag}' in {anchor_doc}", file=sys.stderr)
+                    bad = 1
+
+sys.exit(bad)
+PY
+
+step 'Scaffold shared files'
+scripts/sync-scaffold-shared --check
+
+step 'Tests'
+scripts/test-attribution
+tests/pull-request/land-squash-stack
+
+printf '\nAll checks passed.\n'
