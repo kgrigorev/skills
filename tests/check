@@ -248,6 +248,8 @@ else
 fi
 git -C "$hook_dir/clone" worktree remove --force "$hook_dir/detached"
 git -C "$hook_dir/clone" checkout -q main
+printf '#!/bin/sh\nexit 1\n' >"$hook_dir/clone/scripts/check"
+chmod +x "$hook_dir/clone/scripts/check"
 if git -C "$hook_dir/clone" push -q origin --delete topic >"$work/out" 2>&1; then
   echo 'ok   pre-push skips scripts/check on branch deletion'
 else
