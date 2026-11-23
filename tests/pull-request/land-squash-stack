@@ -11,39 +11,42 @@ script=$here/../../skills/pull-request/scripts/land-squash-stack
 root=$(mktemp -d "${TMPDIR:-/tmp}/test-land-squash-stack.XXXXXX")
 pids=''
 kill_tree() {
+  kill -STOP "$1" 2>/dev/null || true
   for child in $(pgrep -P "$1" 2>/dev/null || true); do kill_tree "$child"; done
-  kill "$1" 2>/dev/null || true
+  kill -TERM "$1" 2>/dev/null || true
+  kill -CONT "$1" 2>/dev/null || true
 }
 cleanup() {
   for pid in $pids; do kill_tree "$pid"; done
   for pid in $pids; do wait "$pid" 2>/dev/null || true; done
-  [ -n "${KEEP:-}" ] || rm -rf "$root"
+  [ -n "${KEEP:-}" ] || rm -rf "$root" 2>/dev/null || rm -rf "$root"
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 mkdir "$root/bin"
 strip_shims() {
-  old_ifs=$IFS IFS=: out=
+  set -f
+  IFS=: out=
   for entry in $PATH; do
     case $entry in
-      */shims | */shims/) ;;
+      */mise/shims | */mise/shims/) ;;
       *) out=${out:+$out:}$entry ;;
     esac
   done
-  IFS=$old_ifs
   printf '%s\n' "$out"
 }
 no_shims=$(strip_shims)
 real_bin() {
-  p=$(command -v "$1")
+  p=$(command -v "$1") || { echo "missing required tool: $1" >&2; exit 1; }
   case $p in
-    */shims/*) mise which "$1" 2>/dev/null || PATH=$no_shims command -v "$1" ;;
+    */mise/shims/*) mise which "$1" 2>/dev/null || PATH=$no_shims command -v "$1" || printf '%s\n' "$p" ;;
     *) printf '%s\n' "$p" ;;
   esac
 }
 ln -s "$here/fake-gh" "$root/bin/gh"
 for tool in git jq python3; do
   bin=$(real_bin "$tool")
+  case $bin in /*) ;; *) bin=$PWD/$bin ;; esac
   ln -s "$bin" "$root/bin/$tool"
 done
 export PATH="$root/bin:$PATH"
@@ -102,7 +105,7 @@ land() {
   dir=$t/work
   if [ "$1" = -C ]; then dir=$2; shift 2; fi
   status=0
-  (cd "$dir" && PATH="$root/bin:$PATH" FAKE_GH_STATE=$t/state LAND_SQUASH_STACK_POLL=0 \
+  (cd "$dir" && FAKE_GH_STATE=$t/state LAND_SQUASH_STACK_POLL=0 \
     sh "$script" "$@") >"$t/out" 2>&1 || status=$?
 }
 
@@ -286,7 +289,7 @@ failed=''
 # shellcheck disable=SC2086 # scenario names, split on purpose
 [ "$#" -gt 0 ] || set -- $all
 build_base
-pids='' i=0
+i=0
 for scenario in "$@"; do
   i=$((i + 1))
   (
@@ -302,12 +305,14 @@ for pid in $pids; do
   i=$((i + 1))
   scenario=$1
   shift
-  ok=0
-  wait "$pid" || ok=$?
+  rc=0
+  wait "$pid" || rc=$?
+  pids=${pids# "$pid"}
   cat "$root/$i.log" >&2
-  if [ "$ok" = 0 ]; then
+  if [ "$rc" = 0 ]; then
     echo "ok   $scenario"
   else
+    grep -q '^FAIL ' "$root/$i.log" || echo "FAIL $scenario: exited with status $rc" >&2
     failed=1
   fi
 done

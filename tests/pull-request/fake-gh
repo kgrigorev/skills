@@ -114,10 +114,12 @@ def view(state, n, want=None):
 def emit(value, fields, jq):
     if fields is not None and isinstance(value, dict):
         value = {k: value.get(k) for k in fields.split(",")}
-    if jq is not None and isinstance(value, dict) and jq.startswith(".") and jq[1:].isidentifier():
-        v = value.get(jq[1:])
+    if jq is not None and isinstance(value, dict) and jq.startswith(".") and all(p.isidentifier() for p in jq[1:].split(".")):
+        v = value
+        for part in jq[1:].split("."):
+            v = v.get(part) if isinstance(v, dict) else None
         if not isinstance(v, (dict, list)):
-            print("true" if v is True else "false" if v is False else "null" if v is None else v)
+            print("true" if v is True else "false" if v is False else "" if v is None else v)
             return
     text = json.dumps(value)
     if jq is None:
@@ -217,9 +219,10 @@ def main():
             sys.exit(f"no pull requests found for branch \"{n}\"")
         emit(view(state, n, set(fields.split(",")) if fields else None), fields, jq)
     elif group == "pr" and cmd == "checks":
-        for c in view(state, pos[0])["statusCheckRollup"]:
+        checks = view(state, pos[0], {"statusCheckRollup"})["statusCheckRollup"]
+        for c in checks:
             print(f"{c['name']}\t{c['conclusion'] or 'pending'}")
-        sys.exit(1 if any(c["conclusion"] == "FAILURE" for c in view(state, pos[0])["statusCheckRollup"]) else 0)
+        sys.exit(1 if any(c["conclusion"] == "FAILURE" for c in checks) else 0)
     elif group == "pr" and cmd == "edit":
         state["prs"][pos[0]]["baseRefName"] = opts["--base"]
     elif group == "pr" and cmd == "list":
