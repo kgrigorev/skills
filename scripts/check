@@ -36,13 +36,11 @@ git_files() { git -c core.excludesFile=/dev/null -c "core.quotePath=$1" ls-files
 step 'Pinned tools (mise.toml, mise.lock)'
 raw_configs=$(mise config ls --json)
 configs=$(printf '%s\n' "$raw_configs" | sed -n 's/^ *"path": "\(.*\)",*$/\1/p')
+[ -n "$configs" ] || die 'mise reads no mise.toml here. Run: mise trust'
 old_ifs=$IFS IFS='
 '
-for config in $configs; do
-  [ "$(phys "$config")" = "$here/mise.toml" ] || die "mise also reads $config. Remove it: only mise.toml configures this repository."
-done
+for config in $configs; do [ "$(phys "$config")" = "$here/mise.toml" ] || die "mise also reads $config. Remove it: only mise.toml configures this repository."; done
 IFS=$old_ifs
-[ -n "$configs" ] || die 'mise reads no mise.toml here. Run: mise trust'
 min_mise=$(sed -n 's/^min_version = "\(.*\)"$/\1/p' mise.toml)
 wf_mise=$(sed -n 's/^ *version: "\(.*\)"$/\1/p' .github/workflows/check.yml)
 { [ -n "$min_mise" ] && [ "$min_mise" = "$wf_mise" ]; } ||
@@ -131,8 +129,7 @@ attr_pat=$(sed -n 's|^ *unless \$subject =~ /\(.*\)/;$|\1|p' scripts/no-ai-attri
   die '.github/workflows/title.yml and scripts/no-ai-attribution have different conventional-commit patterns.'
 
 step 'Perl and Python scripts'
-[ -n "$pl_files" ] || die 'No Perl scripts found to check.'
-[ -n "$py_files" ] || die 'No Python scripts found to check.'
+[ -n "$pl_files" ] && [ -n "$py_files" ] || die 'Missing Perl or Python scripts to check.'
 for f in $pl_files; do err=$(perl -c "$f" 2>&1) || die "$err"; done
 # shellcheck disable=SC2086 # paths have no spaces (verified above) and globbing is off
 python3 -I -B -c 'import pathlib, sys
