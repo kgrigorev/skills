@@ -265,6 +265,14 @@ scenario_squash_disallowed_is_refused() {
   expect_untouched
 }
 
+scenario_linked_stack_is_refused() {
+  state '.githubStack = {"number": 184}'
+  land 1 2 3
+  expect_status 1
+  expect_output 'STOP: #1 is in GitHub stack 184. A linked stack merges with: gh stack merge 184 --yes --squash'
+  expect_untouched
+}
+
 scenario_closed_pr_is_refused() {
   state '.prs["1"].state = "CLOSED"'
   land 1 2 3

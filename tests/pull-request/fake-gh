@@ -5,6 +5,7 @@ State lives in $FAKE_GH_STATE/state.json:
   origin              path of the bare repo that plays GitHub
   deleteBranchOnMerge GitHub's delete-on-merge setting
   mergeQueue          the default branch has a merge queue (gh pr merge then only enqueues)
+  githubStack         {"number": N} when the PRs belong to GitHub stack N, absent otherwise
   prs                 {number: {title, body, headRefName, baseRefName, state, isDraft, checks,
                       blocked, onMerge}}; checks is a list of SUCCESS, FAILURE or PENDING,
                       blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command run in the
@@ -202,9 +203,13 @@ def main():
         emit({"squashMergeAllowed": state.get("squashMergeAllowed", True), "defaultBranchRef": {"name": TRUNK},
               "deleteBranchOnMerge": state.get("deleteBranchOnMerge", False)}, fields, jq)
     elif group == "api" and cmd == "graphql":
-        has_q = (state.get("mergeQueue") or state.get("classicMergeQueue")) and fields_kv.get("branch") == TRUNK
-        mq = {"id": "MQ_1", "configuration": {"mergeMethod": "SQUASH"}} if has_q else None
-        emit({"data": {"repository": {"mergeQueue": mq}}}, None, jq)
+        query = fields_kv.get("query", "")
+        if "stack{number}" in query:
+            emit({"data": {"repository": {"pullRequest": {"stack": state.get("githubStack")}}}}, None, jq)
+        else:
+            has_q = (state.get("mergeQueue") or state.get("classicMergeQueue")) and fields_kv.get("branch") == TRUNK
+            mq = {"id": "MQ_1", "configuration": {"mergeMethod": "SQUASH"}} if has_q else None
+            emit({"data": {"repository": {"mergeQueue": mq}}}, None, jq)
     elif group == "api" and cmd == "repos/{owner}/{repo}":
         msg_mode = state.get("squashMergeCommitMessage", "COMMIT_MESSAGES")
         emit({"squash_merge_commit_title": "PR_TITLE" if msg_mode == "BLANK" else "COMMIT_OR_PR_TITLE",

@@ -5,7 +5,8 @@
 #   --after    continue a stopped run: <landed pr> was squashed already, so start by bringing
 #              the default branch into the first <pr>'s branch
 # Run it from a clone whose `origin` is the repo gh resolves, with every PR branch on it. It
-# refuses a merge queue. Every stop after the checks prints the command that continues the run.
+# refuses a merge queue and a pull request GitHub has linked into a stack, printing the
+# `gh stack merge` command. Every stop after the checks prints the command that continues the run.
 #
 # After each squash, the default branch's files equal the merged PR's head. The next branch already
 # holds that head, so it takes the default branch with a `-s ours` merge: the merge changes no
@@ -84,6 +85,14 @@ mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$
 [ "$(gh api graphql -F owner='{owner}' -F name='{repo}' -F branch="$trunk" -f query="$mq_query" --jq '.data.repository.mergeQueue != null')" = false ] ||
   die "$trunk has a merge queue, which this script does not drive. Follow GITHUB.md for a merge queue."
 squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
+
+# shellcheck disable=SC2016 # GraphQL variables, not shell
+stack_query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){stack{number}}}}'
+first=${prs# }
+first=${first%% *}
+sn=$(gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$first" -f query="$stack_query" \
+  --jq '.data.repository.pullRequest.stack.number // empty')
+[ -z "$sn" ] || die "#$first is in GitHub stack $sn. A linked stack merges with: gh stack merge $sn --yes --squash"
 
 # Checks the whole stack before anything changes.
 git fetch -q origin
