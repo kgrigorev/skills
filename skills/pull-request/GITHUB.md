@@ -86,21 +86,48 @@ STACKS.md "Build a stack".
 
 ## Merge a stack
 
-A stack on GitHub (linked by `gh stack submit` or `gh stack link`) merges only through GitHub's
-async merge API: `gh pr merge` and the REST merge endpoint refuse its PRs. Check out the stack's
-top branch and run `gh stack merge`. It merges every PR in the stack, all or none, with the
-method the repo's rules and settings choose (`--merge`, `--squash` or `--rebase`), and without
-a terminal it does not ask. Pass no number: a bare number is read as a stack number first.
+Read whether GitHub has linked the PRs before choosing a command. A bare number passed to
+`gh stack merge` is a stack number first and a pull request number second, so read the stack
+number from the bottom PR:
 
 ```sh
-gh stack merge --yes --merge
+gh api graphql -F owner='{owner}' -F name='{repo}' -F number=<bottom PR> \
+  -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){stack{number}}}}' \
+  --jq '.data.repository.pullRequest.stack.number // empty'
 ```
 
-`gh stack merge` takes no commit message, so the repo's commit message settings write it. On a
-branch with a merge queue the PRs join the queue. GitHub runs its rules when the merge runs, and
-stacked merges cannot bypass them.
+When that prints a number, merge the whole stack from this clone. Pass the one flag the repo
+allows, `--squash`, `--merge`, or `--rebase` (see "Merge settings"). When the repo allows more
+than one, use the method its `AGENTS.md` or contributing guide names.
 
-Other stacks merge bottom-up, one PR at a time, the top one included.
+```sh
+gh stack merge <stack number> --yes --squash
+```
+
+The command carries the stack number, so it runs from the default branch and from a detached
+HEAD. `gh stack merge` takes no commit message, so the repo's commit message settings write it.
+On a branch with a merge queue the PRs join the queue. GitHub runs its rules when the merge
+runs, and a linked stack cannot bypass them.
+
+A check that finishes in a few seconds with an annotation that starts `The job was not started`
+never ran the suite. The local check on the top branch's tree is the evidence. Required status
+checks still block `gh stack merge`. Clearing a required status check is a branch-protection
+change: do it only after the owner waives CI, name each context you remove, and include the
+command that puts those contexts back. Leave every other protection setting as it was.
+
+`scripts/land-squash-stack` stops when the bottom PR is in a linked stack and prints the
+`gh stack merge` command. Follow that command.
+
+Done when every PR's state is `MERGED` and the default branch's tree equals the top branch's
+tree. These two hashes are the same:
+
+```sh
+git fetch origin
+git rev-parse "origin/<default>^{tree}" "<top>^{tree}"
+```
+
+When the query prints nothing, GitHub has not linked the PRs. Merge that stack from the bottom
+up, one PR at a time, the top one included.
 
 **With merge commits allowed**, for each layer:
 
@@ -128,7 +155,9 @@ anything lands it checks that every PR is open and ready, is based on the branch
 below it, and holds that PR's head; a fix that was never merged up fails this check. When it
 stops, for example because the default branch moved during the run, it says what to fix and
 prints the command that continues the run. It squashes with the PR's title and body, or leaves
-the message to GitHub when `squash_merge_commit_message` is `BLANK`.
+the message to GitHub when `squash_merge_commit_message` is `BLANK`. When a check fails, the
+stop line includes each failing check run's annotation. A run whose annotations all say the job
+was not started stops with that sentence. The local check on this head is the evidence.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the
@@ -146,4 +175,5 @@ commit>^{tree}` (`gh pr view <merged> --json mergeCommit -q .mergeCommit.oid`) e
 checks, then repeat. With `REBASE`, the next PR conflicts with the rewritten commits: tell the
 owner, and rebase the rest of the chain only on their OK, since it needs a force-push.
 
-Done when `gh pr view <number> --json state` says `MERGED` for each PR.
+For a stack GitHub has not linked, done when `gh pr view <number> --json state` says `MERGED`
+for each PR.

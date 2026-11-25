@@ -293,6 +293,26 @@ scenario_failing_check_names_its_annotation() {
   ! grep -qF 'checks never started' "$t/out" || fail 'a real failure was reported as a job that never started'
 }
 
+scenario_docs_point_at_the_linked_merge() {
+  gh_doc=$here/../../skills/pull-request/GITHUB.md
+  stacks=$here/../../skills/pull-request/STACKS.md
+  agents=$here/../../AGENTS.md
+  : >"$t/out"
+  expect_file() { grep -qF -- "$2" "$1" || fail "$1 lacks: $2"; }
+  expect_file "$gh_doc" 'gh stack merge <stack number> --yes --squash'
+  expect_file "$gh_doc" 'stack{number}'
+  expect_file "$gh_doc" 'origin/<default>^{tree}'
+  expect_file "$gh_doc" 'name each context you remove'
+  expect_file "$gh_doc" 'The local check on the top branch'"'"'s tree is the evidence.'
+  expect_file "$stacks" 'another worktree is running the suite'
+  expect_file "$stacks" 'still expects the previous layer'"'"'s stub'
+  expect_file "$stacks" 'A linked GitHub stack uses the one command in'
+  expect_file "$agents" 'gh stack merge <stack number> --yes --squash'
+  ! grep -qF 'gh stack merge --yes --merge' "$gh_doc" || fail 'GITHUB.md still shows gh stack merge --yes --merge'
+  ! grep -qF 'Pass no number' "$gh_doc" || fail 'GITHUB.md still says to pass no number'
+  status=0
+}
+
 scenario_closed_pr_is_refused() {
   state '.prs["1"].state = "CLOSED"'
   land 1 2 3
