@@ -13,7 +13,8 @@
 # file, and the PR's diff shrinks to its own commits. Before anything lands, the script checks
 # that each PR is open, not a draft, based on the branch of the PR listed below it, and holds that
 # PR's head. Each squash waits until GitHub reports the PR mergeable and no reported check is
-# pending or failing.
+# pending or failing. A failing check prints each failing check run's annotation, and a run whose
+# annotations all say the job was not started stops with that sentence.
 set -eu
 
 usage() { sed -n '3p' "$0" >&2; exit 2; }
@@ -144,6 +145,30 @@ ready_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then .state
     if any($c[]; . == "PENDING" or . == "EXPECTED") then "pending"
     elif all($c[]; . == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") | not then "failing"
     elif $c == [] then "none" else "passing" end)"'
+# Writes unique failing-check annotations to $work/notes. check_notes_unstarted is 1 when every
+# line says the job was not started, and 0 when the file is empty or any line says something else.
+check_notes() { # <pr>
+  cn_head=$(field "$1" headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs" \
+    --jq '.check_runs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "startup_failure") | .id' >"$work/ids" || true
+  : >"$work/notes"
+  while read -r cn_id; do
+    [ -n "$cn_id" ] || continue
+    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations" --jq '.[].message' >>"$work/notes" || true
+  done <"$work/ids"
+  awk 'NF && !seen[$0]++' "$work/notes" >"$work/notes.uniq"
+  mv "$work/notes.uniq" "$work/notes"
+  check_notes_unstarted=0
+  [ -s "$work/notes" ] || return 0
+  check_notes_unstarted=1
+  while IFS= read -r cn_line; do
+    case $cn_line in
+    "The job was not started"*) ;;
+    *) check_notes_unstarted=0 ;;
+    esac
+  done <"$work/notes"
+}
+one_line() { tr '\n' ' ' <"$1" | sed 's/  */ /g; s/ *$//'; }
 wait_ready() { # <pr> <head>
   wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0
   while :; do
@@ -157,7 +182,18 @@ EOF
       [ "$wr_base" = "$trunk" ] || die "#$wr_pr targets $wr_base, not $trunk."
       [ "$wr_draft" = false ] || die "#$wr_pr is a draft. Mark it ready with: gh pr ready $wr_pr"
       [ "$wr_mergeable" != CONFLICTING ] || die "#$wr_pr has conflicts with $trunk."
-      [ "$wr_checks" != failing ] || { gh pr checks "$wr_pr" >&2 || true; die "#$wr_pr has failing checks."; }
+      [ "$wr_checks" != failing ] || {
+        gh pr checks "$wr_pr" >&2 || true
+        check_notes "$wr_pr"
+        cn_text=$(one_line "$work/notes")
+        if [ "$check_notes_unstarted" = 1 ]; then
+          die "#$wr_pr's checks never started: $cn_text The local check on this head is the evidence. This script does not clear required status checks."
+        fi
+        if [ -n "$cn_text" ]; then
+          die "#$wr_pr has failing checks: $cn_text"
+        fi
+        die "#$wr_pr has failing checks."
+      }
       if [ "$wr_mergeable" = MERGEABLE ] && { [ "$wr_checks" = passing ] || { [ "$wr_checks" = none ] && [ "$wr_i" -ge 2 ]; }; }; then
         case $wr_state in
         CLEAN | HAS_HOOKS | UNSTABLE) return 0 ;;

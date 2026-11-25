@@ -8,8 +8,10 @@ State lives in $FAKE_GH_STATE/state.json:
   githubStack         {"number": N} when the PRs belong to GitHub stack N, absent otherwise
   prs                 {number: {title, body, headRefName, baseRefName, state, isDraft, checks,
                       blocked, onMerge}}; checks is a list of SUCCESS, FAILURE or PENDING,
-                      blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command run in the
-                      state dir after the PR merges (ORIGIN is set), for example to move main
+                      annotations is an optional list of strings returned for each of that PR's
+                      check runs, blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command
+                      run in the state dir after the PR merges (ORIGIN is set), for example to
+                      move main
 Every call appends its arguments to $FAKE_GH_STATE/calls.
 """
 import json
@@ -110,6 +112,16 @@ def view(state, n, want=None):
         out["mergeable"] = "UNKNOWN"
         out["mergeStateStatus"] = "UNKNOWN"
     return out
+
+
+def check_runs_for(state, oid):
+    runs = []
+    for n, pr in state["prs"].items():
+        if pr.get("headRefOid") != oid:
+            continue
+        for i, c in enumerate(pr.get("checks", ["SUCCESS"])):
+            runs.append({"id": int(n) * 100 + i + 1, "conclusion": None if c == "PENDING" else c.lower()})
+    return runs
 
 
 def emit(value, fields, jq):
@@ -215,6 +227,13 @@ def main():
         emit({"squash_merge_commit_title": "PR_TITLE" if msg_mode == "BLANK" else "COMMIT_OR_PR_TITLE",
               "squash_merge_commit_message": msg_mode,
               "merge_commit_title": "MERGE_MESSAGE", "merge_commit_message": "PR_TITLE"}, None, jq)
+    elif group == "api" and cmd.startswith("repos/{owner}/{repo}/commits/") and cmd.endswith("/check-runs"):
+        oid = cmd.split("/")[4]
+        emit({"check_runs": check_runs_for(state, oid)}, None, jq)
+    elif group == "api" and cmd.startswith("repos/{owner}/{repo}/check-runs/") and cmd.endswith("/annotations"):
+        pr_n = str(int(cmd.split("/")[-2]) // 100)
+        notes = state["prs"].get(pr_n, {}).get("annotations", [])
+        emit([{"message": m} for m in notes], None, jq)
     elif group == "api":
         rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}] if state.get("mergeQueue") else []
         emit(rules, None, opts.get("--jq"))

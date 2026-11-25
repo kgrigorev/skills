@@ -273,6 +273,26 @@ scenario_linked_stack_is_refused() {
   expect_untouched
 }
 
+scenario_unstarted_check_names_the_annotation() {
+  state '.prs["3"].checks = ["FAILURE", "FAILURE"] | .prs["3"].annotations = ["The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings"]'
+  land 1 2 3
+  expect_status 1
+  expect_states MERGED MERGED OPEN
+  expect_output "#3's checks never started: The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings The local check on this head is the evidence. This script does not clear required status checks."
+  count=$(awk 'BEGIN{c=0} /The job was not started/{c++} END{print c}' "$t/out")
+  [ "$count" = 1 ] || fail "annotation shown $count times, want 1"
+  ! grep -q '^pr merge 3' "$t/state/calls" || fail 'it merged #3'
+}
+
+scenario_failing_check_names_its_annotation() {
+  state '.prs["3"].checks = ["FAILURE"] | .prs["3"].annotations = ["exit status 1"]'
+  land 1 2 3
+  expect_status 1
+  expect_states MERGED MERGED OPEN
+  expect_output '#3 has failing checks: exit status 1'
+  ! grep -qF 'checks never started' "$t/out" || fail 'a real failure was reported as a job that never started'
+}
+
 scenario_closed_pr_is_refused() {
   state '.prs["1"].state = "CLOSED"'
   land 1 2 3
