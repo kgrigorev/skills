@@ -112,8 +112,9 @@ runs, and a linked stack cannot bypass them.
 A check that finishes in a few seconds with an annotation that starts `The job was not started`
 never ran the suite. The local check on the top branch's tree is the evidence. Required status
 checks still block `gh stack merge`. Clearing a required status check is a branch-protection
-change: do it only after the owner waives CI, name each context you remove, and include the
-command that puts those contexts back. Leave every other protection setting as it was.
+change: do it only after the owner waives CI, name each context you remove, and put the command
+that restores those contexts in the report to the owner. Leave every other protection setting as
+it was.
 
 `scripts/land-squash-stack` stops when the bottom PR is in a linked stack and prints the
 `gh stack merge` command. Follow that command.
@@ -125,6 +126,9 @@ tree. These two hashes are the same:
 git fetch origin
 git rev-parse "origin/<default>^{tree}" "<top>^{tree}"
 ```
+
+If a required check was removed, the report to the owner names each context and the restore
+command.
 
 When the query prints nothing, GitHub has not linked the PRs. Merge that stack from the bottom
 up, one PR at a time, the top one included.
@@ -156,8 +160,9 @@ below it, and holds that PR's head; a fix that was never merged up fails this ch
 stops, for example because the default branch moved during the run, it says what to fix and
 prints the command that continues the run. It squashes with the PR's title and body, or leaves
 the message to GitHub when `squash_merge_commit_message` is `BLANK`. When a check fails, the
-stop line includes each failing check run's annotation. A run whose annotations all say the job
-was not started stops with that sentence. The local check on this head is the evidence.
+stop line includes each failing check run's annotation. When every failing run has annotations
+and all of them say the job was not started, it stops and says the checks never started. The local
+check on the PR's head is the evidence.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the

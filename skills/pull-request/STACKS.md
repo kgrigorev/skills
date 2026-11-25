@@ -70,10 +70,12 @@ platform shows each PR as merged.
 Review each PR on its own. A reviewer of one layer, such as a session or subagent given one PR,
 pushes fixes only to that PR's branch and leaves merging and new PRs to whoever owns the stack.
 Its last reply lists each finding with what it did about it. The stack's owner then merges each
-changed branch into the ones above it, bottom up, before the stack lands. One check suite runs on
-the machine at a time. A timeout in a test the change does not touch, while another worktree is running the suite, means run that suite again. Before the stack merges, review it once as a whole,
-for problems between PRs only. The range runs from the merge base with the default branch to the
-top branch. Leave vendored files out with `':!<path>'` pathspecs:
+changed branch into the ones above it, bottom up, before the stack lands.
+One check suite runs on the machine at a time.
+A timeout in a test the change does not touch, while another worktree is running the suite, means run that suite again.
+Before the stack merges, review it once as a whole, for problems between PRs only. The range runs
+from the merge base with the default branch to the top branch. Leave vendored files out with
+`':!<path>'` pathspecs:
 
 ```sh
 git diff $(git merge-base origin/<default branch> <top>)..<top>
