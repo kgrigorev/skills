@@ -57,6 +57,9 @@ default branch), with its title and body written by SKILL.md "Open a PR".
 
 ## Merge a stack
 
+A linked GitHub stack uses the one command in [`GITHUB.md`](GITHUB.md) "Merge a stack". The
+steps below are for a stack the platform has not linked.
+
 Merge from the bottom up, by the platform file's procedure for the repo's merge method. When the
 platform refuses a merge (failing checks, a missing review, a ruleset), report its message. Apart
 from a fallback the platform file names, do not retry through another endpoint. Done when the
@@ -67,14 +70,17 @@ platform shows each PR as merged.
 Review each PR on its own. A reviewer of one layer, such as a session or subagent given one PR,
 pushes fixes only to that PR's branch and leaves merging and new PRs to whoever owns the stack.
 Its last reply lists each finding with what it did about it. The stack's owner then merges each
-changed branch into the ones above it, bottom up, before the stack lands. Before the stack
-merges, review it once as a whole, for problems between PRs only. The range runs from the merge
-base with the default branch to the top branch. Leave vendored files out with `':!<path>'`
-pathspecs:
+changed branch into the ones above it, bottom up, before the stack lands.
+One check suite runs on the machine at a time.
+A timeout in a test the change does not touch, while another worktree is running the suite, means run that suite again.
+Before the stack merges, review it once as a whole, for problems between PRs only. The range runs
+from the merge base with the default branch to the top branch. Leave vendored files out with
+`':!<path>'` pathspecs:
 
 ```sh
 git diff $(git merge-base origin/<default branch> <top>)..<top>
 ```
 
 Done when every problem the whole-range diff raises is fixed in the layer it belongs to and
-merged into the layers above it.
+merged into the layers above it, and the repo's check command is green on the top branch,
+including a test that still expects the previous layer's stub.

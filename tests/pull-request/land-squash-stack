@@ -265,6 +265,78 @@ scenario_squash_disallowed_is_refused() {
   expect_untouched
 }
 
+scenario_linked_stack_is_refused() {
+  state '.githubStack = {"number": 184}'
+  land 1 2 3
+  expect_status 1
+  expect_output 'STOP: #1 is in GitHub stack 184. A linked stack merges with: gh stack merge 184 --yes --squash'
+  expect_untouched
+}
+
+scenario_unstarted_check_names_the_annotation() {
+  state '.prs["3"].checks = ["FAILURE", "FAILURE"] | .prs["3"].annotations = ["The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings"]'
+  land 1 2 3
+  expect_status 1
+  expect_states MERGED MERGED OPEN
+  expect_output "#3's checks never started: The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings. The local check on this head is the evidence. This script does not clear required status checks."
+  count=$(awk 'BEGIN{c=0} /The job was not started/{c++} END{print c}' "$t/out")
+  [ "$count" = 1 ] || fail "annotation shown $count times, want 1"
+  ! grep -q '^pr merge 3' "$t/state/calls" || fail 'it merged #3'
+}
+
+scenario_failing_check_names_its_annotation() {
+  state '.prs["3"].checks = ["FAILURE"] | .prs["3"].annotations = ["exit status 1"]'
+  land 1 2 3
+  expect_status 1
+  expect_states MERGED MERGED OPEN
+  expect_output '#3 has failing checks: exit status 1'
+  ! grep -qF 'checks never started' "$t/out" || fail 'a real failure was reported as a job that never started'
+}
+
+scenario_one_unstarted_run_among_real_failures_is_a_failure() {
+  state '.prs["3"].checks = ["FAILURE", "FAILURE"] | .prs["3"].annotationsByCheck = [["The job was not started because recent account payments have failed"], []]'
+  land 1 2 3
+  expect_status 1
+  expect_states MERGED MERGED OPEN
+  expect_output '#3 has failing checks'
+  ! grep -qF 'checks never started' "$t/out" || fail 'a run without that annotation was reported as never started'
+}
+
+scenario_stack_field_missing_means_not_linked() {
+  state ".stackQueryError = \"Field 'stack' doesn't exist on type 'PullRequest'\""
+  land 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+}
+
+scenario_stack_query_failure_stops() {
+  state '.stackQueryError = "HTTP 502: Bad Gateway"'
+  land 1 2 3
+  expect_status 1
+  expect_output 'Could not read whether #1 is in a GitHub stack.'
+  expect_untouched
+}
+
+scenario_docs_point_at_the_linked_merge() {
+  gh_doc=$here/../../skills/pull-request/GITHUB.md
+  stacks=$here/../../skills/pull-request/STACKS.md
+  agents=$here/../../AGENTS.md
+  : >"$t/out"
+  expect_file() { grep -qF -- "$2" "$1" || fail "$1 lacks: $2"; }
+  expect_file "$gh_doc" 'gh stack merge <stack number> --yes --squash'
+  expect_file "$gh_doc" 'stack{number}'
+  expect_file "$gh_doc" 'origin/<default>^{tree}'
+  expect_file "$gh_doc" 'name each context you remove'
+  expect_file "$gh_doc" 'The local check on the top branch'"'"'s tree is the evidence.'
+  expect_file "$stacks" 'another worktree is running the suite'
+  expect_file "$stacks" 'still expects the previous layer'"'"'s stub'
+  expect_file "$stacks" 'A linked GitHub stack uses the one command in'
+  expect_file "$agents" 'gh stack merge <stack number> --yes --squash'
+  ! grep -qF 'gh stack merge --yes --merge' "$gh_doc" || fail 'GITHUB.md still shows gh stack merge --yes --merge'
+  ! grep -qF 'Pass no number' "$gh_doc" || fail 'GITHUB.md still says to pass no number'
+  status=0
+}
+
 scenario_closed_pr_is_refused() {
   state '.prs["1"].state = "CLOSED"'
   land 1 2 3

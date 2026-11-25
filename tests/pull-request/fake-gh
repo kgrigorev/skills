@@ -5,10 +5,15 @@ State lives in $FAKE_GH_STATE/state.json:
   origin              path of the bare repo that plays GitHub
   deleteBranchOnMerge GitHub's delete-on-merge setting
   mergeQueue          the default branch has a merge queue (gh pr merge then only enqueues)
+  githubStack         {"number": N} when the PRs belong to GitHub stack N, absent otherwise
+  stackQueryError     a message: the stack query then fails with it on stderr and exit status 1
   prs                 {number: {title, body, headRefName, baseRefName, state, isDraft, checks,
                       blocked, onMerge}}; checks is a list of SUCCESS, FAILURE or PENDING,
-                      blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command run in the
-                      state dir after the PR merges (ORIGIN is set), for example to move main
+                      annotations is an optional list of strings returned for each of that PR's
+                      check runs, annotationsByCheck is an optional list of such lists, one per
+                      entry of checks, and wins over annotations when present, blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command
+                      run in the state dir after the PR merges (ORIGIN is set), for example to
+                      move main
 Every call appends its arguments to $FAKE_GH_STATE/calls.
 """
 import json
@@ -111,6 +116,16 @@ def view(state, n, want=None):
     return out
 
 
+def check_runs_for(state, oid):
+    runs = []
+    for n, pr in state["prs"].items():
+        if pr.get("headRefOid") != oid:
+            continue
+        for i, c in enumerate(pr.get("checks", ["SUCCESS"])):
+            runs.append({"id": int(n) * 100 + i + 1, "conclusion": None if c == "PENDING" else c.lower()})
+    return runs
+
+
 def emit(value, fields, jq):
     if fields is not None and isinstance(value, dict):
         value = {k: value.get(k) for k in fields.split(",")}
@@ -202,14 +217,33 @@ def main():
         emit({"squashMergeAllowed": state.get("squashMergeAllowed", True), "defaultBranchRef": {"name": TRUNK},
               "deleteBranchOnMerge": state.get("deleteBranchOnMerge", False)}, fields, jq)
     elif group == "api" and cmd == "graphql":
-        has_q = (state.get("mergeQueue") or state.get("classicMergeQueue")) and fields_kv.get("branch") == TRUNK
-        mq = {"id": "MQ_1", "configuration": {"mergeMethod": "SQUASH"}} if has_q else None
-        emit({"data": {"repository": {"mergeQueue": mq}}}, None, jq)
+        query = fields_kv.get("query", "")
+        if "stack{number}" in query:
+            if state.get("stackQueryError"):
+                sys.exit(f"gh: {state['stackQueryError']}")
+            emit({"data": {"repository": {"pullRequest": {"stack": state.get("githubStack")}}}}, None, jq)
+        else:
+            has_q = (state.get("mergeQueue") or state.get("classicMergeQueue")) and fields_kv.get("branch") == TRUNK
+            mq = {"id": "MQ_1", "configuration": {"mergeMethod": "SQUASH"}} if has_q else None
+            emit({"data": {"repository": {"mergeQueue": mq}}}, None, jq)
     elif group == "api" and cmd == "repos/{owner}/{repo}":
         msg_mode = state.get("squashMergeCommitMessage", "COMMIT_MESSAGES")
         emit({"squash_merge_commit_title": "PR_TITLE" if msg_mode == "BLANK" else "COMMIT_OR_PR_TITLE",
               "squash_merge_commit_message": msg_mode,
               "merge_commit_title": "MERGE_MESSAGE", "merge_commit_message": "PR_TITLE"}, None, jq)
+    elif group == "api" and cmd.startswith("repos/{owner}/{repo}/commits/") and cmd.endswith("/check-runs"):
+        oid = cmd.split("/")[4]
+        emit({"check_runs": check_runs_for(state, oid)}, None, jq)
+    elif group == "api" and cmd.startswith("repos/{owner}/{repo}/check-runs/") and cmd.endswith("/annotations"):
+        run_id = int(cmd.split("/")[-2])
+        pr = state["prs"].get(str(run_id // 100), {})
+        by_check = pr.get("annotationsByCheck")
+        if by_check is not None:
+            index = run_id % 100 - 1
+            notes = by_check[index] if index < len(by_check) else []
+        else:
+            notes = pr.get("annotations", [])
+        emit([{"message": m} for m in notes], None, jq)
     elif group == "api":
         rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}] if state.get("mergeQueue") else []
         emit(rules, None, opts.get("--jq"))

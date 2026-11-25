@@ -5,14 +5,17 @@
 #   --after    continue a stopped run: <landed pr> was squashed already, so start by bringing
 #              the default branch into the first <pr>'s branch
 # Run it from a clone whose `origin` is the repo gh resolves, with every PR branch on it. It
-# refuses a merge queue. Every stop after the checks prints the command that continues the run.
+# refuses a merge queue and a pull request GitHub has linked into a stack, printing the
+# `gh stack merge` command. Every stop after the checks prints the command that continues the run.
 #
 # After each squash, the default branch's files equal the merged PR's head. The next branch already
 # holds that head, so it takes the default branch with a `-s ours` merge: the merge changes no
 # file, and the PR's diff shrinks to its own commits. Before anything lands, the script checks
 # that each PR is open, not a draft, based on the branch of the PR listed below it, and holds that
 # PR's head. Each squash waits until GitHub reports the PR mergeable and no reported check is
-# pending or failing.
+# pending or failing. A failing check prints each failing check run's annotation. When every failing
+# run has annotations and all of them say the job was not started, the script stops and says the
+# checks never started.
 set -eu
 
 usage() { sed -n '3p' "$0" >&2; exit 2; }
@@ -85,6 +88,22 @@ mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$
   die "$trunk has a merge queue, which this script does not drive. Follow GITHUB.md for a merge queue."
 squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
 
+# shellcheck disable=SC2016 # GraphQL variables, not shell
+stack_query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){stack{number}}}}'
+first=${prs# }
+first=${first%% *}
+# A `stack` field that GitHub does not have means the PR is not linked. Any other error stops.
+if ! sn=$(gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$first" -f query="$stack_query" \
+  --jq '.data.repository.pullRequest.stack.number // empty' 2>"$work/stack.err"); then
+  if grep -q "Field 'stack' doesn't exist" "$work/stack.err"; then
+    sn=''
+  else
+    cat "$work/stack.err" >&2
+    die "Could not read whether #$first is in a GitHub stack."
+  fi
+fi
+[ -z "$sn" ] || die "#$first is in GitHub stack $sn. A linked stack merges with: gh stack merge $sn --yes --squash"
+
 # Checks the whole stack before anything changes.
 git fetch -q origin
 prev_pr=$after prev_branch='' prev_head=''
@@ -135,6 +154,37 @@ ready_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then .state
     if any($c[]; . == "PENDING" or . == "EXPECTED") then "pending"
     elif all($c[]; . == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") | not then "failing"
     elif $c == [] then "none" else "passing" end)"'
+# Writes unique failing-check annotations to $work/notes. A failing run is a check run whose
+# conclusion is not success, neutral, skipped or null. check_notes_unstarted is 1 when there is a
+# failing run and every failing run has at least one annotation, all starting with "The job was not
+# started", and 0 otherwise.
+check_notes() { # <pr>
+  cn_head=$(field "$1" headRefOid)
+  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs" \
+    --jq '.check_runs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped") | .id' >"$work/ids" || true
+  : >"$work/notes"
+  cn_runs=0 cn_unstarted=0 # failing runs, and those whose annotations all say not started
+  while read -r cn_id; do
+    [ -n "$cn_id" ] || continue
+    cn_runs=$((cn_runs + 1))
+    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations" --jq '.[].message' >"$work/run-notes" || true
+    cat "$work/run-notes" >>"$work/notes"
+    [ -s "$work/run-notes" ] || continue
+    cn_started=0
+    while IFS= read -r cn_line; do
+      case $cn_line in
+      "The job was not started"*) ;;
+      *) cn_started=1 ;;
+      esac
+    done <"$work/run-notes"
+    [ "$cn_started" = 1 ] || cn_unstarted=$((cn_unstarted + 1))
+  done <"$work/ids"
+  check_notes_unstarted=0
+  if [ "$cn_runs" -gt 0 ] && [ "$cn_unstarted" = "$cn_runs" ]; then check_notes_unstarted=1; fi
+  awk 'NF && !seen[$0]++' "$work/notes" >"$work/notes.uniq"
+  mv "$work/notes.uniq" "$work/notes"
+}
+one_line() { tr '\n' ' ' <"$1" | sed 's/  */ /g; s/ *$//'; }
 wait_ready() { # <pr> <head>
   wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0
   while :; do
@@ -148,7 +198,18 @@ EOF
       [ "$wr_base" = "$trunk" ] || die "#$wr_pr targets $wr_base, not $trunk."
       [ "$wr_draft" = false ] || die "#$wr_pr is a draft. Mark it ready with: gh pr ready $wr_pr"
       [ "$wr_mergeable" != CONFLICTING ] || die "#$wr_pr has conflicts with $trunk."
-      [ "$wr_checks" != failing ] || { gh pr checks "$wr_pr" >&2 || true; die "#$wr_pr has failing checks."; }
+      [ "$wr_checks" != failing ] || {
+        gh pr checks "$wr_pr" >&2 || true
+        check_notes "$wr_pr"
+        cn_text=$(one_line "$work/notes")
+        if [ "$check_notes_unstarted" = 1 ]; then
+          die "#$wr_pr's checks never started: $cn_text. The local check on this head is the evidence. This script does not clear required status checks."
+        fi
+        if [ -n "$cn_text" ]; then
+          die "#$wr_pr has failing checks: $cn_text"
+        fi
+        die "#$wr_pr has failing checks."
+      }
       if [ "$wr_mergeable" = MERGEABLE ] && { [ "$wr_checks" = passing ] || { [ "$wr_checks" = none ] && [ "$wr_i" -ge 2 ]; }; }; then
         case $wr_state in
         CLEAN | HAS_HOOKS | UNSTABLE) return 0 ;;
