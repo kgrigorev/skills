@@ -27,25 +27,31 @@ gh api 'repos/{owner}/{repo}' \
 A `*_message` of `BLANK` for the method you use is the repo's own choice: leave the message to
 GitHub. Any other value, or `null` (the token cannot read the settings), means you pass it.
 
-## Checks
+## Checks and reviews
 
-Poll `gh pr checks <n> --json name,state,bucket` and print one table when a conclusion changes.
-Exit when no row is pending. A completed job with no steps and no log has its reason on the
-check-run annotation (`gh api repos/{owner}/{repo}/check-runs/<id>/annotations`). If the
-annotation says `The job was not started` because of a billing or spending limit, the suite did
-not run; report it as blocked, not as a test failure.
+Run `gh pr checks <n> --watch --required` and wait for every required check. If a check finishes
+in a few seconds with an annotation starting `The job was not started`, it never ran; report it
+as blocked, not as a test failure. Get the check-run ID from the last path segment of the check's
+`link` (`gh pr checks <n> --json name,link`) and inspect its annotations with
+`gh api repos/{owner}/{repo}/check-runs/<id>/annotations`. Done when every required check passes;
+report a not-started check as blocked, never as a pass or test failure.
 
-Classic branch protection can require reviews through `required_pull_request_reviews`:
+Check the review state with `gh pr view <n> --json reviewDecision`. `REVIEW_REQUIRED` means wait
+for approval; `APPROVED` satisfies the review requirement. An empty value means no review is
+required. Classic branch protection can require reviews through `required_pull_request_reviews`:
 
 ```sh
 gh api "repos/{owner}/{repo}/branches/<base>/protection"
 ```
 
-Repository and organization rulesets can also require reviews. A `404` from the classic branch
-protection endpoint does not prove that reviews are not required; it can also mean the token
-cannot read protection settings. Verify applicable rulesets or ask the owner. If the endpoint is
-accessible and `required_pull_request_reviews` is `null`, classic branch protection requires no
-review, but rulesets may still do so.
+A `404` whose response says `Branch not protected` means no classic rule applies; a different
+`404` or a `403` can mean the token cannot read the settings, so ask the owner. Repository and
+organization rulesets can also require reviews; inspect applicable rules with
+`gh api repos/{owner}/{repo}/rules/branches/<base>` for a `pull_request` rule and
+`required_approving_review_count`; a positive count requires that many approvals. If
+`required_pull_request_reviews` is `null`, classic branch protection requires no review, but
+rulesets may still do so. Done when `reviewDecision` is not `REVIEW_REQUIRED` and any ruleset
+review requirement is satisfied.
 
 ## Merge a PR
 
@@ -129,10 +135,10 @@ HEAD. `gh stack merge` takes no commit message, so the repo's commit message set
 On a branch with a merge queue the PRs join the queue. GitHub runs its rules when the merge
 runs, and a linked stack cannot bypass them.
 
-A check that finishes in a few seconds with an annotation that starts `The job was not started`
-never ran the suite. The local check on the top branch's tree is the evidence. Required status
-checks still block `gh stack merge`. Clearing a required status check is a branch-protection
-change: do it only after the owner waives CI, name each context you remove, and put the command
+For a not-started check, follow "Checks and reviews" above.
+The local check on the top branch's tree is the evidence.
+Required status checks still block `gh stack merge`. Clearing a required status check is a
+branch-protection change. After the owner waives CI, name each context you remove. Put the command
 that restores those contexts in the report to the owner. Leave every other protection setting as
 it was.
 
