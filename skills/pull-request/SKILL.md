@@ -71,6 +71,9 @@ platform file's edit command, under the same rules.
 
 ## Merge a PR
 
+On GitHub, follow [`GITHUB.md`](GITHUB.md) "Checks and reviews" to verify required checks and
+reviews before merging.
+
 Merge only when the owner asks, with the checks green and the reviews in. The repo's own merge
 rules come first: its PR doc, `AGENTS.md` or contributing guide, and the methods its settings
 allow (the platform file shows how to read them).
