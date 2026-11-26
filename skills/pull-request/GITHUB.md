@@ -27,6 +27,26 @@ gh api 'repos/{owner}/{repo}' \
 A `*_message` of `BLANK` for the method you use is the repo's own choice: leave the message to
 GitHub. Any other value, or `null` (the token cannot read the settings), means you pass it.
 
+## Checks
+
+Poll `gh pr checks <n> --json name,state,bucket` and print one table when a conclusion changes.
+Exit when no row is pending. A completed job with no steps and no log has its reason on the
+check-run annotation (`gh api repos/{owner}/{repo}/check-runs/<id>/annotations`). If the
+annotation says `The job was not started` because of a billing or spending limit, the suite did
+not run; report it as blocked, not as a test failure.
+
+Classic branch protection can require reviews through `required_pull_request_reviews`:
+
+```sh
+gh api "repos/{owner}/{repo}/branches/<base>/protection"
+```
+
+Repository and organization rulesets can also require reviews. A `404` from the classic branch
+protection endpoint does not prove that reviews are not required; it can also mean the token
+cannot read protection settings. Verify applicable rulesets or ask the owner. If the endpoint is
+accessible and `required_pull_request_reviews` is `null`, classic branch protection requires no
+review, but rulesets may still do so.
+
 ## Merge a PR
 
 For a squash merge, pass the PR's title as the subject and its body as the message. GitHub takes
