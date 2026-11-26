@@ -12,6 +12,7 @@ Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and o
 | `test-design` | Tests seen red, properties over generated input, outcomes over calls. |
 | `audit` | Splits a large codebase into batches and audits them in parallel. |
 | `archive-project` | Imports a finished repo into your archive repo, checks the push, then retires the original on your word. |
+| `ste100-replies` | Writes prose in ASD-STE100 Simplified Technical English, with a dictionary and a checker script. |
 
 ### Scaffolding
 
