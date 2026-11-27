@@ -195,8 +195,8 @@ check on the PR's head is the evidence.
 
 Pass `--admin-if-unstarted` when the checks never started (no Actions minutes left, for example),
 the local check passed on each PR's head, and the owner said to merge without CI. The script then
-squashes each such PR with `gh pr merge --admin`, once two reads of its checks agree, so a check
-that registers late is not skipped. It never clears a real failure: a check that ran and failed,
+squashes each such PR with `gh pr merge --admin` once two reads of its checks, one poll interval
+apart, agree; a check that registers later than that is not seen. It never clears a real failure: a check that ran and failed,
 or a failing commit status, still stops it, and so does a required review. The `To continue`
 command keeps the flag.
 
