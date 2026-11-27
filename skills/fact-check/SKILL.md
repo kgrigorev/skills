@@ -25,8 +25,8 @@ context, give it the head, where the text is, and this file's path.
    Read files at the head, unless the text says it describes another revision, such as `main` or a
    merged commit. When the host is out of reach, use the local head and say so. When there is no
    text to check, say so and stop. Done when you have the head's commit id and the full text.
-2. **Claims.** From each line in scope (each added or changed line of a diff, or every line of a
-   body, message, ticket or file you were given whole), list every checkable claim:
+2. **Claims.** From each line in scope (each added, changed or removed line of a diff, or every
+   line of a body, message, ticket or file you were given whole), list every checkable claim:
    - a symbol, flag or command, and what it does;
    - a path, `file:line` or package;
    - a count ("38 calls", "seven edits", "200 lines");
@@ -39,19 +39,19 @@ context, give it the head, where the text is, and this file's path.
      that every item in the source appears in it;
    - what a user or operator sees, including the error they can act on.
 
-   For each removed line of a diff, list its claim too. Done when each line in scope has been read
-   and either has its claims listed or holds none.
+   Done when each line in scope has been read and either has its claims listed or holds none.
 3. **Verify.** Check each claim against its cheapest primary source:
    - run the command and compare its output and exit code. Run it in a checkout of the head. When
      the only checkout is at another revision, first confirm with
      `git diff --stat <checkout> <head> -- <paths the command reads>` that those paths match, and
      say so; otherwise read the source at the head. For a command that writes elsewhere or needs
-     secrets, read its source too. Mark either case as checked from source;
+     secrets, read its source instead of running it. Mark either case as checked from source;
    - read the file at the head; count by running the search, never by estimate;
    - for history, `git log -S<text>` finds the commit that added or removed a string.
 
-   A removed line's claim is right to remove when it no longer holds or another line still makes
-   it; a true claim with no remaining line is wrong, with the text to restore. A planned symbol
+   For a removed line, judge the removal: it holds when the claim is false at the head or another
+   line still makes it, and it is wrong when the claim is still true and no line makes it; give
+   the text to restore. A planned symbol
    ("add `parseConfig`") is a claim of intent: confirm only that it does not already exist under
    another name. An owner decision is unverifiable unless a commit, PR, issue or doc records it;
    name what corroborates it. When two lines of the text disagree, the claim is wrong; the correct
