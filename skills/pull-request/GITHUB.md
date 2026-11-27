@@ -143,7 +143,8 @@ that restores those contexts in the report to the owner. Leave every other prote
 it was.
 
 `scripts/land-squash-stack` stops when the bottom PR is in a linked stack and prints the
-`gh stack merge` command. Follow that command.
+`gh stack merge` command. Follow that command. When the checks never start, unlink the stack with
+`gh stack unstack <stack number>` instead and land it with the script's `--admin-if-unstarted`.
 
 Done when every PR's state is `MERGED` and the default branch's tree equals the top branch's
 tree. These two hashes are the same:
@@ -189,6 +190,12 @@ the message to GitHub when `squash_merge_commit_message` is `BLANK`. When a chec
 stop line includes each failing check run's annotation. When every failing run has annotations
 and all of them say the job was not started, it stops and says the checks never started. The local
 check on the PR's head is the evidence.
+
+Pass `--admin-if-unstarted` when the checks never started (no Actions minutes left, for example),
+the local check passed on each PR's head, and the owner said to merge without CI. The script then
+squashes each such PR with `gh pr merge --admin`. It never clears a real failure: a check that
+ran and failed, or a failing commit status, still stops it, and so does a required review. The
+`To continue` command keeps the flag.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the

@@ -7,13 +7,20 @@ State lives in $FAKE_GH_STATE/state.json:
   mergeQueue          the default branch has a merge queue (gh pr merge then only enqueues)
   githubStack         {"number": N} when the PRs belong to GitHub stack N, absent otherwise
   stackQueryError     a message: the stack query then fails with it on stderr and exit status 1
+  staleHeadReads      N: after a push moves an open PR's head, the next N reads of that PR's
+                      headRefOid through gh pr view still return the old head, as GitHub does for
+                      a while after a push
   prs                 {number: {title, body, headRefName, baseRefName, state, isDraft, checks,
                       blocked, onMerge}}; checks is a list of SUCCESS, FAILURE or PENDING,
                       annotations is an optional list of strings returned for each of that PR's
                       check runs, annotationsByCheck is an optional list of such lists, one per
                       entry of checks, and wins over annotations when present, blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command
                       run in the state dir after the PR merges (ORIGIN is set), for example to
-                      move main
+                      move main; statusContexts is an optional list of commit status states
+                      (SUCCESS, FAILURE) shown in statusCheckRollup after the check runs;
+                      reviewDecision is returned as set; unknownMergeableReads N makes the next
+                      N reads of mergeable report UNKNOWN, as GitHub does while it computes it.
+                      gh pr merge --admin also merges a BLOCKED PR
 Every call appends its arguments to $FAKE_GH_STATE/calls.
 """
 import json
@@ -66,6 +73,8 @@ def sync(state):
             changed = True
             continue
         if pr.get("headRefOid") != head:
+            if pr.get("headRefOid") is not None and state.get("staleHeadReads"):
+                pr["staleHead"], pr["staleReads"] = pr["headRefOid"], state["staleHeadReads"]
             pr["headRefOid"] = head
             git(state, "update-ref", f"refs/pull/{n}/head", head)
             changed = True
@@ -85,16 +94,25 @@ def view(state, n, want=None):
     pr = state["prs"][n]
     out = dict(pr, number=int(n))
     out.setdefault("headRefOid", None)
+    if pr.get("staleReads", 0) > 0 and (want is None or "headRefOid" in want):
+        out["headRefOid"] = pr["staleHead"]
+        pr["staleReads"] -= 1
+        state["dirty"] = True
     out.setdefault("mergeCommit", None)
     out["statusCheckRollup"] = [
         {"__typename": "CheckRun", "name": f"check{i}",
          "status": "IN_PROGRESS" if c == "PENDING" else "COMPLETED",
          "conclusion": "" if c == "PENDING" else c}
         for i, c in enumerate(pr.get("checks", ["SUCCESS"]))
-    ]
+    ] + [{"__typename": "StatusContext", "context": f"status{i}", "state": s}
+         for i, s in enumerate(pr.get("statusContexts", []))]
     if want is not None and not ({"mergeable", "mergeStateStatus"} & want):
         return out
-    if pr["state"] == "OPEN":
+    if pr["state"] == "OPEN" and pr.get("unknownMergeableReads", 0) > 0:
+        pr["unknownMergeableReads"] -= 1
+        state["dirty"] = True
+        out["mergeable"] = out["mergeStateStatus"] = "UNKNOWN"
+    elif pr["state"] == "OPEN":
         base = branch_oid(state, pr["baseRefName"])
         clean = merge_tree(state, base, pr["headRefOid"]) is not None
         out["mergeable"] = "MERGEABLE" if clean else "CONFLICTING"
@@ -156,8 +174,9 @@ def merge(state, n, opts):
         return
     if opts.get("--match-head-commit") != pr["headRefOid"]:
         sys.exit(f"Pull request #{n} head moved")
-    v = view(state, n)
-    if pr["baseRefName"] != TRUNK or v["mergeStateStatus"] not in ("CLEAN", "UNSTABLE"):
+    v = view(state, n, {"mergeStateStatus"})
+    allowed = ("CLEAN", "UNSTABLE", "BLOCKED") if opts.get("--admin") else ("CLEAN", "UNSTABLE")
+    if pr["baseRefName"] != TRUNK or v["mergeStateStatus"] not in allowed:
         sys.exit(f"Pull request #{n} is not mergeable: {pr['baseRefName']} {v['mergeStateStatus']}")
     base = branch_oid(state, TRUNK)
     tree = merge_tree(state, base, pr["headRefOid"])
@@ -252,11 +271,14 @@ def main():
         if n not in state["prs"]:
             sys.exit(f"no pull requests found for branch \"{n}\"")
         emit(view(state, n, set(fields.split(",")) if fields else None), fields, jq)
+        if state.pop("dirty", None):
+            save(state)
     elif group == "pr" and cmd == "checks":
         checks = view(state, pos[0], {"statusCheckRollup"})["statusCheckRollup"]
-        for c in checks:
-            print(f"{c['name']}\t{c['conclusion'] or 'pending'}")
-        sys.exit(1 if any(c["conclusion"] == "FAILURE" for c in checks) else 0)
+        results = [(c.get("name") or c.get("context"), c.get("conclusion", c.get("state"))) for c in checks]
+        for name, result in results:
+            print(f"{name}\t{result or 'pending'}")
+        sys.exit(1 if any(result == "FAILURE" for _, result in results) else 0)
     elif group == "pr" and cmd == "edit":
         state["prs"][pos[0]]["baseRefName"] = opts["--base"]
     elif group == "pr" and cmd == "list":
