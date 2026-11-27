@@ -403,6 +403,15 @@ scenario_admin_flag_adds_no_admin_to_passing_checks() {
   ! merge_calls | grep -q -- '--admin' || fail 'it merged passing PRs with --admin'
 }
 
+scenario_admin_flag_adds_admin_only_to_the_pr_whose_checks_never_start() {
+  state ".prs[\"1\"].checks = [\"FAILURE\"] | .prs[\"1\"].annotations = [\"$unstarted_note\"] | .prs[\"1\"].blocked = true"
+  land --admin-if-unstarted 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+  merge_calls | grep -q '^pr merge 1 --squash --admin ' || fail '#1 was not squashed with --admin'
+  ! merge_calls | grep -q '^pr merge [23] --squash --admin' || fail 'a passing PR was squashed with --admin'
+}
+
 scenario_admin_flag_dry_run_says_admin() {
   land --dry-run --admin-if-unstarted 1 2 3
   expect_status 0
