@@ -137,14 +137,16 @@ runs, and a linked stack cannot bypass them.
 
 For a not-started check, follow "Checks and reviews" above.
 The local check on the top branch's tree is the evidence.
-Required status checks still block `gh stack merge`. Clearing a required status check is a
-branch-protection change. After the owner waives CI, name each context you remove. Put the command
-that restores those contexts in the report to the owner. Leave every other protection setting as
-it was.
+Required status checks still block `gh stack merge`. When the owner says to merge without CI,
+unlink the stack with `gh stack unstack <stack number>` and land it with
+`scripts/land-squash-stack --admin-if-unstarted` ("Without merge commits" below). This changes no
+branch protection. Only when the repo allows no squash merges or refuses `--admin`, clear the
+required checks instead. That is a branch-protection change: name each context you remove, put
+the command that restores those contexts in the report to the owner, and leave every other
+protection setting as it was.
 
 `scripts/land-squash-stack` stops when the bottom PR is in a linked stack and prints the
-`gh stack merge` command. Follow that command. When the checks never start, unlink the stack with
-`gh stack unstack <stack number>` instead and land it with the script's `--admin-if-unstarted`.
+`gh stack merge` command; follow it, or see above when the checks never start.
 
 Done when every PR's state is `MERGED` and the default branch's tree equals the top branch's
 tree. These two hashes are the same:
