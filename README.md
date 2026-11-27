@@ -1,25 +1,26 @@
 # skills
 
-Agent skills in the open `SKILL.md` format, for Claude Code, Codex, Cursor and other harnesses.
+Reusable agent skills in the open `SKILL.md` format, plus project scaffolds with local checks and
+automation for agents. The skills work with Claude Code, Codex, Cursor and other compatible
+harnesses.
 
 | Skill | What it does |
 | --- | --- |
-| `commit` | Writes short conventional commits without attribution. |
-| `pull-request` | Opens small GitHub PRs and GitLab MRs with short bodies from the repo's template, stacks them, and merges them. |
-| `mise` | Pins tools, env vars and tasks with mise; knows what belongs in mise vs other runners. |
-| `type-design` | Makes illegal states unrepresentable; parses at boundaries. |
-| `functional-core` | Keeps decisions in pure functions and I/O in a thin shell: read, calculate, write. |
-| `test-design` | Tests seen red, properties over generated input, outcomes over calls. |
-| `audit` | Splits a large codebase into batches and audits them in parallel. |
-| `archive-project` | Imports a finished repo into your archive repo, checks the push, then retires the original on your word. |
-| `ste100-replies` | Writes prose in ASD-STE100 Simplified Technical English, with a dictionary and a checker script. |
+| `commit` | Writes conventional git commit messages with short subjects and no AI attribution. |
+| `pull-request` | Opens and updates GitHub PRs or GitLab MRs, manages stacked changes, and performs merges. |
+| `mise` | Configures pinned tools, environment variables and mise tasks, and chooses between mise and ecosystem runners. |
+| `type-design` | Makes illegal states unrepresentable and validates external input at boundaries. |
+| `functional-core` | Separates decisions into pure functions from I/O in an imperative shell. |
+| `test-design` | Starts with failing tests, checks outcomes and properties, and avoids mock-driven tests. |
+| `audit` | Reviews a large codebase or subproject in bounded batches with parallel reviewers. |
+| `archive-project` | Moves a finished repository to an archive repository, verifies it, then retires the original after confirmation. |
+| `ste100-replies` | Writes replies and repository text in ASD-STE100 Simplified Technical English, with a dictionary and checker script. |
 
 ### Scaffolding
 
-The skills in `skills/scaffold/` each create a new project that agents can work in safely. Every
-project gets one `scripts/check` that holds all quality gates, with pinned tool versions, so the
-same commit gives the same result on every machine. The git hook, CI and the Claude Code Stop hook
-all run it.
+Each skill in `skills/scaffold/` creates a new project with agent instructions and deterministic
+quality gates. A project receives pinned tool versions and one `scripts/check` entry point. The git
+hook, CI workflow and Claude Code Stop hook run the same gates.
 
 | Skill | Stack |
 | --- | --- |
