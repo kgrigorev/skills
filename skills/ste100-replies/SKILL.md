@@ -1,6 +1,6 @@
 ---
 name: ste100-replies
-description: Write prose in ASD-STE100 Simplified Technical English (Issue 9). Use it only when the user or their CLAUDE.md asks for STE or Simplified Technical English. Then use it for all prose in that session.
+description: Write all prose in ASD-STE100 Simplified Technical English (Issue 9). Always use this skill in all sessions when installed, for chat replies, commit messages, PR text, code comments, and documentation.
 ---
 
 # STE100 replies
