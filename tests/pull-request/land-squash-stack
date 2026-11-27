@@ -324,6 +324,19 @@ scenario_admin_flag_lands_a_stack_whose_checks_never_start() {
     fail 'squash bodies on main are not the PR bodies'
 }
 
+scenario_admin_flag_lands_with_blank_squash_message() {
+  checks_never_start
+  state '.squashMergeCommitMessage = "BLANK"'
+  land --admin-if-unstarted 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+  expect_main_tree "$top_tree"
+  for n in 1 2 3; do
+    merge_calls | grep -q "^pr merge $n --squash --admin --match-head-commit [0-9a-f]*\$" ||
+      fail "#$n was not squashed with --admin and GitHub's message"
+  done
+}
+
 scenario_admin_flag_waits_while_mergeable_is_unknown() {
   checks_never_start
   state '.prs["1"].unknownMergeableReads = 2'
