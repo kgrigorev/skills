@@ -360,6 +360,18 @@ scenario_admin_flag_stops_on_a_failing_commit_status() {
   ! merge_calls | grep -q '^pr merge 3' || fail 'it merged #3'
 }
 
+# After the push that brings main into b2, a failing commit status from another service shows up
+# only on the third read of #2's checks.
+scenario_admin_flag_stops_on_a_check_that_registers_late() {
+  checks_never_start
+  state '.prs["2"].lateStatusContexts = ["FAILURE"] | .prs["2"].lateStatusReads = 2'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_states MERGED OPEN OPEN
+  expect_output "#2 has 3 failing checks; 2 of them never started: $unstarted_note"
+  ! merge_calls | grep -q '^pr merge 2' || fail 'it merged #2'
+}
+
 scenario_admin_flag_stops_on_a_required_review() {
   checks_never_start
   state '.prs["2"].reviewDecision = "REVIEW_REQUIRED"'

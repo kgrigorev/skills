@@ -18,6 +18,10 @@ State lives in $FAKE_GH_STATE/state.json:
                       run in the state dir after the PR merges (ORIGIN is set), for example to
                       move main; statusContexts is an optional list of commit status states
                       (SUCCESS, FAILURE) shown in statusCheckRollup after the check runs;
+                      lateStatusContexts is a list of such states and lateStatusReads N: after a
+                      push moves the PR's head, the next N reads of its statusCheckRollup through
+                      gh pr view leave them out, as a status from another service registers a
+                      while after a push;
                       reviewDecision is returned as set; unknownMergeableReads N makes the next
                       N reads of mergeable report UNKNOWN, as GitHub does while it computes it.
                       gh pr merge --admin also merges a BLOCKED PR
@@ -75,6 +79,8 @@ def sync(state):
         if pr.get("headRefOid") != head:
             if pr.get("headRefOid") is not None and state.get("staleHeadReads"):
                 pr["staleHead"], pr["staleReads"] = pr["headRefOid"], state["staleHeadReads"]
+            if pr.get("headRefOid") is not None and pr.get("lateStatusContexts"):
+                pr["lateReads"] = pr.get("lateStatusReads", 0)
             pr["headRefOid"] = head
             git(state, "update-ref", f"refs/pull/{n}/head", head)
             changed = True
@@ -99,13 +105,19 @@ def view(state, n, want=None):
         pr["staleReads"] -= 1
         state["dirty"] = True
     out.setdefault("mergeCommit", None)
+    statuses = pr.get("statusContexts", [])
+    if pr.get("lateReads", 0) > 0 and (want is None or "statusCheckRollup" in want):
+        pr["lateReads"] -= 1
+        state["dirty"] = True
+    elif pr.get("lateReads", 0) == 0:
+        statuses = statuses + pr.get("lateStatusContexts", [])
     out["statusCheckRollup"] = [
         {"__typename": "CheckRun", "name": f"check{i}",
          "status": "IN_PROGRESS" if c == "PENDING" else "COMPLETED",
          "conclusion": "" if c == "PENDING" else c}
         for i, c in enumerate(pr.get("checks", ["SUCCESS"]))
     ] + [{"__typename": "StatusContext", "context": f"status{i}", "state": s}
-         for i, s in enumerate(pr.get("statusContexts", []))]
+         for i, s in enumerate(statuses)]
     if want is not None and not ({"mergeable", "mergeStateStatus"} & want):
         return out
     if pr["state"] == "OPEN" and pr.get("unknownMergeableReads", 0) > 0:

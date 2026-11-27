@@ -193,9 +193,10 @@ check on the PR's head is the evidence.
 
 Pass `--admin-if-unstarted` when the checks never started (no Actions minutes left, for example),
 the local check passed on each PR's head, and the owner said to merge without CI. The script then
-squashes each such PR with `gh pr merge --admin`. It never clears a real failure: a check that
-ran and failed, or a failing commit status, still stops it, and so does a required review. The
-`To continue` command keeps the flag.
+squashes each such PR with `gh pr merge --admin`, once two reads of its checks agree, so a check
+that registers late is not skipped. It never clears a real failure: a check that ran and failed,
+or a failing commit status, still stops it, and so does a required review. The `To continue`
+command keeps the flag.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the
