@@ -191,12 +191,15 @@ check_notes() { # <pr>
   awk 'NF && !seen[$0]++' "$work/notes" >"$work/notes.uniq"
   mv "$work/notes.uniq" "$work/notes"
 }
-# Prints the number of failing entries of statusCheckRollup (check runs and commit statuses), then
-# every entry's name and result, so two reads can be compared.
+# Prints the number of pending and of failing entries of statusCheckRollup (check runs and commit
+# statuses), as ready_jq tells them apart, then every entry's name and result, so two reads can be
+# compared.
 # shellcheck disable=SC2016 # a jq program, not shell
 rollup_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then [.context, .state]
     else [.name, .status, .conclusion] end] as $r
-  | "\([$r[] | .[-1] | select(. != "SUCCESS" and . != "NEUTRAL" and . != "SKIPPED")] | length) \(
+  | [$r[] | if length == 2 then .[1] elif .[1] != "COMPLETED" then "PENDING" else .[2] end] as $c
+  | "\([$c[] | select(. == "PENDING" or . == "EXPECTED")] | length) \(
+    [$c[] | select(. != "PENDING" and . != "EXPECTED" and . != "SUCCESS" and . != "NEUTRAL" and . != "SKIPPED")] | length) \(
     [$r[] | map(. // "") | join(":")] | sort | join(" "))"'
 one_line() { tr '\n' ' ' <"$1" | sed 's/  */ /g; s/ *$//'; }
 # Sets wr_admin to 1 when the PR merges with --admin: --admin-if-unstarted is on, every failing check
@@ -204,7 +207,7 @@ one_line() { tr '\n' ' ' <"$1" | sed 's/  */ /g; s/ *$//'; }
 # skips a required review, so that review stops the run. Required checks that never started make
 # GitHub report BLOCKED; --admin is for exactly that, so BLOCKED does not stop this path. --admin
 # also merges past a check that has not registered yet, so the PR merges only when two reads in a
-# row, $poll seconds apart, show the same checks.
+# row, $poll seconds apart, show the same checks and no pending one.
 wait_ready() { # <pr> <head>
   wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0 wr_admin='' wr_seen=''
   while :; do
@@ -224,21 +227,24 @@ EOF
         cn_text=$(one_line "$work/notes")
         if [ "$check_notes_unstarted" = 1 ] && [ -n "$admin" ]; then
           wr_rollup=$(gh pr view "$wr_pr" --json statusCheckRollup --jq "$rollup_jq")
-          wr_failing=${wr_rollup%% *}
-          [ "$wr_failing" = "$cn_runs" ] ||
-            die "#$wr_pr has $wr_failing failing checks; $cn_runs of them never started: $cn_text"
-          wr_review=$(field "$wr_pr" reviewDecision)
-          case $wr_review in
-          REVIEW_REQUIRED | CHANGES_REQUESTED)
-            die "#$wr_pr's checks never started, but #$wr_pr's review decision is $wr_review, and --admin would skip that review too. Get the review, then run again."
-            ;;
-          esac
-          if [ "$wr_mergeable" = MERGEABLE ] && [ "$wr_rollup" = "$wr_prev" ]; then
-            echo "#$wr_pr's checks never started: $cn_text. Merging #$wr_pr with --admin."
-            wr_admin=1
-            return 0
+          wr_pending=${wr_rollup%% *} wr_failing=${wr_rollup#* }
+          wr_failing=${wr_failing%% *}
+          if [ "$wr_pending" = 0 ]; then # else a check registered since the first read: wait for it
+            [ "$wr_failing" = "$cn_runs" ] ||
+              die "#$wr_pr has $wr_failing failing checks; $cn_runs of them never started: $cn_text"
+            wr_review=$(field "$wr_pr" reviewDecision)
+            case $wr_review in
+            REVIEW_REQUIRED | CHANGES_REQUESTED)
+              die "#$wr_pr's checks never started, but #$wr_pr's review decision is $wr_review, and --admin would skip that review too. Get the review, then run again."
+              ;;
+            esac
+            if [ "$wr_mergeable" = MERGEABLE ] && [ "$wr_rollup" = "$wr_prev" ]; then
+              echo "#$wr_pr's checks never started: $cn_text. Merging #$wr_pr with --admin."
+              wr_admin=1
+              return 0
+            fi
+            wr_seen=$wr_rollup
           fi
-          wr_seen=$wr_rollup
         elif [ "$check_notes_unstarted" = 1 ]; then
           die "#$wr_pr's checks never started: $cn_text. The local check on this head is the evidence. This script does not clear required status checks."
         elif [ -n "$cn_text" ]; then

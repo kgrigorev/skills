@@ -21,7 +21,8 @@ State lives in $FAKE_GH_STATE/state.json:
                       lateStatusContexts is a list of such states and lateStatusReads N: after a
                       push moves the PR's head, the next N reads of its statusCheckRollup through
                       gh pr view leave them out, as a status from another service registers a
-                      while after a push;
+                      while after a push; lateStatusPendingReads M: once shown, they read
+                      PENDING for M more such reads;
                       reviewDecision is returned as set; unknownMergeableReads N makes the next
                       N reads of mergeable report UNKNOWN, as GitHub does while it computes it;
                       gh pr merge fails while such a read is left and does not use one up.
@@ -82,6 +83,7 @@ def sync(state):
                 pr["staleHead"], pr["staleReads"] = pr["headRefOid"], state["staleHeadReads"]
             if pr.get("headRefOid") is not None and pr.get("lateStatusContexts"):
                 pr["lateReads"] = pr.get("lateStatusReads", 0)
+                pr["latePendingReads"] = pr.get("lateStatusPendingReads", 0)
             pr["headRefOid"] = head
             git(state, "update-ref", f"refs/pull/{n}/head", head)
             changed = True
@@ -109,6 +111,10 @@ def view(state, n, want=None):
     statuses = pr.get("statusContexts", [])
     if pr.get("lateReads", 0) > 0 and (want is None or "statusCheckRollup" in want):
         pr["lateReads"] -= 1
+        state["dirty"] = True
+    elif pr.get("lateReads", 0) == 0 and pr.get("latePendingReads", 0) > 0 and (want is None or "statusCheckRollup" in want):
+        statuses = statuses + ["PENDING" for _ in pr.get("lateStatusContexts", [])]
+        pr["latePendingReads"] -= 1
         state["dirty"] = True
     elif pr.get("lateReads", 0) == 0:
         statuses = statuses + pr.get("lateStatusContexts", [])
