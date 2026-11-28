@@ -1,7 +1,10 @@
 #!/bin/sh
 # Lands a stack of PRs with squash merges, bottom first, without a force-push.
-# Usage: land-squash-stack [--dry-run] [--after <landed pr>] <pr> [<pr>...]   (lowest PR first)
+# Usage: land-squash-stack [--dry-run] [--admin-if-unstarted] [--after <landed pr>] <pr> [<pr>...]   (lowest PR first)
 #   --dry-run  checks the stack and prints the plan; changes nothing
+#   --admin-if-unstarted
+#              when every failing check of a PR never started (no CI minutes, for example),
+#              squash it with `gh pr merge --admin`; a real failure still stops
 #   --after    continue a stopped run: <landed pr> was squashed already, so start by bringing
 #              the default branch into the first <pr>'s branch
 # Run it from a clone whose `origin` is the repo gh resolves, with every PR branch on it. It
@@ -10,19 +13,24 @@
 #
 # After each squash, the default branch's files equal the merged PR's head. The next branch already
 # holds that head, so it takes the default branch with a `-s ours` merge: the merge changes no
-# file, and the PR's diff shrinks to its own commits. Before anything lands, the script checks
-# that each PR is open, not a draft, based on the branch of the PR listed below it, and holds that
-# PR's head. Each squash waits until GitHub reports the PR mergeable and no reported check is
+# file, and the PR's diff shrinks to its own commits. GitHub can report the old head for a while
+# after that push, so the script waits until it reports the pushed one. Before anything lands, the
+# script checks that each PR is open, not a draft, based on the branch of the PR listed below it,
+# and holds that PR's head. Each squash waits until GitHub reports the PR mergeable and no reported check is
 # pending or failing. A failing check prints each failing check run's annotation. When every failing
 # run has annotations and all of them say the job was not started, the script stops and says the
-# checks never started.
+# checks never started. With --admin-if-unstarted it squashes that PR with --admin instead, once two
+# reads $poll seconds apart show the same checks, unless a failing commit status or a required review
+# would be skipped too. With the flag it first stops when the default branch has a rule that --admin
+# would skip and the script does not check.
 set -eu
 
 usage() { sed -n '3p' "$0" >&2; exit 2; }
-dry='' after='' prs=''
+dry='' admin='' after='' prs=''
 while [ "$#" -gt 0 ]; do
   case $1 in
   --dry-run) dry=1 ;;
+  --admin-if-unstarted) admin=1 ;;
   --after)
     [ "$#" -ge 2 ] || usage
     case $2 in '' | *[!0-9]*) usage ;; esac
@@ -48,7 +56,7 @@ on_exit() {
   rm -rf "$work"
   if [ "$code" -ne 0 ] && [ -z "$dry" ] && [ -n "$todo" ]; then
     if [ -n "$resume_after" ] && [ -n "$last" ]; then from="--after $last$todo"; else from=${todo# }; fi
-    echo "To continue: sh $0 $from" >&2
+    echo "To continue: sh $0 ${admin:+--admin-if-unstarted }$from" >&2
   fi
 }
 trap on_exit EXIT
@@ -88,6 +96,55 @@ mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$
   die "$trunk has a merge queue, which this script does not drive. Follow GITHUB.md for a merge queue."
 squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
 
+# --admin skips every rule on the default branch that a PR does not meet, not only the checks that
+# never started. With the flag, any ruleset rule or branch protection setting that is on stops
+# the run before anything lands, except what the one_of lists below name. rules_jq lets pass the
+# rule types required_status_checks, creation, deletion, non_fast_forward, required_linear_history
+# and required_signatures, a pull_request rule's review parameters, and its allowed_merge_methods
+# when they list squash. protection_jq lets pass required_status_checks,
+# required_pull_request_reviews, enforce_admins, allow_force_pushes, allow_deletions,
+# block_creations, required_linear_history, required_signatures, allow_fork_syncing, and the
+# read's own url, name, protection_url and enabled fields. The script checks failing checks and
+# reviews itself, and a squash by GitHub meets the creation, deletion, force-push, linear-history
+# and signed-commit rules. Each jq program prints the name of every rule that stops the run.
+# shellcheck disable=SC2016 # jq programs, not shell
+rules_jq='def one_of($l): . as $x | any($l[]; . == $x);
+  def off: . == null or . == false or . == 0 or . == "" or . == [] or . == {};
+  .[] | if .type == "pull_request" then
+      (.parameters // {}) | to_entries[]
+      | if .key == "allowed_merge_methods" then (if any(.value[]; . == "squash") then empty else "pull_request.\(.key)" end)
+        elif .key | one_of(["required_approving_review_count", "require_code_owner_review", "required_reviewers",
+          "require_last_push_approval", "require_extra_approval_for_unattributed_changes",
+          "dismiss_stale_reviews_on_push", "dismissal_restriction"]) then empty
+        elif .value | off then empty
+        else "pull_request.\(.key)" end
+    elif .type | one_of(["required_status_checks", "creation", "deletion", "non_fast_forward",
+      "required_linear_history", "required_signatures"]) then empty
+    else .type end'
+# shellcheck disable=SC2016 # jq programs, not shell
+protection_jq='def one_of($l): . as $x | any($l[]; . == $x);
+  def off: . == null or . == false or (type == "object" and .enabled == false);
+  to_entries[] | select(.key | one_of(["url", "name", "protection_url", "enabled", "required_status_checks",
+      "required_pull_request_reviews", "enforce_admins", "allow_force_pushes", "allow_deletions",
+      "block_creations", "required_linear_history", "required_signatures", "allow_fork_syncing"]) | not)
+  | select(.value | off | not) | .key'
+if [ -n "$admin" ]; then
+  gh api "repos/{owner}/{repo}/rules/branches/$trunk?per_page=100" --paginate --jq "$rules_jq" \
+    >"$work/rules" 2>"$work/rules.err" || {
+    cat "$work/rules.err" >&2
+    die "Could not read the rules on $trunk, so the script cannot tell what --admin would skip."
+  }
+  if gh api "repos/{owner}/{repo}/branches/$trunk/protection" --jq "$protection_jq" \
+    >"$work/protection" 2>"$work/protection.err"; then
+    cat "$work/protection" >>"$work/rules"
+  elif ! grep -qF 'Branch not protected (HTTP 404)' "$work/protection.err"; then
+    cat "$work/protection.err" >&2
+    die "Could not read $trunk's branch protection, so the script cannot tell what --admin would skip."
+  fi
+  [ ! -s "$work/rules" ] ||
+    die "--admin would also skip these rules on $trunk, which this script does not check: $(tr '\n' ' ' <"$work/rules" | sed 's/ *$//'). Run without --admin-if-unstarted, and see GITHUB.md for checks that never start."
+fi
+
 # shellcheck disable=SC2016 # GraphQL variables, not shell
 stack_query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){stack{number}}}}'
 first=${prs# }
@@ -102,7 +159,7 @@ if ! sn=$(gh api graphql -F owner='{owner}' -F name='{repo}' -F number="$first" 
     die "Could not read whether #$first is in a GitHub stack."
   fi
 fi
-[ -z "$sn" ] || die "#$first is in GitHub stack $sn. A linked stack merges with: gh stack merge $sn --yes --squash"
+[ -z "$sn" ] || die "#$first is in GitHub stack $sn. A linked stack merges with: gh stack merge $sn --yes --squash. When its checks never start, unlink it with gh stack unstack $sn, then run this script with --admin-if-unstarted."
 
 # Checks the whole stack before anything changes.
 git fetch -q origin
@@ -134,7 +191,7 @@ EOF
   if [ -n "$dry" ]; then
     [ -z "$prev_pr" ] ||
       echo "would point #$n at $trunk, delete #$prev_pr's branch unless open PRs use it, and merge $trunk into $branch with -s ours"
-    echo "would wait for #$n's checks, then squash #$n as \"$(field "$n" title) (#$n)\""
+    echo "would wait for #$n's checks, then squash #$n as \"$(field "$n" title) (#$n)\"${admin:+, with --admin if its checks never start}"
   fi
   prev_pr=$n prev_branch=$branch prev_head=$head
 done
@@ -154,20 +211,20 @@ ready_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then .state
     if any($c[]; . == "PENDING" or . == "EXPECTED") then "pending"
     elif all($c[]; . == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") | not then "failing"
     elif $c == [] then "none" else "passing" end)"'
-# Writes unique failing-check annotations to $work/notes. A failing run is a check run whose
-# conclusion is not success, neutral, skipped or null. check_notes_unstarted is 1 when there is a
-# failing run and every failing run has at least one annotation, all starting with "The job was not
-# started", and 0 otherwise.
+# Writes unique failing-check annotations to $work/notes, read from every page. A failing run is a
+# check run whose conclusion is not success, neutral, skipped or null. check_notes_unstarted is 1
+# when there is a failing run and every failing run has at least one annotation, all starting with
+# "The job was not started", and 0 otherwise.
 check_notes() { # <pr>
   cn_head=$(field "$1" headRefOid)
-  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs" \
+  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs?per_page=100" --paginate \
     --jq '.check_runs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped") | .id' >"$work/ids" || true
   : >"$work/notes"
   cn_runs=0 cn_unstarted=0 # failing runs, and those whose annotations all say not started
   while read -r cn_id; do
     [ -n "$cn_id" ] || continue
     cn_runs=$((cn_runs + 1))
-    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations" --jq '.[].message' >"$work/run-notes" || true
+    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations?per_page=100" --paginate --jq '.[].message' >"$work/run-notes" || true
     cat "$work/run-notes" >>"$work/notes"
     [ -s "$work/run-notes" ] || continue
     cn_started=0
@@ -184,13 +241,29 @@ check_notes() { # <pr>
   awk 'NF && !seen[$0]++' "$work/notes" >"$work/notes.uniq"
   mv "$work/notes.uniq" "$work/notes"
 }
+# Prints the number of pending and of failing entries of statusCheckRollup (check runs and commit
+# statuses), as ready_jq tells them apart, then every entry's name and result, so two reads can be
+# compared.
+# shellcheck disable=SC2016 # a jq program, not shell
+rollup_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then [.context, .state]
+    else [.name, .status, .conclusion] end] as $r
+  | [$r[] | if length == 2 then .[1] elif .[1] != "COMPLETED" then "PENDING" else .[2] end] as $c
+  | "\([$c[] | select(. == "PENDING" or . == "EXPECTED")] | length) \(
+    [$c[] | select(. != "PENDING" and . != "EXPECTED" and . != "SUCCESS" and . != "NEUTRAL" and . != "SKIPPED")] | length) \(
+    [$r[] | map(. // "") | join(":")] | sort | join(" "))"'
 one_line() { tr '\n' ' ' <"$1" | sed 's/  */ /g; s/ *$//'; }
+# Sets wr_admin to 1 when the PR merges with --admin: --admin-if-unstarted is on, every failing check
+# is a check run that never started, and no review is required or asks for changes. --admin also
+# skips a required review, so that review stops the run. Required checks that never started make
+# GitHub report BLOCKED; --admin is for exactly that, so BLOCKED does not stop this path. --admin
+# also merges past a check that has not registered yet, so the PR merges only when two reads in a
+# row, $poll seconds apart, show the same checks and no pending one.
 wait_ready() { # <pr> <head>
-  wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0
+  wr_pr=$1 wr_i=0 wr_fails=0 wr_blocked=0 wr_admin='' wr_seen=''
   while :; do
     if wr_info=$(gh pr view "$wr_pr" --json baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,statusCheckRollup \
       --jq "$ready_jq"); then
-      wr_fails=0
+      wr_fails=0 wr_prev=$wr_seen wr_seen=''
       read -r wr_base wr_head wr_draft wr_mergeable wr_state wr_checks <<EOF
 $wr_info
 EOF
@@ -198,18 +271,38 @@ EOF
       [ "$wr_base" = "$trunk" ] || die "#$wr_pr targets $wr_base, not $trunk."
       [ "$wr_draft" = false ] || die "#$wr_pr is a draft. Mark it ready with: gh pr ready $wr_pr"
       [ "$wr_mergeable" != CONFLICTING ] || die "#$wr_pr has conflicts with $trunk."
-      [ "$wr_checks" != failing ] || {
+      if [ "$wr_checks" = failing ]; then
         gh pr checks "$wr_pr" >&2 || true
         check_notes "$wr_pr"
         cn_text=$(one_line "$work/notes")
-        if [ "$check_notes_unstarted" = 1 ]; then
+        if [ "$check_notes_unstarted" = 1 ] && [ -n "$admin" ]; then
+          wr_rollup=$(gh pr view "$wr_pr" --json statusCheckRollup --jq "$rollup_jq")
+          wr_pending=${wr_rollup%% *} wr_failing=${wr_rollup#* }
+          wr_failing=${wr_failing%% *}
+          if [ "$wr_pending" = 0 ]; then # else a check registered since the first read: wait for it
+            [ "$wr_failing" = "$cn_runs" ] ||
+              die "#$wr_pr has $wr_failing failing checks; $cn_runs of them never started: $cn_text"
+            wr_review=$(field "$wr_pr" reviewDecision)
+            case $wr_review in
+            REVIEW_REQUIRED | CHANGES_REQUESTED)
+              die "#$wr_pr's checks never started, but #$wr_pr's review decision is $wr_review, and --admin would skip that review too. Get the review, then run again."
+              ;;
+            esac
+            if [ "$wr_mergeable" = MERGEABLE ] && [ "$wr_rollup" = "$wr_prev" ]; then
+              echo "#$wr_pr's checks never started: $cn_text. Merging #$wr_pr with --admin."
+              wr_admin=1
+              return 0
+            fi
+            wr_seen=$wr_rollup
+          fi
+        elif [ "$check_notes_unstarted" = 1 ]; then
           die "#$wr_pr's checks never started: $cn_text. The local check on this head is the evidence. This script does not clear required status checks."
-        fi
-        if [ -n "$cn_text" ]; then
+        elif [ -n "$cn_text" ]; then
           die "#$wr_pr has failing checks: $cn_text"
+        else
+          die "#$wr_pr has failing checks."
         fi
-        die "#$wr_pr has failing checks."
-      }
+      fi
       if [ "$wr_mergeable" = MERGEABLE ] && { [ "$wr_checks" = passing ] || { [ "$wr_checks" = none ] && [ "$wr_i" -ge 2 ]; }; }; then
         case $wr_state in
         CLEAN | HAS_HOOKS | UNSTABLE) return 0 ;;
@@ -231,6 +324,17 @@ EOF
   done
 }
 
+# GitHub can report a PR's old head for a while after a push. Waits until it reports <head>.
+wait_head() { # <pr> <head>
+  wh_i=0
+  while [ "$(field "$1" headRefOid)" != "$2" ]; do
+    wh_i=$((wh_i + 1))
+    [ "$wh_i" -lt 10 ] ||
+      die "GitHub still reports #$1's old head after 10 checks, $poll seconds apart, though $2 was pushed. Check the PR, then run again."
+    sleep "$poll"
+  done
+}
+
 # Points <next pr> at the default branch, then deletes <landed pr>'s branch unless another open PR
 # is based on it: deleting a branch closes the PRs based on it.
 retire_branch() { # <landed pr> [<next pr>]
@@ -247,14 +351,16 @@ retire_branch() { # <landed pr> [<next pr>]
   fi
 }
 
-# Brings the default branch into the next PR's branch after the PR below it landed.
+# Brings the default branch into the next PR's branch after the PR below it landed. It takes the
+# branch's head from origin, since GitHub can still report the head from before a push this
+# script made in a run that stopped.
 merge_up() { # <landed pr> <landed head> <next pr>
   fetch_pr "$1"
   git fetch -q origin
-  mu_info=$(gh pr view "$3" --json headRefName,headRefOid --jq '"\(.headRefName) \(.headRefOid)"')
-  read -r mu_branch mu_head <<EOF
-$mu_info
-EOF
+  mu_branch=$(field "$3" headRefName)
+  git fetch -q origin "+refs/heads/$mu_branch:refs/remotes/origin/$mu_branch" ||
+    die "Could not fetch #$3's branch $mu_branch from origin."
+  mu_head=$(git rev-parse "refs/remotes/origin/$mu_branch")
   holds "$2" "$mu_head" ||
     die "#$3 ($mu_branch) does not hold #$1's head $2, so landing it would undo #$1's newer commits. Merge $2 into $mu_branch, then merge each branch into the one above it, push them, and run again."
   retire_branch "$1" "$3"
@@ -277,8 +383,13 @@ set -- $prs
 while [ "$#" -gt 0 ]; do
   n=$1
   shift
-  [ -z "$prev_pr" ] || merge_up "$prev_pr" "$prev_head" "$n"
-  head=$(field "$n" headRefOid)
+  if [ -n "$prev_pr" ]; then
+    merge_up "$prev_pr" "$prev_head" "$n"
+    head=$merged
+    wait_head "$n" "$head"
+  else
+    head=$(field "$n" headRefOid)
+  fi
   echo "waiting for #$n's checks"
   wait_ready "$n" "$head"
   git fetch -q origin
@@ -292,10 +403,10 @@ while [ "$#" -gt 0 ]; do
       die "#$1 no longer holds #$n's head $head. Merge $head into $(field "$1" headRefName), then merge each branch into the one above it, push them, and run again."
   fi
   if [ "$squash_msg" = BLANK ]; then
-    gh pr merge "$n" --squash --match-head-commit "$head"
+    gh pr merge "$n" --squash ${wr_admin:+--admin} --match-head-commit "$head"
   else
     gh pr view "$n" --json body --jq .body >"$work/body"
-    gh pr merge "$n" --squash --match-head-commit "$head" \
+    gh pr merge "$n" --squash ${wr_admin:+--admin} --match-head-commit "$head" \
       --subject "$(field "$n" title) (#$n)" --body-file "$work/body"
   fi
   [ "$(field "$n" state)" = MERGED ] || die "#$n did not merge, though gh pr merge returned: $(field "$n" state)."

@@ -7,13 +7,33 @@ State lives in $FAKE_GH_STATE/state.json:
   mergeQueue          the default branch has a merge queue (gh pr merge then only enqueues)
   githubStack         {"number": N} when the PRs belong to GitHub stack N, absent otherwise
   stackQueryError     a message: the stack query then fails with it on stderr and exit status 1
+  staleHeadReads      N: after a push moves an open PR's head, the next N reads of that PR's
+                      headRefOid through gh pr view still return the old head, as GitHub does for
+                      a while after a push
   prs                 {number: {title, body, headRefName, baseRefName, state, isDraft, checks,
                       blocked, onMerge}}; checks is a list of SUCCESS, FAILURE or PENDING,
                       annotations is an optional list of strings returned for each of that PR's
                       check runs, annotationsByCheck is an optional list of such lists, one per
                       entry of checks, and wins over annotations when present, blocked keeps mergeStateStatus BLOCKED, onMerge is a sh command
                       run in the state dir after the PR merges (ORIGIN is set), for example to
-                      move main
+                      move main; statusContexts is an optional list of commit status states
+                      (SUCCESS, FAILURE) shown in statusCheckRollup after the check runs;
+                      lateStatusContexts is a list of such states and lateStatusReads N: after a
+                      push moves the PR's head, the next N reads of its statusCheckRollup through
+                      gh pr view leave them out, as a status from another service registers a
+                      while after a push; lateStatusPendingReads M: once shown, they read
+                      PENDING for M more such reads;
+                      reviewDecision is returned as set; unknownMergeableReads N makes the next
+                      N reads of mergeable report UNKNOWN, as GitHub does while it computes it;
+                      gh pr merge fails while such a read is left and does not use one up.
+                      gh pr merge --admin also merges a BLOCKED PR
+  branchRules         the ruleset rules on main that the rules API returns; none when absent
+  branchProtection    main's classic branch protection; when absent, reading it fails with
+                      GitHub's "Branch not protected (HTTP 404)"
+  rulesError, protectionError
+                      a message: reading the rules or the protection then fails with it
+The check-runs and annotations reads return one page, per_page entries (default 30), unless
+--paginate is passed, as GitHub's REST API does.
 Every call appends its arguments to $FAKE_GH_STATE/calls.
 """
 import json
@@ -66,6 +86,11 @@ def sync(state):
             changed = True
             continue
         if pr.get("headRefOid") != head:
+            if pr.get("headRefOid") is not None and state.get("staleHeadReads"):
+                pr["staleHead"], pr["staleReads"] = pr["headRefOid"], state["staleHeadReads"]
+            if pr.get("headRefOid") is not None and pr.get("lateStatusContexts"):
+                pr["lateReads"] = pr.get("lateStatusReads", 0)
+                pr["latePendingReads"] = pr.get("lateStatusPendingReads", 0)
             pr["headRefOid"] = head
             git(state, "update-ref", f"refs/pull/{n}/head", head)
             changed = True
@@ -85,16 +110,35 @@ def view(state, n, want=None):
     pr = state["prs"][n]
     out = dict(pr, number=int(n))
     out.setdefault("headRefOid", None)
+    if pr.get("staleReads", 0) > 0 and (want is None or "headRefOid" in want):
+        out["headRefOid"] = pr["staleHead"]
+        pr["staleReads"] -= 1
+        state["dirty"] = True
     out.setdefault("mergeCommit", None)
+    statuses = pr.get("statusContexts", [])
+    if pr.get("lateReads", 0) > 0 and (want is None or "statusCheckRollup" in want):
+        pr["lateReads"] -= 1
+        state["dirty"] = True
+    elif pr.get("lateReads", 0) == 0 and pr.get("latePendingReads", 0) > 0 and (want is None or "statusCheckRollup" in want):
+        statuses = statuses + ["PENDING" for _ in pr.get("lateStatusContexts", [])]
+        pr["latePendingReads"] -= 1
+        state["dirty"] = True
+    elif pr.get("lateReads", 0) == 0:
+        statuses = statuses + pr.get("lateStatusContexts", [])
     out["statusCheckRollup"] = [
         {"__typename": "CheckRun", "name": f"check{i}",
          "status": "IN_PROGRESS" if c == "PENDING" else "COMPLETED",
          "conclusion": "" if c == "PENDING" else c}
         for i, c in enumerate(pr.get("checks", ["SUCCESS"]))
-    ]
+    ] + [{"__typename": "StatusContext", "context": f"status{i}", "state": s}
+         for i, s in enumerate(statuses)]
     if want is not None and not ({"mergeable", "mergeStateStatus"} & want):
         return out
-    if pr["state"] == "OPEN":
+    if pr["state"] == "OPEN" and pr.get("unknownMergeableReads", 0) > 0:
+        pr["unknownMergeableReads"] -= 1
+        state["dirty"] = True
+        out["mergeable"] = out["mergeStateStatus"] = "UNKNOWN"
+    elif pr["state"] == "OPEN":
         base = branch_oid(state, pr["baseRefName"])
         clean = merge_tree(state, base, pr["headRefOid"]) is not None
         out["mergeable"] = "MERGEABLE" if clean else "CONFLICTING"
@@ -124,6 +168,14 @@ def check_runs_for(state, oid):
         for i, c in enumerate(pr.get("checks", ["SUCCESS"])):
             runs.append({"id": int(n) * 100 + i + 1, "conclusion": None if c == "PENDING" else c.lower()})
     return runs
+
+
+def page(items, query, opts):
+    """One page of a REST list, as GitHub returns it, or every page with --paginate."""
+    if opts.get("--paginate"):
+        return items
+    params = dict(p.partition("=")[::2] for p in query.split("&") if p)
+    return items[:int(params.get("per_page", 30))]
 
 
 def emit(value, fields, jq):
@@ -156,8 +208,11 @@ def merge(state, n, opts):
         return
     if opts.get("--match-head-commit") != pr["headRefOid"]:
         sys.exit(f"Pull request #{n} head moved")
-    v = view(state, n)
-    if pr["baseRefName"] != TRUNK or v["mergeStateStatus"] not in ("CLEAN", "UNSTABLE"):
+    if pr.get("unknownMergeableReads", 0) > 0:
+        sys.exit(f"Pull request #{n} is not mergeable: {pr['baseRefName']} UNKNOWN")
+    v = view(state, n, {"mergeStateStatus"})
+    allowed = ("CLEAN", "UNSTABLE", "BLOCKED") if opts.get("--admin") else ("CLEAN", "UNSTABLE")
+    if pr["baseRefName"] != TRUNK or v["mergeStateStatus"] not in allowed:
         sys.exit(f"Pull request #{n} is not mergeable: {pr['baseRefName']} {v['mergeStateStatus']}")
     base = branch_oid(state, TRUNK)
     tree = merge_tree(state, base, pr["headRefOid"])
@@ -211,6 +266,7 @@ def main():
             pos.append(args[i])
             i += 1
     group, cmd = args[0], args[1] if len(args) > 1 else ""
+    cmd, _, query = cmd.partition("?")
     fields, jq = opts.get("--json"), opts.get("--jq")
 
     if group == "repo" and cmd == "view":
@@ -233,7 +289,7 @@ def main():
               "merge_commit_title": "MERGE_MESSAGE", "merge_commit_message": "PR_TITLE"}, None, jq)
     elif group == "api" and cmd.startswith("repos/{owner}/{repo}/commits/") and cmd.endswith("/check-runs"):
         oid = cmd.split("/")[4]
-        emit({"check_runs": check_runs_for(state, oid)}, None, jq)
+        emit({"check_runs": page(check_runs_for(state, oid), query, opts)}, None, jq)
     elif group == "api" and cmd.startswith("repos/{owner}/{repo}/check-runs/") and cmd.endswith("/annotations"):
         run_id = int(cmd.split("/")[-2])
         pr = state["prs"].get(str(run_id // 100), {})
@@ -243,20 +299,34 @@ def main():
             notes = by_check[index] if index < len(by_check) else []
         else:
             notes = pr.get("annotations", [])
-        emit([{"message": m} for m in notes], None, jq)
-    elif group == "api":
-        rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}] if state.get("mergeQueue") else []
-        emit(rules, None, opts.get("--jq"))
+        emit(page([{"message": m} for m in notes], query, opts), None, jq)
+    elif group == "api" and cmd == f"repos/{{owner}}/{{repo}}/rules/branches/{TRUNK}":
+        if state.get("rulesError"):
+            sys.exit(f"gh: {state['rulesError']}")
+        rules = list(state.get("branchRules", []))
+        if state.get("mergeQueue"):
+            rules.append({"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}})
+        emit(rules, None, jq)
+    elif group == "api" and cmd == f"repos/{{owner}}/{{repo}}/branches/{TRUNK}/protection":
+        if state.get("protectionError"):
+            sys.exit(f"gh: {state['protectionError']}")
+        if state.get("branchProtection") is None:
+            print(json.dumps({"message": "Branch not protected", "status": "404"}), end="")
+            sys.exit("gh: Branch not protected (HTTP 404)")
+        emit(state["branchProtection"], None, jq)
     elif group == "pr" and cmd == "view":
         n = pos[0]
         if n not in state["prs"]:
             sys.exit(f"no pull requests found for branch \"{n}\"")
         emit(view(state, n, set(fields.split(",")) if fields else None), fields, jq)
+        if state.pop("dirty", None):
+            save(state)
     elif group == "pr" and cmd == "checks":
         checks = view(state, pos[0], {"statusCheckRollup"})["statusCheckRollup"]
-        for c in checks:
-            print(f"{c['name']}\t{c['conclusion'] or 'pending'}")
-        sys.exit(1 if any(c["conclusion"] == "FAILURE" for c in checks) else 0)
+        results = [(c.get("name") or c.get("context"), c.get("conclusion", c.get("state"))) for c in checks]
+        for name, result in results:
+            print(f"{name}\t{result or 'pending'}")
+        sys.exit(1 if any(result == "FAILURE" for _, result in results) else 0)
     elif group == "pr" and cmd == "edit":
         state["prs"][pos[0]]["baseRefName"] = opts["--base"]
     elif group == "pr" and cmd == "list":
