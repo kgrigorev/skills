@@ -301,14 +301,16 @@ retire_branch() { # <landed pr> [<next pr>]
   fi
 }
 
-# Brings the default branch into the next PR's branch after the PR below it landed.
+# Brings the default branch into the next PR's branch after the PR below it landed. It takes the
+# branch's head from origin, since GitHub can still report the head from before a push this
+# script made in a run that stopped.
 merge_up() { # <landed pr> <landed head> <next pr>
   fetch_pr "$1"
   git fetch -q origin
-  mu_info=$(gh pr view "$3" --json headRefName,headRefOid --jq '"\(.headRefName) \(.headRefOid)"')
-  read -r mu_branch mu_head <<EOF
-$mu_info
-EOF
+  mu_branch=$(field "$3" headRefName)
+  git fetch -q origin "+refs/heads/$mu_branch:refs/remotes/origin/$mu_branch" ||
+    die "Could not fetch #$3's branch $mu_branch from origin."
+  mu_head=$(git rev-parse "refs/remotes/origin/$mu_branch")
   holds "$2" "$mu_head" ||
     die "#$3 ($mu_branch) does not hold #$1's head $2, so landing it would undo #$1's newer commits. Merge $2 into $mu_branch, then merge each branch into the one above it, push them, and run again."
   retire_branch "$1" "$3"

@@ -464,6 +464,20 @@ scenario_stops_when_github_never_reports_the_pushed_head() {
   [ "$reads" = 10 ] || fail "it read #2's head $reads times after the push, want the 10 the message names"
 }
 
+# The printed command runs while GitHub still reports #2's old head for two more reads, though
+# the -s ours merge is on origin's b2.
+scenario_resumes_while_github_still_reports_the_old_head() {
+  state '.staleHeadReads = 1000'
+  land 1 2 3
+  expect_status 1
+  expect_output "To continue: sh $script --after 1 2 3"
+  state '.staleHeadReads = 0 | .prs["2"].staleReads = 2'
+  land --after 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+  expect_main_tree "$top_tree"
+}
+
 scenario_linked_stack_refusal_names_unstack() {
   state '.githubStack = {"number": 184}'
   land 1 2 3
