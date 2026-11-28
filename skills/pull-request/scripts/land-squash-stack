@@ -21,7 +21,8 @@
 # run has annotations and all of them say the job was not started, the script stops and says the
 # checks never started. With --admin-if-unstarted it squashes that PR with --admin instead, once two
 # reads $poll seconds apart show the same checks, unless a failing commit status or a required review
-# would be skipped too.
+# would be skipped too. With the flag it first stops when the default branch has a rule that --admin
+# would skip and the script does not check.
 set -eu
 
 usage() { sed -n '3p' "$0" >&2; exit 2; }
@@ -94,6 +95,49 @@ mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$
 [ "$(gh api graphql -F owner='{owner}' -F name='{repo}' -F branch="$trunk" -f query="$mq_query" --jq '.data.repository.mergeQueue != null')" = false ] ||
   die "$trunk has a merge queue, which this script does not drive. Follow GITHUB.md for a merge queue."
 squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
+
+# --admin skips every rule on the default branch that a PR does not meet, not only the checks that
+# never started. The script checks failing checks and reviews itself, and a squash by GitHub
+# always meets the creation, deletion, force-push, linear-history and signed-commit rules. With
+# the flag, any other ruleset rule or branch protection setting that is on stops the run before
+# anything lands. Each jq program prints the name of every such rule.
+# shellcheck disable=SC2016 # jq programs, not shell
+rules_jq='def one_of($l): . as $x | any($l[]; . == $x);
+  def off: . == null or . == false or . == 0 or . == "" or . == [] or . == {};
+  .[] | if .type == "pull_request" then
+      (.parameters // {}) | to_entries[]
+      | if .key == "allowed_merge_methods" then (if any(.value[]; . == "squash") then empty else "pull_request.\(.key)" end)
+        elif .key | one_of(["required_approving_review_count", "require_code_owner_review", "required_reviewers",
+          "require_last_push_approval", "require_extra_approval_for_unattributed_changes",
+          "dismiss_stale_reviews_on_push", "dismissal_restriction"]) then empty
+        elif .value | off then empty
+        else "pull_request.\(.key)" end
+    elif .type | one_of(["required_status_checks", "creation", "deletion", "non_fast_forward",
+      "required_linear_history", "required_signatures"]) then empty
+    else .type end'
+# shellcheck disable=SC2016 # jq programs, not shell
+protection_jq='def one_of($l): . as $x | any($l[]; . == $x);
+  def off: . == null or . == false or (type == "object" and .enabled == false);
+  to_entries[] | select(.key | one_of(["url", "name", "protection_url", "enabled", "required_status_checks",
+      "required_pull_request_reviews", "enforce_admins", "allow_force_pushes", "allow_deletions",
+      "block_creations", "required_linear_history", "required_signatures", "allow_fork_syncing"]) | not)
+  | select(.value | off | not) | .key'
+if [ -n "$admin" ]; then
+  gh api "repos/{owner}/{repo}/rules/branches/$trunk?per_page=100" --paginate --jq "$rules_jq" \
+    >"$work/rules" 2>"$work/rules.err" || {
+    cat "$work/rules.err" >&2
+    die "Could not read the rules on $trunk, so the script cannot tell what --admin would skip."
+  }
+  if gh api "repos/{owner}/{repo}/branches/$trunk/protection" --jq "$protection_jq" \
+    >"$work/protection" 2>"$work/protection.err"; then
+    cat "$work/protection" >>"$work/rules"
+  elif ! grep -qF 'Branch not protected (HTTP 404)' "$work/protection.err"; then
+    cat "$work/protection.err" >&2
+    die "Could not read $trunk's branch protection, so the script cannot tell what --admin would skip."
+  fi
+  [ ! -s "$work/rules" ] ||
+    die "--admin would also skip these rules on $trunk, which this script does not check: $(tr '\n' ' ' <"$work/rules" | sed 's/ *$//'). Run without --admin-if-unstarted, and see GITHUB.md for checks that never start."
+fi
 
 # shellcheck disable=SC2016 # GraphQL variables, not shell
 stack_query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){stack{number}}}}'

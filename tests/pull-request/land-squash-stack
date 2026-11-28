@@ -437,6 +437,67 @@ scenario_admin_flag_reads_every_page_of_annotations() {
   ! merge_calls | grep -q '^pr merge 1' || fail 'it merged #1'
 }
 
+scenario_admin_flag_stops_on_a_rule_admin_would_skip() {
+  checks_never_start
+  state '.branchRules = [{"type": "deletion"}, {"type": "required_deployments", "parameters": {"required_deployment_environments": ["prod"]}},
+    {"type": "pull_request", "parameters": {"required_approving_review_count": 1, "required_review_thread_resolution": true, "allowed_merge_methods": ["squash"]}},
+    {"type": "some_new_rule"}]'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_output 'STOP: --admin would also skip these rules on main, which this script does not check: required_deployments pull_request.required_review_thread_resolution some_new_rule.'
+  expect_untouched
+  state '(.prs[] | .checks) = ["SUCCESS"] | (.prs[] | .blocked) = false'
+  land 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+}
+
+scenario_admin_flag_stops_on_branch_protection_admin_would_skip() {
+  checks_never_start
+  state '.branchProtection = {"enabled": true, "required_status_checks": {"contexts": ["check"]}, "enforce_admins": {"enabled": false},
+    "required_conversation_resolution": {"enabled": true}, "lock_branch": {"enabled": false},
+    "restrictions": {"users": [], "teams": [], "apps": []}}'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_output 'STOP: --admin would also skip these rules on main, which this script does not check: '
+  expect_output 'required_conversation_resolution'
+  expect_output 'restrictions'
+  ! grep -qF 'lock_branch' "$t/out" || fail 'it named a setting that is off'
+  expect_untouched
+}
+
+# The rules on this repository's own default branch, and the others a squash by GitHub meets.
+scenario_admin_flag_lands_past_rules_a_squash_meets() {
+  checks_never_start
+  state '.branchRules = [{"type": "creation"}, {"type": "deletion"}, {"type": "non_fast_forward"}, {"type": "required_linear_history"},
+    {"type": "required_signatures"}, {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "title"}]}},
+    {"type": "pull_request", "parameters": {"allowed_merge_methods": ["merge", "squash", "rebase"], "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false, "require_extra_approval_for_unattributed_changes": true, "require_last_push_approval": false,
+      "required_approving_review_count": 0, "required_review_thread_resolution": false, "required_reviewers": []}}]
+    | .branchProtection = {"url": "u", "enabled": true, "name": "main", "protection_url": "p",
+    "required_status_checks": {"contexts": ["check"]}, "required_pull_request_reviews": {"required_approving_review_count": 1},
+    "enforce_admins": {"enabled": false}, "required_linear_history": {"enabled": true}, "required_signatures": {"enabled": true},
+    "allow_force_pushes": {"enabled": false}, "allow_deletions": {"enabled": false}, "block_creations": {"enabled": true},
+    "required_conversation_resolution": {"enabled": false}, "lock_branch": {"enabled": false}, "allow_fork_syncing": {"enabled": false}}'
+  land --admin-if-unstarted 1 2 3
+  expect_status 0
+  expect_states MERGED MERGED MERGED
+}
+
+scenario_admin_flag_stops_when_the_rules_cannot_be_read() {
+  checks_never_start
+  state '.rulesError = "HTTP 502: Bad Gateway"'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_output 'STOP: Could not read the rules on main, so the script cannot tell what --admin would skip.'
+  expect_untouched
+  state 'del(.rulesError) | .protectionError = "Resource not accessible by integration (HTTP 403)"'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_output "STOP: Could not read main's branch protection, so the script cannot tell what --admin would skip."
+  expect_untouched
+}
+
 scenario_admin_flag_adds_no_admin_to_passing_checks() {
   land --admin-if-unstarted 1 2 3
   expect_status 0

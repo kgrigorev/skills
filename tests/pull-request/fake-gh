@@ -27,6 +27,11 @@ State lives in $FAKE_GH_STATE/state.json:
                       N reads of mergeable report UNKNOWN, as GitHub does while it computes it;
                       gh pr merge fails while such a read is left and does not use one up.
                       gh pr merge --admin also merges a BLOCKED PR
+  branchRules         the ruleset rules on main that the rules API returns; none when absent
+  branchProtection    main's classic branch protection; when absent, reading it fails with
+                      GitHub's "Branch not protected (HTTP 404)"
+  rulesError, protectionError
+                      a message: reading the rules or the protection then fails with it
 The check-runs and annotations reads return one page, per_page entries (default 30), unless
 --paginate is passed, as GitHub's REST API does.
 Every call appends its arguments to $FAKE_GH_STATE/calls.
@@ -295,9 +300,20 @@ def main():
         else:
             notes = pr.get("annotations", [])
         emit(page([{"message": m} for m in notes], query, opts), None, jq)
-    elif group == "api":
-        rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}] if state.get("mergeQueue") else []
-        emit(rules, None, opts.get("--jq"))
+    elif group == "api" and cmd == f"repos/{{owner}}/{{repo}}/rules/branches/{TRUNK}":
+        if state.get("rulesError"):
+            sys.exit(f"gh: {state['rulesError']}")
+        rules = list(state.get("branchRules", []))
+        if state.get("mergeQueue"):
+            rules.append({"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}})
+        emit(rules, None, jq)
+    elif group == "api" and cmd == f"repos/{{owner}}/{{repo}}/branches/{TRUNK}/protection":
+        if state.get("protectionError"):
+            sys.exit(f"gh: {state['protectionError']}")
+        if state.get("branchProtection") is None:
+            print(json.dumps({"message": "Branch not protected", "status": "404"}), end="")
+            sys.exit("gh: Branch not protected (HTTP 404)")
+        emit(state["branchProtection"], None, jq)
     elif group == "pr" and cmd == "view":
         n = pos[0]
         if n not in state["prs"]:

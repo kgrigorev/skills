@@ -197,8 +197,11 @@ Pass `--admin-if-unstarted` when the checks never started (no Actions minutes le
 the local check passed on each PR's head, and the owner said to merge without CI. The script then
 squashes each such PR with `gh pr merge --admin` once two reads of its checks, one poll interval
 apart, agree; a check that registers later than that is not seen. It never clears a real failure: a check that ran and failed,
-or a failing commit status, still stops it, and so does a required review. The `To continue`
-command keeps the flag.
+or a failing commit status, still stops it, and so does a required review or requested changes.
+`--admin` also skips every other rule on the default branch, so before anything lands the flag
+stops on any ruleset rule or branch protection setting that is on, other than required checks,
+reviews, and the rules a squash by GitHub meets (creation, deletion, force pushes, linear history,
+signed commits). The `To continue` command keeps the flag.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the
