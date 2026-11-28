@@ -8,6 +8,7 @@ harnesses.
 | --- | --- |
 | `commit` | Writes conventional git commit messages with short subjects and no AI attribution. |
 | `pull-request` | Opens and updates GitHub PRs or GitLab MRs, manages stacked changes, and performs merges. |
+| `settle-stack` | Runs independent review, fix and whole-stack review rounds on a stack of PRs, then merges it. |
 | `mise` | Configures pinned tools, environment variables and mise tasks, and chooses between mise and ecosystem runners. |
 | `type-design` | Makes illegal states unrepresentable and validates external input at boundaries. |
 | `functional-core` | Separates decisions into pure functions from I/O in an imperative shell. |
