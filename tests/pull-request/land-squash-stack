@@ -448,6 +448,9 @@ scenario_stops_when_github_never_reports_the_pushed_head() {
   expect_states MERGED OPEN OPEN
   expect_output "GitHub still reports #2's old head after 10 checks"
   expect_output "To continue: sh $script --after 1 2 3"
+  # After #1's squash, only the wait for the pushed head reads #2's head alone.
+  reads=$(awk '/^pr merge 1 /{after=1} after && $0 == "pr view 2 --json headRefOid --jq .headRefOid"{c++} END{print c+0}' "$t/state/calls")
+  [ "$reads" = 10 ] || fail "it read #2's head $reads times after the push, want the 10 the message names"
 }
 
 scenario_linked_stack_refusal_names_unstack() {

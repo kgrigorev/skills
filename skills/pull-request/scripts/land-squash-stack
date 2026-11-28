@@ -273,7 +273,7 @@ wait_head() { # <pr> <head>
   wh_i=0
   while [ "$(field "$1" headRefOid)" != "$2" ]; do
     wh_i=$((wh_i + 1))
-    [ "$wh_i" -le 10 ] ||
+    [ "$wh_i" -lt 10 ] ||
       die "GitHub still reports #$1's old head after 10 checks, $poll seconds apart, though $2 was pushed. Check the PR, then run again."
     sleep "$poll"
   done
