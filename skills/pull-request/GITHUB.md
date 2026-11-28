@@ -199,9 +199,19 @@ squashes each such PR with `gh pr merge --admin` once two reads of its checks, o
 apart, agree; a check that registers later than that is not seen. It never clears a real failure: a check that ran and failed,
 or a failing commit status, still stops it, and so does a required review or requested changes.
 `--admin` also skips every other rule on the default branch, so before anything lands the flag
-stops on any ruleset rule or branch protection setting that is on, other than required checks,
-reviews, and the rules a squash by GitHub meets (creation, deletion, force pushes, linear history,
-signed commits). The `To continue` command keeps the flag.
+stops on any ruleset rule or branch protection setting that is on, except these:
+
+- Rulesets: the rule types `required_status_checks`, `creation`, `deletion`, `non_fast_forward`,
+  `required_linear_history` and `required_signatures`. In a `pull_request` rule, the review
+  parameters `required_approving_review_count`, `require_code_owner_review`,
+  `required_reviewers`, `require_last_push_approval`,
+  `require_extra_approval_for_unattributed_changes`, `dismiss_stale_reviews_on_push` and
+  `dismissal_restriction`, and `allowed_merge_methods` when it lists `squash`.
+- Classic branch protection: `required_status_checks`, `required_pull_request_reviews`,
+  `enforce_admins`, `allow_force_pushes`, `allow_deletions`, `block_creations`,
+  `required_linear_history`, `required_signatures` and `allow_fork_syncing`.
+
+The `To continue` command keeps the flag.
 
 **On a branch with a merge queue**, `land-squash-stack` refuses to run. With `SQUASH`, before
 adding the first PR, run `git fetch origin` and check that every branch in the stack holds the

@@ -97,10 +97,16 @@ mq_query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$
 squash_msg=$(gh api 'repos/{owner}/{repo}' --jq .squash_merge_commit_message)
 
 # --admin skips every rule on the default branch that a PR does not meet, not only the checks that
-# never started. The script checks failing checks and reviews itself, and a squash by GitHub
-# always meets the creation, deletion, force-push, linear-history and signed-commit rules. With
-# the flag, any other ruleset rule or branch protection setting that is on stops the run before
-# anything lands. Each jq program prints the name of every such rule.
+# never started. With the flag, any ruleset rule or branch protection setting that is on stops
+# the run before anything lands, except what the one_of lists below name. rules_jq lets pass the
+# rule types required_status_checks, creation, deletion, non_fast_forward, required_linear_history
+# and required_signatures, a pull_request rule's review parameters, and its allowed_merge_methods
+# when they list squash. protection_jq lets pass required_status_checks,
+# required_pull_request_reviews, enforce_admins, allow_force_pushes, allow_deletions,
+# block_creations, required_linear_history, required_signatures, allow_fork_syncing, and the
+# read's own url, name, protection_url and enabled fields. The script checks failing checks and
+# reviews itself, and a squash by GitHub meets the creation, deletion, force-push, linear-history
+# and signed-commit rules. Each jq program prints the name of every rule that stops the run.
 # shellcheck disable=SC2016 # jq programs, not shell
 rules_jq='def one_of($l): . as $x | any($l[]; . == $x);
   def off: . == null or . == false or . == 0 or . == "" or . == [] or . == {};
