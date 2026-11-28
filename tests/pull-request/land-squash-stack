@@ -418,6 +418,25 @@ scenario_admin_flag_stops_on_requested_changes() {
   ! merge_calls | grep -q '^pr merge 2' || fail 'it merged #2'
 }
 
+# GitHub returns 30 check runs and 30 annotations per page unless asked for more.
+scenario_admin_flag_reads_every_page_of_check_runs() {
+  state ".prs[\"1\"].checks = [range(31) | \"FAILURE\"] | .prs[\"1\"].annotations = [\"$unstarted_note\"] | .prs[\"1\"].blocked = true"
+  land --admin-if-unstarted 1
+  expect_status 0
+  expect_states MERGED OPEN OPEN
+  expect_output "#1's checks never started: $unstarted_note. Merging #1 with --admin."
+}
+
+scenario_admin_flag_reads_every_page_of_annotations() {
+  state ".prs[\"1\"].checks = [\"FAILURE\"] | .prs[\"1\"].annotations = [range(30) | \"$unstarted_note \\(.)\"] + [\"exit status 1\"] | .prs[\"1\"].blocked = true"
+  land --admin-if-unstarted 1
+  expect_status 1
+  expect_states OPEN OPEN OPEN
+  expect_output '#1 has failing checks: '
+  expect_output 'exit status 1'
+  ! merge_calls | grep -q '^pr merge 1' || fail 'it merged #1'
+}
+
 scenario_admin_flag_adds_no_admin_to_passing_checks() {
   land --admin-if-unstarted 1 2 3
   expect_status 0

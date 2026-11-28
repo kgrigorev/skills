@@ -161,20 +161,20 @@ ready_jq='[.statusCheckRollup[] | if .__typename == "StatusContext" then .state
     if any($c[]; . == "PENDING" or . == "EXPECTED") then "pending"
     elif all($c[]; . == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED") | not then "failing"
     elif $c == [] then "none" else "passing" end)"'
-# Writes unique failing-check annotations to $work/notes. A failing run is a check run whose
-# conclusion is not success, neutral, skipped or null. check_notes_unstarted is 1 when there is a
-# failing run and every failing run has at least one annotation, all starting with "The job was not
-# started", and 0 otherwise.
+# Writes unique failing-check annotations to $work/notes, read from every page. A failing run is a
+# check run whose conclusion is not success, neutral, skipped or null. check_notes_unstarted is 1
+# when there is a failing run and every failing run has at least one annotation, all starting with
+# "The job was not started", and 0 otherwise.
 check_notes() { # <pr>
   cn_head=$(field "$1" headRefOid)
-  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs" \
+  gh api "repos/{owner}/{repo}/commits/$cn_head/check-runs?per_page=100" --paginate \
     --jq '.check_runs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped") | .id' >"$work/ids" || true
   : >"$work/notes"
   cn_runs=0 cn_unstarted=0 # failing runs, and those whose annotations all say not started
   while read -r cn_id; do
     [ -n "$cn_id" ] || continue
     cn_runs=$((cn_runs + 1))
-    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations" --jq '.[].message' >"$work/run-notes" || true
+    gh api "repos/{owner}/{repo}/check-runs/$cn_id/annotations?per_page=100" --paginate --jq '.[].message' >"$work/run-notes" || true
     cat "$work/run-notes" >>"$work/notes"
     [ -s "$work/run-notes" ] || continue
     cn_started=0
