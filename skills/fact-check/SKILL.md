@@ -42,10 +42,11 @@ context, give it the head, where the text is, and this file's path.
    Done when each line in scope has been read and either has its claims listed or holds none.
 3. **Verify.** Check each claim against its cheapest primary source:
    - run the command and compare its output and exit code. Run it in a checkout of the head. When
-     the only checkout is at another revision, first confirm with
-     `git diff --stat <checkout> <head> -- <paths the command reads>` that those paths match, and
-     say so; otherwise read the source at the head. For a command that writes elsewhere or needs
-     secrets, read its source instead of running it. Mark either case as checked from source;
+     the only checkout is at another revision, first confirm inside it that those paths match the
+     head, uncommitted edits included: `git diff --stat <head> -- <paths the command reads>`
+     prints nothing and `git status --short -- <paths>` shows no `??` line, and say so. When they
+     differ, read the source at the head. For a command that writes elsewhere or needs secrets,
+     read its source instead of running it. Mark either case as checked from source;
    - read the file at the head; count by running the search, never by estimate;
    - for history, `git log -S<text>` finds the commit that added or removed a string.
 
