@@ -1,6 +1,6 @@
 ---
 name: fact-check
-description: "Fact-check written claims about code against the files, commands and history they describe. Use before you publish or merge docs, a PR body, a ticket or a handoff, and when you review a docs-heavy diff."
+description: "Fact-check written claims about code against the files, commands and history they describe. Use before you publish or merge docs, a PR body, commit messages or a handoff, and when you review a docs-heavy diff."
 ---
 
 # Fact-check
