@@ -13,6 +13,7 @@ harnesses.
 | `functional-core` | Separates decisions into pure functions from I/O in an imperative shell. |
 | `test-design` | Starts with failing tests, checks outcomes and properties, and avoids mock-driven tests. |
 | `audit` | Reviews a large codebase or subproject in bounded batches with parallel reviewers. |
+| `fact-check` | Checks the claims in docs, PR bodies, commit messages and handoffs against the code, commands and history they describe. |
 | `archive-project` | Moves a finished repository to an archive repository, verifies it, then retires the original after confirmation. |
 | `ste100-replies` | Writes replies and repository text in ASD-STE100 Simplified Technical English, with a dictionary and checker script. |
 

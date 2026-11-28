@@ -1,0 +1,3 @@
+interface:
+  display_name: "Fact-check"
+  short_description: "Check written claims against the code, commands and history"
