@@ -23,7 +23,8 @@ State lives in $FAKE_GH_STATE/state.json:
                       gh pr view leave them out, as a status from another service registers a
                       while after a push;
                       reviewDecision is returned as set; unknownMergeableReads N makes the next
-                      N reads of mergeable report UNKNOWN, as GitHub does while it computes it.
+                      N reads of mergeable report UNKNOWN, as GitHub does while it computes it;
+                      gh pr merge fails while such a read is left and does not use one up.
                       gh pr merge --admin also merges a BLOCKED PR
 Every call appends its arguments to $FAKE_GH_STATE/calls.
 """
@@ -186,6 +187,8 @@ def merge(state, n, opts):
         return
     if opts.get("--match-head-commit") != pr["headRefOid"]:
         sys.exit(f"Pull request #{n} head moved")
+    if pr.get("unknownMergeableReads", 0) > 0:
+        sys.exit(f"Pull request #{n} is not mergeable: {pr['baseRefName']} UNKNOWN")
     v = view(state, n, {"mergeStateStatus"})
     allowed = ("CLEAN", "UNSTABLE", "BLOCKED") if opts.get("--admin") else ("CLEAN", "UNSTABLE")
     if pr["baseRefName"] != TRUNK or v["mergeStateStatus"] not in allowed:

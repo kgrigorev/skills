@@ -337,9 +337,11 @@ scenario_admin_flag_lands_with_blank_squash_message() {
   done
 }
 
+# Three reads report UNKNOWN, so a merge sent on the second read, when the checks agree for the
+# first time, still finds mergeable UNKNOWN and fails.
 scenario_admin_flag_waits_while_mergeable_is_unknown() {
   checks_never_start
-  state '.prs["1"].unknownMergeableReads = 2'
+  state '.prs["1"].unknownMergeableReads = 3'
   land --admin-if-unstarted 1
   expect_status 0
   expect_states MERGED OPEN OPEN
