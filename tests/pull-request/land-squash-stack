@@ -397,6 +397,16 @@ scenario_admin_flag_stops_on_a_required_review() {
   expect_output "To continue: sh $script --admin-if-unstarted --after 1 2 3"
 }
 
+scenario_admin_flag_stops_on_requested_changes() {
+  checks_never_start
+  state '.prs["2"].reviewDecision = "CHANGES_REQUESTED"'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_states MERGED OPEN OPEN
+  expect_output "#2's review decision is CHANGES_REQUESTED, and --admin would skip that review too."
+  ! merge_calls | grep -q '^pr merge 2' || fail 'it merged #2'
+}
+
 scenario_admin_flag_adds_no_admin_to_passing_checks() {
   land --admin-if-unstarted 1 2 3
   expect_status 0
