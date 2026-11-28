@@ -452,6 +452,15 @@ scenario_admin_flag_stops_on_a_rule_admin_would_skip() {
   expect_states MERGED MERGED MERGED
 }
 
+scenario_admin_flag_stops_on_merge_methods_without_squash() {
+  checks_never_start
+  state '.branchRules = [{"type": "pull_request", "parameters": {"allowed_merge_methods": ["merge", "rebase"]}}]'
+  land --admin-if-unstarted 1 2 3
+  expect_status 1
+  expect_output 'STOP: --admin would also skip these rules on main, which this script does not check: pull_request.allowed_merge_methods.'
+  expect_untouched
+}
+
 scenario_admin_flag_stops_on_branch_protection_admin_would_skip() {
   checks_never_start
   state '.branchProtection = {"enabled": true, "required_status_checks": {"contexts": ["check"]}, "enforce_admins": {"enabled": false},
@@ -556,6 +565,18 @@ scenario_resumes_while_github_still_reports_the_old_head() {
   expect_status 0
   expect_states MERGED MERGED MERGED
   expect_main_tree "$top_tree"
+}
+
+# Someone deletes b2 on origin right after #1's squash, so the script cannot fetch it to merge
+# main into it.
+scenario_stops_when_the_next_branch_cannot_be_fetched() {
+  # shellcheck disable=SC2016 # expanded by the fake gh
+  state '.prs["1"].onMerge = "git -C \"$ORIGIN\" update-ref -d refs/heads/b2"'
+  land 1 2 3
+  expect_status 1
+  expect_output "STOP: Could not fetch #2's branch b2 from origin."
+  ! merge_calls | grep -q '^pr merge 2' || fail 'it merged #2'
+  ! branch_exists b2 || fail 'it pushed b2 again'
 }
 
 scenario_linked_stack_refusal_names_unstack() {
